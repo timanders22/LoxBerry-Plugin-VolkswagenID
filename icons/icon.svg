@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Volkswagen ID - Plugin-Symbol
+
+  Hausstandard: runde Scheibe in LoxBerry-Gruen #6dac20, Motiv am echten
+  Gegenstand orientiert. Bewusst KEINE fremde Wortmarke und kein Logo, auch
+  nicht angedeutet - gezeigt wird eine allgemeine Schraegheck-Silhouette und
+  darueber der Blitz, der fuer den Elektroantrieb steht.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <circle cx="64" cy="64" r="64" fill="#6dac20"/>
+
+  <!-- Blitz: die ID-Reihe faehrt elektrisch -->
+  <path d="M 74 9 L 50 35 L 63 35 L 55 49 L 79 23 L 66 23 Z" fill="#ffffff"/>
+
+  <!-- Karosserie: Schraegheck mit steiler Front, wie bei der ID-Reihe -->
+  <path d="M 17 88
+           C 17 78 19 74 27 72
+           L 38 70
+           L 48 56
+           C 50 52 54 51 59 51
+           L 84 51
+           C 89 51 92 53 94 57
+           L 101 70
+           L 112 72
+           C 119 74 120 78 120 88
+           Z"
+        fill="#ffffff"/>
+
+  <!-- Fenster -->
+  <path d="M 57 55 L 67 55 L 67 68 L 46 68 Z" fill="#6dac20"/>
+  <path d="M 72 55 L 83 55 L 91 68 L 72 68 Z" fill="#6dac20"/>
+
+  <!-- Radkaesten und Raeder -->
+  <circle cx="41" cy="88" r="15" fill="#6dac20"/>
+  <circle cx="97" cy="88" r="15" fill="#6dac20"/>
+  <circle cx="41" cy="88" r="11" fill="#ffffff"/>
+  <circle cx="97" cy="88" r="11" fill="#ffffff"/>
+  <circle cx="41" cy="88" r="4.5" fill="#6dac20"/>
+  <circle cx="97" cy="88" r="4.5" fill="#6dac20"/>
+</svg>
