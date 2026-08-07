@@ -131,7 +131,9 @@ function vw_config_speichern($cfg)
         @mkdir($p['configdir'], 0775, true);
     }
     $json = json_encode($cfg, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-    if (@file_put_contents($p['config'], $json) === false) {
+    // json_encode liefert bei ungueltigem UTF-8 false, und file_put_contents
+    // schriebe dann eine Datei mit NULL Bytes - und meldete das als Erfolg.
+    if ($json === false || @file_put_contents($p['config'], $json) === false) {
         return false;
     }
     @copy($p['config'], $p['sicherung']);
