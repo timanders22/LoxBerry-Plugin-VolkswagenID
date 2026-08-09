@@ -50,7 +50,14 @@ if ($vw_p['home'] !== '' && is_file($vw_p['home'] . '/libs/phplib/loxberry_syste
 /* Aktiver Reiter. Wer einen Reiter hinzufuegt, muss diese Positivliste
  * mitziehen - sonst springt die Seite nach jedem Absenden zurueck auf
  * Einstellungen, obwohl der Reiter sichtbar und anklickbar ist. */
-$vw_muster = '/^tab-(settings|mqtt|loxone|test|log)$/';
+/* EINE Quelle fuer Reihenfolge, Positivliste und Beschriftung.
+ *
+ * Bis 0.9.0 standen die Reiternamen an drei Stellen: in diesem Muster, in
+ * der Reiterleiste und in den fuenf Flaechen-ids. Wer einen Reiter ergaenzt
+ * und eine davon vergisst, bekommt keinen Fehler, sondern eine Seite, die
+ * nach jedem Absenden auf Einstellungen zurueckspringt. */
+$vw_reiter_ids = array('settings', 'mqtt', 'loxone', 'test', 'log');
+$vw_muster = '/^tab-(' . implode('|', $vw_reiter_ids) . ')$/';
 $vw_tab = 'tab-settings';
 if (isset($_POST['activetab']) && preg_match($vw_muster, (string) $_POST['activetab'])) {
     $vw_tab = (string) $_POST['activetab'];
@@ -119,10 +126,20 @@ if ($vw_post && isset($_POST['speichern'])) {
     /* Zugangsdaten: eigene Datei mit Rechten 0600. Ein leer zurueckgegebenes
      * Passwortfeld loescht nichts - sonst stuende irgendwann ein leeres
      * Passwort in der Datei, ohne dass es jemand merkt. */
-    $vw_email = trim(preg_replace('/[\x00-\x1F\x7F"\']/', '', (string) $_POST['email']));
+    $vw_email = trim(preg_replace('/[\x00-\x1F\x7F"\']/', '',
+        isset($_POST['email']) ? (string) $_POST['email'] : ''));
     $vw_pw = isset($_POST['passwort']) ? (string) $_POST['passwort'] : '';
     $vw_spin = isset($_POST['spin']) ? trim((string) $_POST['spin']) : '';
-    if ($vw_email !== '' && !filter_var($vw_email, FILTER_VALIDATE_EMAIL)) {
+    if (isset($_POST['zugang_loeschen'])) {
+        // Ausdruecklich gewollt: alles weg. Was im selben Absenden in den
+        // Feldern stand, wird verworfen - sonst waere unklar, ob Loeschen
+        // oder Eintragen gewonnen hat.
+        if (vw_zugang_loeschen()) {
+            $vw_meldungen[] = vw_t('EINST.ZUGANG_GELOESCHT');
+        } else {
+            $vw_fehler[] = vw_t('EINST.FEHLER_ZUGANG_LOESCHEN');
+        }
+    } elseif ($vw_email !== '' && !filter_var($vw_email, FILTER_VALIDATE_EMAIL)) {
         $vw_fehler[] = vw_t('EINST.FEHLER_EMAIL');
     } elseif ($vw_spin !== '' && !preg_match('/^[0-9]{4}$/', $vw_spin)) {
         // Ist die FORM eines Geheimnisses erkennbar falsch, wird beim Speichern
@@ -225,12 +242,7 @@ $vw_host = isset($_SERVER['HTTP_HOST']) && $_SERVER['HTTP_HOST'] !== ''
     ? preg_replace('/[^A-Za-z0-9\.\-:]/', '', (string) $_SERVER['HTTP_HOST'])
     : (gethostname() ?: 'loxberry');
 $vw_basis = 'http://' . $vw_host . '/plugins/' . $vw_p['plugin'] . '/index.php';
-$vw_logzeilen = array();
-if (is_file($vw_p['log'])) {
-    $vw_logzeilen = array_slice(
-        array_reverse(file($vw_p['log'], FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: array()),
-        0, 400);
-}
+$vw_logzeilen = is_file($vw_p['log']) ? vw_log_ende($vw_p['log'], 400) : array();
 
 $vw_rahmen = class_exists('LBWeb', false);
 if ($vw_rahmen) {
@@ -364,16 +376,21 @@ if ($vw_rahmen) {
 <!-- Reiterleiste: echte Links, JavaScript faengt den Klick ab. So bleibt jeder
      Reiter verlinkbar, Eingaben in anderen Reitern gehen nicht verloren, und
      faellt das Skript aus, ist die Seite weiterhin bedienbar. -->
+<?php
+$vw_beschriftung = array(
+    'settings' => 'REITER.EINSTELLUNGEN', 'mqtt' => '', 'loxone' => 'REITER.LOXONE',
+    'test'     => 'REITER.TEST',          'log'  => 'REITER.LOG',
+);
+?>
 <div class="sm-tabs">
-	<a class="sm-tab" data-ziel="tab-settings" href="index.php?form=settings"><?= vw_e(vw_t('REITER.EINSTELLUNGEN')) ?></a>
-	<a class="sm-tab" data-ziel="tab-mqtt"     href="index.php?form=mqtt">MQTT</a>
-	<a class="sm-tab" data-ziel="tab-loxone"   href="index.php?form=loxone"><?= vw_e(vw_t('REITER.LOXONE')) ?></a>
-	<a class="sm-tab" data-ziel="tab-test"     href="index.php?form=test"><?= vw_e(vw_t('REITER.TEST')) ?></a>
-	<a class="sm-tab" data-ziel="tab-log"      href="index.php?form=log"><?= vw_e(vw_t('REITER.LOG')) ?></a>
+<?php foreach ($vw_reiter_ids as $vw_r) {
+    $vw_bez = $vw_beschriftung[$vw_r] !== '' ? vw_t($vw_beschriftung[$vw_r]) : 'MQTT'; ?>
+	<a class="sm-tab<?= $vw_tab === 'tab-' . $vw_r ? ' sm-active' : '' ?>" data-ziel="tab-<?= $vw_r ?>" href="index.php?form=<?= $vw_r ?>"><?= vw_e($vw_bez) ?></a>
+<?php } ?>
 </div>
 
 <!-- ================= Reiter: Einstellungen ================= -->
-<div class="sm-seite" id="tab-settings">
+<div class="sm-seite<?= $vw_tab === 'tab-settings' ? ' sm-active' : '' ?>" id="tab-settings">
 
 <?php if ($vw_pyv !== '' && version_compare($vw_pyv, '3.9.0', '<')) { ?>
 <div class="sm-fehler"><?= vw_t('EINST.PYTHON_ZU_ALT') ?></div>
@@ -426,6 +443,15 @@ if ($vw_rahmen) {
   <div class="sm-hilfe"><?= vw_t('EINST.H_SPIN') ?></div>
 </div>
 <div class="sm-hinweis"><?= vw_t('EINST.SITZUNG_ERKLAERUNG') ?></div>
+<?php if ($vw_zg['email'] !== '' || $vw_zg['laenge'] > 0 || $vw_zg['spin_laenge'] > 0) { ?>
+<div class="sm-feld">
+  <label style="display:inline-flex;align-items:center;gap:8px;">
+    <input data-role="none" type="checkbox" name="zugang_loeschen" value="1">
+    <?= vw_e(vw_t('EINST.L_ZUGANG_LOESCHEN')) ?>
+  </label>
+  <div class="sm-hilfe"><?= vw_t('EINST.H_ZUGANG_LOESCHEN') ?></div>
+</div>
+<?php } ?>
 
 <h2><?= vw_e(vw_t('EINST.H_TAKT')) ?></h2>
 <div class="sm-warnung"><?= vw_t('EINST.TAKT_WARNUNG') ?></div>
@@ -516,7 +542,7 @@ if ($vw_rahmen) {
 </div>
 
 <!-- ================= Reiter: MQTT ================= -->
-<div class="sm-seite" id="tab-mqtt">
+<div class="sm-seite<?= $vw_tab === 'tab-mqtt' ? ' sm-active' : '' ?>" id="tab-mqtt">
 <h2><?= vw_e(vw_t('MQTT.H_ZUSTAND')) ?></h2>
 <p class="sm-hilfe"><?= vw_t('MQTT.GATEWAY_ERKLAERUNG') ?></p>
 
@@ -556,7 +582,7 @@ if ($vw_rahmen) {
 </div>
 
 <!-- ================= Reiter: Einbindung in Loxone ================= -->
-<div class="sm-seite" id="tab-loxone">
+<div class="sm-seite<?= $vw_tab === 'tab-loxone' ? ' sm-active' : '' ?>" id="tab-loxone">
 <h2><?= vw_e(vw_t('LOX.H_TITEL')) ?></h2>
 <p><?= vw_t('LOX.EINLEITUNG') ?></p>
 
@@ -767,7 +793,7 @@ function vw_bausteine()
 </div>
 
 <!-- ================= Reiter: Test ================= -->
-<div class="sm-seite" id="tab-test">
+<div class="sm-seite<?= $vw_tab === 'tab-test' ? ' sm-active' : '' ?>" id="tab-test">
 <h2><?= vw_e(vw_t('TEST.H_SELBSTPRUEFUNG')) ?></h2>
 <p class="sm-hilfe"><?= vw_t('TEST.EINLEITUNG') ?></p>
 <table class="sm-tbl">
@@ -858,7 +884,7 @@ function vw_bausteine()
 </div>
 
 <!-- ================= Reiter: Logdateien ================= -->
-<div class="sm-seite" id="tab-log">
+<div class="sm-seite<?= $vw_tab === 'tab-log' ? ' sm-active' : '' ?>" id="tab-log">
 <h2><?= vw_e(vw_t('LOG.H_TITEL')) ?></h2>
 <?php
 if (class_exists('LBWeb', false) && method_exists('LBWeb', 'loglist_html')) {

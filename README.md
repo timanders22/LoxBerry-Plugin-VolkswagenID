@@ -12,12 +12,32 @@ vernetzte Volkswagen funktionieren ebenfalls — dann bleiben die rein
 elektrischen Werte leer und die des Verbrenners sind belegt. Bei einem
 Plug-in-Hybrid führt das Plugin beide.
 
-> **Fassung 0.9.0 — ungeprüft.** Das Plugin wurde ohne Volkswagen-Konto und
+> **Fassung 0.9.1 — ungeprüft.** Das Plugin wurde ohne Volkswagen-Konto und
 > ohne Fahrzeug gebaut. Ob die Anmeldung gelingt, ob ein bestimmtes Fahrzeug
 > alle abgefragten Werte liefert und ob die schreibenden Befehle die erwartete
 > Wirkung haben, ist **nicht** geprüft. Alles übrige ist es — und zwar nicht
 > gegen Attrappen, sondern gegen **echte Objekte der Bibliothek**. Deshalb
-> 0.9.0 und nicht 1.0.0, und deshalb sind schreibende Befehle ab Werk gesperrt.
+> 0.9.x und nicht 1.0.0, und deshalb sind schreibende Befehle ab Werk gesperrt.
+
+## Was 0.9.1 ändert
+
+**Der Plugin-Ordner wird ermittelt, nicht geraten.** `vw_paths()` fiel auf den
+festen Namen `volkswagenid` zurück, sobald `config/plugins/<ordner>` noch
+fehlte — etwa im Augenblick der Installation. Hängt LoxBerry bei einer
+Zweitinstallation einen Zähler an (`volkswagenid_01`), zeigten deren Pfade
+damit auf die **erste** Installation: gemeinsame Konfiguration — und darin
+stehen Zugangsdaten und Anmeldemarken —, gemeinsame Warteschlange, gemeinsames
+Protokoll. Maßgeblich ist jetzt `LBPPLUGINDIR`.
+
+**Eine leere Befehlsdatei konnte in die Warteschlange geraten.**
+`vw_befehl_senden()` schrieb `json_encode($befehl)` direkt weiter. Gibt
+`json_encode` bei ungültigem UTF-8 `false` zurück, macht `file_put_contents`
+daraus eine leere Zeichenkette, schreibt null Byte und meldet **Erfolg** — der
+Rückgabewert ist `0`, nicht `false`, die Prüfung auf `=== false` greift also
+nicht. `vw_config_write()` im selben Modul macht es seit jeher richtig.
+
+**Im Kommentarkopf von `icons/icon.svg` stand „Skoda Connect"** — ein Rest aus
+dem Schwesterplugin.
 > Die Selbstaktualisierung zeigt auf dieses Repository; bei gleicher Fassung
 > wird niemandem ein Update angeboten.
 
@@ -162,6 +182,127 @@ Es sind keine persönlichen Daten im Plugin enthalten. Zugangsdaten und alle
 Einstellungen liegen ausschließlich in der lokalen Konfiguration. Verbindungen
 gibt es nur zum Volkswagen-Dienst, zu einem Zeitserver und, bei der
 Installation, zu PyPI.
+
+## Fassung 0.9.1 — nachgemessen und korrigiert
+
+Dreizehn Punkte aus einer Durchsicht. Sechs trafen zu, drei teilweise, vier
+nicht. Alles wurde am Code nachgestellt, bevor etwas geändert wurde.
+
+### `fetch_all()` konnte den Dienst unbegrenzt anhalten
+
+Trifft zu — und der naheliegende Weg dagegen wirkt nicht. Gemessen gegen ein
+Gegenstück, das die Verbindung annimmt und danach schweigt:
+
+| | Dauer |
+|---|---|
+| `requests.get()` ohne `timeout` | hängt unbegrenzt (nach 8 s von außen abgebrochen) |
+| dasselbe mit `socket.setdefaulttimeout(2)` | **hängt ebenfalls unbegrenzt** |
+| dasselbe mit `signal.alarm(2)` | 2,0 s, sauberer `ReadTimeout` |
+
+`setdefaulttimeout` greift nicht, weil urllib3 beim Verbindungsaufbau eine
+eigene Zeitgrenze angibt und die Vorgabe des Sockets damit überschreibt. Der
+Wecker greift — und das Angenehme daran: `requests` deutet den unterbrochenen
+Lesevorgang selbst und räumt seine Verbindung ab, die Fehlerbehandlung der
+Bibliothek läuft also wie bei jeder anderen Störung.
+
+Der Abruf ist jetzt in eine Klasse `Zeitgrenze` gefasst (180 s). Gegenprobe:
+hängender Aufruf nach 2,0 s abgebrochen, kurzer Aufruf ungestört, und nach
+dem Block schlägt kein verspäteter Wecker mehr zu.
+
+### Die Prozessprüfung war zu weich — aber anders, als beschrieben
+
+Der Einwand war, `grep -qa "vw.py"` bzw. `strpos($cmd, 'vw.py')` durchsuche
+die ganze Kommandozeile und finde deshalb fremde Prozesse. Der Rahmen war
+allerdings schon richtig: geprüft wird **nur** die Nummer aus der eigenen
+PID-Datei, es wird nichts gesucht. Die Prüfung dient gegen
+Nummernwiederverwendung — und dafür war sie zu weich. Nachgestellt:
+
+| Prozess mit der recycelten Nummer | bisher | argumentweise | jetzt |
+|---|---|---|---|
+| der Dienst selbst | Dienst | Dienst | Dienst |
+| `nano /pfad/vw.py` | **Dienst** | **Dienst** | fremd |
+| `tail -f /var/log/vw.py.log` | **Dienst** | fremd | fremd |
+| zweites Plugin-Exemplar | **Dienst** | fremd | fremd |
+
+Der vorgeschlagene argumentweise Vergleich allein reicht also nicht: ein
+Editor führt den vollen Pfad ebenfalls als zweites Argument. Geprüft werden
+jetzt **zwei** Dinge — argv[1] ist genau unser Skript, und argv[0] ist ein
+Python.
+
+### Weitere zutreffende Punkte
+
+**Antwortdateien** wurden nach dem Lesen nicht gelöscht — `unlink` ergänzt.
+
+**Kein Häkchen zum Löschen der Zugangsdaten.** Es gibt jetzt eines, und es
+löscht mehr als das Passwortfeld: `zugang.json`, die Sicherungskopie neben dem
+Konfigordner **und** `token.json`. Die Anmeldemarken sind auch ohne Passwort
+ein gültiger Zugang zum Konto — ein Löschen, das sie stehen lässt, ist keines.
+Gegenprobe: Passwort danach in 0 Dateien auffindbar.
+
+**`vw.json` ohne eigene Rechte.** Jetzt 0600. Darin stehen zwar keine
+Passwörter, aber das Token des unangemeldeten Endpunkts — wer es lesen kann,
+kann über HTTP das Fahrzeug schalten.
+
+**Protokoll ganz eingelesen.** Der Speicherhinweis war berechtigt, `tail` ist
+aber der langsamste der drei Wege (rund 1,9 ms gegen 0,05 ms beim
+Rückwärtslesen mit `fseek`). Umgestellt auf `fseek`.
+
+**Sicherungsort beim Upgrade.** Die Sorge war, LoxBerry lösche die
+Sicherungen mit dem Konfigordner. Das trifft nicht zu — gelöscht wird
+`config/plugins/<ordner>/`, also das *Verzeichnis*, und
+`<ordner>.backup.vw.json` liegt daneben. Genau deshalb übersteht die Sicherung
+eine Neuinstallation; das ist ihr Zweck.
+
+Beim Prüfen fiel aber etwas Schwereres auf: **es gab kein Uninstall-Skript.**
+Die Sicherung mit E-Mail, Passwort und S-PIN des Volkswagen-Kontos wäre nach
+dem Deinstallieren für immer auf der Karte liegen geblieben — die Datei ist
+nicht umsonst mit 0600 angelegt. `uninstall/uninstall` gibt es jetzt.
+
+### Nebenbefund: `postinstall.sh` lief bei jedem Upgrade zweimal
+
+`postupgrade.sh` rief `postinstall.sh` auf, obwohl der Installer
+`postinstall` ohnehin ohne Bedingung ausführt und `postupgrade` erst danach.
+`postinstall.sh` legt die virtuelle Umgebung an und holt `carconnectivity`
+samt Volkswagen-Connector über pip aus dem Netz — auf einem Raspberry Pi
+Minuten, und das doppelt.
+
+### Was nicht zutraf
+
+**`UnboundLocalError` bei `cc.shutdown()`.** Die Zeile
+`cc = CarConnectivity(...)` steht in einem **eigenen** `try`, dessen `except`
+mit `return 1` endet; das `try` mit dem `finally` beginnt erst danach. Am
+Syntaxbaum nachgeprüft: Zuweisung in Zeile 964, `try` mit `finally` ab Zeile
+979, Zuweisung liegt davor, eigener `except`-Zweig mit `return`. `cc` kann
+nicht ungebunden sein — und `cc.shutdown()` ist im `finally` zusätzlich in
+ein eigenes `try` gefasst.
+
+**Zu schwache URL-Prüfung für `miniserver_url`.** Dieses Plugin hat weder ein
+Feld `miniserver_url` noch den genannten Ausdruck `#^https?://\S{3,300}$#`.
+Der Punkt stammt sichtbar aus der Durchsicht eines anderen Plugins — er nennt
+sogar dessen Variablennamen `$sp_url`.
+
+**Komma bei `temp` im Webhook.** Wird bereits ersetzt, in
+`webfrontend/html/index.php`:
+`$vw_befehl['temp'] = str_replace(',', '.', $vw_temp);`
+
+**Nicht atomares Schreiben der Statusdateien in Python.** Alle JSON-Schreib­vorgänge
+in `vw.py` laufen über `json_schreiben()`, und das schreibt seit jeher in eine
+`.tmp` und ruft `os.replace`. Nachgeprüft für jede Schreibstelle. Die eine
+Datei, die *nicht* atomar geschrieben wurde, liegt auf der **PHP**-Seite:
+`vw_zugang_speichern()`. Die schreibt jetzt ebenfalls über temp und `rename` —
+und setzt die Rechte 0600 auf der temporären Datei, nicht danach, damit die
+Datei mit dem Passwort darin nicht einen Augenblick lang mit 0644 dasteht.
+
+### Zur Docker-Gruppe
+
+Nicht umgesetzt. Der Vorschlag beginnt mit „falls der Dienst oder
+Abhängigkeiten zukünftig lokal in Container-Umgebungen ausgeführt werden
+sollen" — das tun sie nicht. Dieses Plugin startet keinen Container und
+spricht mit keinem Docker-Dienst; es baut eine virtuelle Python-Umgebung und
+redet über HTTPS mit Volkswagen. Wer in der Gruppe `docker` ist, kann
+Container mit beliebigen Rechten starten und damit faktisch alles auf dem
+Gerät tun. Diese Rechte auf Vorrat zu vergeben, für einen Fall, den es nicht
+gibt, wäre der falsche Tausch.
 
 ## Lizenz
 

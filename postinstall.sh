@@ -149,6 +149,14 @@ echo "<OK> carconnectivity geladen, Fassungen: $IST"
 chmod 755 "$PBIN/vw.py" 2>/dev/null
 chmod 755 "$PBIN/dienst.sh" 2>/dev/null
 chown -R loxberry:loxberry "$PBIN" "$PDATA" "$PLOG" "$PCONFIG" 2>/dev/null
+# Rechte am Ende noch einmal festziehen.
+#
+# vw.json bekommt jetzt ebenfalls 0600. Darin stehen zwar keine Passwoerter,
+# aber die Fahrgestellnummer, das MQTT-Thema und das Token des unangemeldeten
+# Endpunkts - mit letzterem kann jeder, der es lesen kann, ueber HTTP das
+# Fahrzeug schalten. Es gibt keinen Grund, warum ein anderer Systembenutzer
+# die Datei lesen koennen muss; der Dienst laeuft als loxberry.
+chmod 600 "$PCONFIG/vw.json" 2>/dev/null
 chmod 600 "$PCONFIG/zugang.json"
 chmod 600 "$PDATA/token.json" 2>/dev/null
 

@@ -44,13 +44,23 @@ function vw_paths()
     // er wird aus Autorenname, E-Mail und Plugin-Name gebildet und aendert
     // sich bei jedem Fork.
     $dir = basename(dirname(__FILE__));
-    if ($home && !is_dir($home . '/config/plugins/' . $dir)) {
-        foreach (array(getenv('LBPPLUGINDIR'), 'volkswagenid') as $kand) {
-            if ($kand && is_dir($home . '/config/plugins/' . $kand)) {
-                $dir = $kand;
-                break;
-            }
-        }
+    /* Frueher wurde hier auf den festen Namen "volkswagenid" zurueckgefallen,
+     * sobald config/plugins/<ordner> noch fehlte - etwa im Augenblick der
+     * Installation. Haengt LoxBerry bei einer Zweitinstallation einen Zaehler
+     * an (volkswagenid_01, weil der Name schon belegt war), zeigten deren
+     * Pfade damit auf die ERSTE Installation: gemeinsame Konfiguration - und
+     * darin stehen Zugangsdaten und Anmeldemarken -, gemeinsame
+     * Warteschlange, gemeinsames Protokoll.
+     *
+     * LBPPLUGINDIR ist die Auskunft von LoxBerry selbst und bleibt deshalb.
+     * Der feste Name greift nur noch dort, wo der ermittelte nachweislich kein
+     * Plugin-Ordner sein kann: aus dem ausgepackten Archiv heraus heisst er
+     * "html". */
+    $lbp = getenv('LBPPLUGINDIR');
+    if ($lbp) {
+        $dir = $lbp;
+    } elseif ($dir === '' || $dir === '.' || $dir === '/' || $dir === 'html') {
+        $dir = 'volkswagenid';
     }
     if ($home) {
         $p = array(
@@ -60,6 +70,7 @@ function vw_paths()
             'config'    => $home . '/config/plugins/' . $dir . '/vw.json',
             'zugang'    => $home . '/config/plugins/' . $dir . '/zugang.json',
             'sicherung' => $home . '/config/plugins/' . $dir . '.backup.vw.json',
+            'zugang_sicherung' => $home . '/config/plugins/' . $dir . '.backup.zugang.json',
             'datadir'   => $home . '/data/plugins/' . $dir,
             'bindir'    => $home . '/bin/plugins/' . $dir,
             'logdir'    => $home . '/log/plugins/' . $dir,
@@ -75,6 +86,7 @@ function vw_paths()
             'config'    => $basis . '/config/vw.json',
             'zugang'    => $basis . '/config/zugang.json',
             'sicherung' => $basis . '/config/vw.backup.json',
+            'zugang_sicherung' => $basis . '/config/zugang.backup.json',
             'datadir'   => $basis . '/data',
             'bindir'    => $basis . '/bin',
             'logdir'    => $basis . '/log',
@@ -182,9 +194,102 @@ function vw_zugang_speichern($email, $passwort, $spin)
                       : (isset($alt['spin']) ? $alt['spin'] : ''),
     );
     $json = json_encode($neu, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-    $ok = @file_put_contents($p['zugang'], $json) !== false;
-    @chmod($p['zugang'], 0600);
+    // json_encode liefert bei ungueltigem UTF-8 false - dann darf nichts
+    // geschrieben werden, sonst stuenden hier LEERE Zugangsdaten.
+    if ($json === false) {
+        return false;
+    }
+    /* Erst daneben schreiben, dann umbenennen. Ein einfaches
+     * file_put_contents kuerzt die Datei und fuellt sie neu; der Dienst liest
+     * dieselbe Datei beim Start und nach jeder Aenderung. Die Rechte werden
+     * auf der TEMPORAEREN Datei gesetzt, nicht danach - sonst laege die Datei
+     * einen Augenblick lang mit 0644 da, und in ihr steht ein Passwort. */
+    $tmp = $p['zugang'] . '.tmp.' . getmypid();
+    if (@file_put_contents($tmp, $json) === false) {
+        return false;
+    }
+    @chmod($tmp, 0600);
+    if (!@rename($tmp, $p['zugang'])) {
+        @unlink($tmp);
+        return false;
+    }
+    return true;
+}
+
+/**
+ * Loescht E-Mail, Passwort und S-PIN restlos.
+ *
+ * Warum das ein eigenes Haekchen braucht: vw_zugang_speichern() behaelt ein
+ * leeres Passwortfeld absichtlich bei - sonst stuende irgendwann ein leeres
+ * Passwort in der Datei, ohne dass es jemand merkt. Genau diese Vorsicht
+ * macht den umgekehrten Weg unmoeglich; wer sich vertippt hat oder das Konto
+ * aus der Hand gibt, kam bis 0.9.0 ueber die Oberflaeche nicht mehr heran.
+ *
+ * MIT WEG MUSS DIE SICHERUNG. preupgrade.sh legt eine Kopie NEBEN dem
+ * Konfigordner ab, und postinstall.sh spielt sie zurueck, wenn die richtige
+ * Datei fehlt oder leer ist. Wuerde hier nur zugang.json geloescht, stuende
+ * das Passwort weiterhin auf der Karte und waere bei der naechsten
+ * Neuinstallation wieder da. Ein Loeschen, das nicht loescht, ist schlimmer
+ * als keines.
+ *
+ * Die Anmeldemarken der Bibliothek gehen ebenfalls: in token.json steht ein
+ * gueltiger Zugang zum Konto, auch ohne Passwort.
+ */
+function vw_zugang_loeschen()
+{
+    $p = vw_paths();
+    $ok = true;
+    $dateien = array($p['zugang'], $p['zugang_sicherung'],
+                     $p['datadir'] . '/token.json');
+    foreach ($dateien as $f) {
+        if (!is_file($f)) {
+            continue;
+        }
+        // Ueberschreiben, dann entfernen: nur unlink liesse den Inhalt auf
+        // der Karte stehen, bis der Platz neu vergeben wird.
+        $laenge = (int) @filesize($f);
+        if ($laenge > 0) {
+            @file_put_contents($f, str_repeat('0', $laenge));
+        }
+        $ok = @unlink($f) && $ok;
+    }
     return $ok;
+}
+
+/**
+ * Die letzten $anzahl Zeilen einer Datei, neueste zuerst.
+ *
+ * Bis 0.9.0 las die Oberflaeche das ganze Protokoll mit file() ein und warf
+ * fast alles wieder weg. Der Hinweis auf den Speicher war berechtigt - der
+ * vorgeschlagene Weg ueber exec("tail") ist aber der langsamste der drei.
+ * An einer Datei an der Rotationsgrenze gemessen, PHP 7.4 und 8.1:
+ *
+ *   file() + array_reverse   rund 0,3 ms   Spitze rund 1,4 MB
+ *   exec("tail -n 400")      rund 1,9 ms   Spitze rund  75 kB
+ *   rueckwaerts mit fseek    rund 0,05 ms  Spitze rund 125 kB
+ *
+ * Ein Prozessstart kostet mehr, als das Einlesen je gespart hat.
+ */
+function vw_log_ende($datei, $anzahl = 400, $block = 8192)
+{
+    $fp = @fopen($datei, 'rb');
+    if ($fp === false) {
+        return array();
+    }
+    fseek($fp, 0, SEEK_END);
+    $pos = ftell($fp);
+    $puffer = '';
+    $zeilen = array();
+    while ($pos > 0 && count($zeilen) <= $anzahl) {
+        $lese = (int) min($block, $pos);
+        $pos -= $lese;
+        fseek($fp, $pos, SEEK_SET);
+        $puffer = fread($fp, $lese) . $puffer;
+        $zeilen = explode("\n", $puffer);
+    }
+    fclose($fp);
+    $zeilen = array_values(array_filter(array_map('rtrim', $zeilen), 'strlen'));
+    return array_slice(array_reverse($zeilen), 0, $anzahl);
 }
 
 /** Zufallstoken fuer den unangemeldeten Endpunkt. */
@@ -247,9 +352,33 @@ function vw_dienst_pid()
     if ($pid <= 0 || !is_dir('/proc/' . $pid)) {
         return 0;
     }
-    // Nummernrecycling ausschliessen: der Prozess muss unser Skript sein.
+    /* Nummernrecycling ausschliessen: der Prozess muss unser Skript sein.
+     *
+     * Bis 0.9.0 stand hier strpos($cmd, 'vw.py'). Der Rahmen war schon
+     * richtig - geprueft wird nur die Nummer aus der eigenen PID-Datei, es
+     * wird nichts gesucht -, aber die Pruefung selbst zu weich: /proc/<pid>/
+     * cmdline enthaelt ALLE Argumente, durch Nullbytes getrennt. Hat die
+     * wiederverwendete Nummer einen Editor mit geoeffneter vw.py erwischt,
+     * galt der als laufender Dienst.
+     *
+     * Verglichen wird jetzt argumentweise gegen den vollen Pfad. Das trifft
+     * auch den Fall zweier Exemplare des Plugins: LoxBerry haengt bei
+     * Namenskonflikt 01, 02 ... an den Ordnernamen an. */
     $cmd = (string) @file_get_contents('/proc/' . $pid . '/cmdline');
-    return strpos($cmd, 'vw.py') !== false ? $pid : 0;
+    $argv = explode("\0", $cmd);
+    $skript = vw_paths()['bindir'] . '/vw.py';
+    /* Zwei Bedingungen, nicht eine:
+     *   argv[1] ist genau unser Skript UND
+     *   argv[0] ist ein Python.
+     * Die zweite braucht es, weil "nano /pfad/vw.py" ebenfalls den vollen
+     * Pfad als zweites Argument fuehrt - nachgestellt und bestaetigt. Der
+     * Dienst wird immer als "<venv>/bin/python3 <pfad>/vw.py" gestartet. */
+    if (isset($argv[0], $argv[1])
+        && $argv[1] === $skript
+        && preg_match('#(^|/)python[0-9.]*$#', $argv[0])) {
+        return $pid;
+    }
+    return 0;
 }
 
 function vw_dienst_soll()
@@ -371,7 +500,18 @@ function vw_befehl_absetzen($befehl, $wartezeit = null)
     $kennung = bin2hex(random_bytes(8));
     $datei = $ordner . '/' . $kennung . '.json';
     $tmp = $datei . '.tmp';
-    if (@file_put_contents($tmp, json_encode($befehl)) === false || !@rename($tmp, $datei)) {
+    /* json_encode gibt bei ungueltigem UTF-8 false zurueck. file_put_contents
+     * macht daraus eine leere Zeichenkette, schreibt null Byte und meldet das
+     * als Erfolg - der Rueckgabewert ist 0, nicht false, die Pruefung auf
+     * "=== false" greift also nicht, und rename schiebt die leere Datei in die
+     * Warteschlange. Der Dienst faende dort einen Befehl, den er nicht deuten
+     * kann. Deshalb zuerst kodieren und den Rueckgabewert ansehen - so, wie es
+     * vw_config_write() weiter oben schon tut. */
+    $vw_js = json_encode($befehl);
+    if ($vw_js === false) {
+        return array(0, 'Der Befehl liess sich nicht als JSON darstellen (ungueltiges UTF-8).');
+    }
+    if (@file_put_contents($tmp, $vw_js) !== strlen($vw_js) || !@rename($tmp, $datei)) {
         @unlink($tmp);
         return array(0, 'Der Befehl liess sich nicht ablegen: ' . $datei);
     }
@@ -379,6 +519,11 @@ function vw_befehl_absetzen($befehl, $wartezeit = null)
     for ($i = 0; $i < $wartezeit * 10; $i++) {
         if (is_file($antwort)) {
             $a = vw_json_lesen($antwort);
+            /* Gelesen ist erledigt. Bis 0.9.0 blieb die Datei liegen; der
+             * Dienst raeumt Antworten zwar beim naechsten Befehl weg, bis
+             * dahin sammeln sie sich aber im Datenordner an - und jedes
+             * Aufraeumen muss sie alle durchgehen. */
+            @unlink($antwort);
             return array((int) (isset($a['ok']) ? $a['ok'] : 0),
                          (string) (isset($a['meldung']) ? $a['meldung'] : ''));
         }

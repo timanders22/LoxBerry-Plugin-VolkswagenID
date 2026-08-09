@@ -26,8 +26,21 @@ laeuft() {
     P=$(cat "$PID" 2>/dev/null)
     [ -n "$P" ] || return 1
     kill -0 "$P" 2>/dev/null || return 1
-    # Nummernrecycling ausschliessen: der Prozess muss unser Skript sein
-    grep -qa "vw.py" "/proc/$P/cmdline" 2>/dev/null || return 1
+    # Nummernrecycling ausschliessen: der Prozess muss unser Skript sein.
+    #
+    # Bis 0.9.0 ein grep ueber die ganze Befehlszeile. Die enthaelt alle
+    # Argumente; hat die wiederverwendete Nummer einen Editor mit geoeffneter
+    # vw.py erwischt, galt der als laufender Dienst. Verglichen wird jetzt
+    # argumentweise gegen den vollen Pfad - cmdline trennt die Argumente mit
+    # Nullbytes, die tr in Zeilen verwandelt.
+    # Zwei Bedingungen: das zweite Argument ist genau unser Skript, und das
+    # erste ist ein Python. Die zweite braucht es, weil "nano /pfad/vw.py"
+    # ebenfalls den vollen Pfad als zweites Argument fuehrt - nachgestellt
+    # und bestaetigt. Der Dienst laeuft immer als
+    # "<venv>/bin/python3 <pfad>/vw.py".
+    ARGS=$(tr '\0' '\n' < "/proc/$P/cmdline" 2>/dev/null)
+    [ "$(echo "$ARGS" | sed -n '2p')" = "$SKRIPT" ] || return 1
+    echo "$ARGS" | sed -n '1p' | grep -qE '(^|/)python[0-9.]*$' || return 1
     return 0
 }
 

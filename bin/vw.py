@@ -31,6 +31,7 @@ import os
 import signal
 import socket
 import sys
+import threading
 import time
 from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
@@ -943,6 +944,59 @@ def signal_behandeln(*_):
     _LOG.info("Beendigungssignal erhalten - Dienst haelt an.")
 
 
+# ---------------------------------------------------------------------------
+# Zeitgrenze fuer einen Abruf
+#
+# cc.fetch_all() geht ueber die Bibliothek carconnectivity und von dort ueber
+# requests ins Netz. Nachgemessen gegen ein Gegenstueck, das die Verbindung
+# annimmt und danach schweigt:
+#
+#   requests.get() ohne timeout            haengt unbegrenzt (nach 8 s von
+#                                          aussen abgebrochen)
+#   dasselbe mit socket.setdefaulttimeout  haengt EBENFALLS unbegrenzt
+#   dasselbe mit signal.alarm(2)           2,0 s, sauberer ReadTimeout
+#
+# Der naheliegende Weg ueber setdefaulttimeout wirkt also nicht: urllib3 gibt
+# beim Verbindungsaufbau eine eigene Zeitgrenze an und ueberschreibt die
+# Vorgabe des Sockets damit. Was wirkt, ist der Wecker.
+#
+# Dass daraus ein ReadTimeout wird und keine nackte Ausnahme, ist der
+# angenehme Teil: requests deutet den unterbrochenen Lesevorgang selbst und
+# raeumt seine Verbindung ab. Die Fehlerbehandlung der Bibliothek greift also
+# wie bei jeder anderen Stoerung.
+#
+# signal.alarm geht nur im Hauptstrang - dienst() laeuft dort (main() ruft
+# sie unmittelbar auf, es gibt keine Threads). SIGALRM ist sonst unbenutzt;
+# belegt sind nur SIGTERM und SIGINT.
+GRENZE_ABRUF = 180
+
+
+class Zeitgrenze:
+    """Bricht einen haengenden Aufruf nach $sekunden ab."""
+
+    def __init__(self, sekunden: int, was: str = "Abruf"):
+        self.sekunden = int(sekunden)
+        self.was = was
+        self.alt = None
+
+    def __enter__(self):
+        if self.sekunden > 0 and threading.current_thread() is threading.main_thread():
+            self.alt = signal.signal(signal.SIGALRM, self._schlagen)
+            signal.alarm(self.sekunden)
+        return self
+
+    def _schlagen(self, *_):
+        raise TimeoutError(
+            "{0} hat laenger als {1} s gebraucht - abgebrochen.".format(self.was, self.sekunden))
+
+    def __exit__(self, *_):
+        if self.alt is not None:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, self.alt)
+            self.alt = None
+        return False
+
+
 def dienst(einmal: bool = False) -> int:
     ntp_entschaerfen()
     from carconnectivity.carconnectivity import CarConnectivity
@@ -984,7 +1038,11 @@ def dienst(einmal: bool = False) -> int:
             fahrzeuge: dict[str, dict] = {}
             liste: list = []
             try:
-                cc.fetch_all()
+                # Mit Wecker: ohne ihn haelt ein Server, der die Verbindung
+                # annimmt und dann schweigt, den ganzen Dienst an - samt
+                # Befehlswarteschlange, die im selben Ablauf abgearbeitet wird.
+                with Zeitgrenze(GRENZE_ABRUF, "Der Abruf bei Volkswagen"):
+                    cc.fetch_all()
                 garage = cc.get_garage()
                 liste = list(garage.list_vehicles()) if garage is not None else []
                 liste.sort(key=lambda f: str(wert(getattr(f, "vin", None)) or ""))
