@@ -515,7 +515,7 @@ $vw_beschriftung = array(
 </div>
 
 <div class="sm-knopfreihe">
-  <button data-role="none" class="sm-btn sm-b-lesen" type="submit"><?= vw_e(vw_t('ALLG.SPEICHERN')) ?></button>
+  <button data-role="none" class="sm-btn sm-b-aktion" type="submit"><?= vw_e(vw_t('ALLG.SPEICHERN')) ?></button>
 </div>
 </form>
 

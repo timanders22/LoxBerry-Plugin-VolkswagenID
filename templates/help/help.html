@@ -1,79 +1,36 @@
-<h2>Volkswagen ID</h2>
+<h2><TMPL_VAR HILFE.K01></h2>
 
-<p>Bindet Volkswagen-Fahrzeuge &uuml;ber das Volkswagen-Konto an Loxone an:
-Ladezustand, Reichweite, Kilometerstand, Verriegelung, T&uuml;ren und Fenster,
-Licht, Handbremse, Fahrzeugzustand, Klimatisierung, Scheibenheizung, Ladewerte,
-Standort sowie Inspektions- und &Ouml;lservice-Fristen. Auf Wunsch lassen sich
-Klimatisierung, Ladevorgang, Ladegrenze, Ladestrom und Scheibenheizung
-schalten.</p>
+<p><TMPL_VAR HILFE.K02></p>
 
-<p>Gebaut ist es f&uuml;r die <b>ID-Reihe</b> (ID.3, ID.4, ID.5, ID.7, ID.Buzz).
-Es funktioniert auch mit anderen vernetzten Volkswagen &mdash; dann bleiben die
-rein elektrischen Werte leer und die Werte des Verbrenners sind belegt. Bei
-einem Plug-in-Hybrid f&uuml;hrt das Plugin beide.</p>
+<p><TMPL_VAR HILFE.K03></p>
 
-<h3>Zwei Grenzen, die man vorher kennen sollte</h3>
-<p><b>Europa.</b> Der verwendete Connector spricht mit dem europ&auml;ischen
-Dienst. F&uuml;r nordamerikanische Fahrzeuge gibt es einen eigenen Connector,
-der hier <b>nicht</b> eingebaut ist.</p>
-<p><b>Zwei-Faktor-Best&auml;tigung.</b> Einzelne Konten verlangen sie beim
-Anmelden. Das l&auml;sst sich nicht automatisieren; wer davon betroffen ist,
-meldet sich einmal im Browser auf demselben Ger&auml;t an.</p>
+<h3><TMPL_VAR HILFE.K04></h3>
+<p><TMPL_VAR HILFE.K05></p>
+<p><TMPL_VAR HILFE.K06></p>
 
-<h3>Abholtakt: mindestens 180 Sekunden</h3>
-<p>Das ist keine Vorsicht dieses Plugins, sondern die Untergrenze der
-Bibliothek &mdash; darunter nimmt sie die Einstellung gar nicht erst an. F&uuml;nf
-Minuten sind ein guter Anfang. Wird ein Wert sofort gebraucht, ist der
-Abruf-Befehl der richtige Weg, nicht ein k&uuml;rzerer Takt.</p>
+<h3><TMPL_VAR HILFE.K07></h3>
+<p><TMPL_VAR HILFE.K08></p>
 
-<h3>Zugangsdaten</h3>
-<p>Es sind die Zugangsdaten des <b>Volkswagen-Kontos</b> &mdash; dieselben wie in
-der App <i>Volkswagen</i> beziehungsweise <i>We Connect ID</i>. Sie liegen in
-einer eigenen Datei mit den Rechten 0600 und stehen nie in der
-Loxone-Projektdatei. Das Passwort wird nirgends angezeigt; im Reiter
-<i>Test</i> steht nur seine L&auml;nge.</p>
-<p>Nach der ersten Anmeldung legt die Bibliothek Anmeldemarken ab und meldet
-sich damit an, statt jedes Mal das Passwort zu senden. Nach einem
-Passwortwechsel sind sie wertlos &mdash; daf&uuml;r gibt es im Reiter
-<i>Einstellungen</i> den Knopf <i>Anmeldung neu erzwingen</i>.</p>
+<h3><TMPL_VAR HILFE.K09></h3>
+<p><TMPL_VAR HILFE.K10></p>
+<p><TMPL_VAR HILFE.K11></p>
 
-<h3>So gehen Sie vor</h3>
+<h3><TMPL_VAR HILFE.K12></h3>
 <ol>
-<li><b>Einstellungen:</b> Benutzername und Passwort eintragen, speichern, dann
-<i>Dienst starten</i>.</li>
-<li><b>Test:</b> Die Selbstpr&uuml;fung sagt Zeile f&uuml;r Zeile, ob es
-tr&auml;gt. Jedes Kreuz nennt die Abhilfe mit.</li>
-<li><b>MQTT:</b> Das Abo im MQTT-Gateway eintragen. Ohne diesen Eintrag kommt am
-Miniserver nichts an.</li>
-<li><b>Einbindung in Loxone:</b> Schritt f&uuml;r Schritt, mit vollst&auml;ndiger
-Baustein-Liste zum Nachbauen.</li>
+<li><TMPL_VAR HILFE.K13></li>
+<li><TMPL_VAR HILFE.K14></li>
+<li><TMPL_VAR HILFE.K15></li>
+<li><TMPL_VAR HILFE.K16></li>
 </ol>
 
-<h3>Wenn T&uuml;ren und Verriegelung leer bleiben</h3>
-<p>Manche Fahrzeuge melden die F&auml;higkeit <i>ACCESS</i> nicht, liefern die
-Werte aber trotzdem. Daf&uuml;r gibt es im Reiter <i>Einstellungen</i> den Haken
-<i>T&uuml;rzustand erzwingen</i>. Nur einschalten, wenn diese Felder sonst leer
-bleiben.</p>
+<h3><TMPL_VAR HILFE.K17></h3>
+<p><TMPL_VAR HILFE.K18></p>
 
-<h3>Steuerung</h3>
-<p>Schreibende Befehle sind ab Werk <b>gesperrt</b> und m&uuml;ssen
-ausdr&uuml;cklich freigegeben werden. Ver- und Entriegeln sowie Hupe und
-Lichthupe bietet dieses Plugin bewusst <b>nicht</b> an. Wichtig: eine Antwort
-mit <i>OK=1</i> hei&szlig;t, dass der Volkswagen-Server den Auftrag
-entgegengenommen hat &mdash; ob das Fahrzeug ihn ausf&uuml;hrt, zeigt erst der
-n&auml;chste Abruf.</p>
+<h3><TMPL_VAR HILFE.K19></h3>
+<p><TMPL_VAR HILFE.K20></p>
 
-<h3>Was ungepr&uuml;ft ist</h3>
-<p>Dieses Plugin wurde ohne Volkswagen-Konto und ohne Fahrzeug gebaut.
-Ungepr&uuml;ft ist deshalb, ob die Anmeldung gelingt, ob ein bestimmtes
-Fahrzeug alle abgefragten Werte liefert und ob die schreibenden Befehle die
-erwartete Wirkung haben. Die Zuordnung der Werte selbst ist dagegen gegen
-echte Objekte der Bibliothek gemessen. Bleibt ein Wert leer, zeigt der Knopf
-<i>Rohdaten als JSON ansehen</i> im Reiter <i>Test</i>, was der Dienst
-tats&auml;chlich bekommen hat.</p>
+<h3><TMPL_VAR HILFE.K21></h3>
+<p><TMPL_VAR HILFE.K22></p>
 
-<h3>Grundlage</h3>
-<p>Die Anbindung nutzt die Bibliotheken <i>carconnectivity</i> und
-<i>carconnectivity-connector-volkswagen</i> von tillsteinbach (MIT). Sie sind
-keine amtliche Volkswagen-Schnittstelle und k&ouml;nnen sich jederzeit
-&auml;ndern.</p>
+<h3><TMPL_VAR HILFE.K23></h3>
+<p><TMPL_VAR HILFE.K24></p>
