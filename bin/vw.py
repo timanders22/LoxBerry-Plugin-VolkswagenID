@@ -37,6 +37,42 @@ from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
+
+def lb_wurzel_ermitteln():
+    """Den LoxBerry-Wurzelordner ohne festen Systempfad bestimmen.
+
+    Vom eigenen Ablageort aufwaerts, bis ein Verzeichnis gefunden ist, das
+    config/plugins UND webfrontend enthaelt. Trifft die uebliche
+    Installation genauso wie eine an einem anderen Ort.
+    """
+    d = os.path.dirname(os.path.abspath(__file__))
+    for _ in range(8):
+        if os.path.isdir(os.path.join(d, "config", "plugins")) \
+                and os.path.isdir(os.path.join(d, "webfrontend")):
+            return d
+        eltern = os.path.dirname(d)
+        if eltern == d:
+            break
+        d = eltern
+    return ""
+
+
+def mqtt_wert_saeubern(wert):
+    """Einen Wert fuer den UDP-Eingang des MQTT-Gateways unschaedlich machen.
+
+    Das Gateway liest zeilenweise. Ein Zeilenumbruch im Wert zerlegt die
+    Uebertragung, und aus den Bruchstuecken bildet das Gateway erfundene
+    Themen. Ein Tabulator schadet ebenso, weil Leerzeichen Thema und Wert
+    trennt.
+    """
+    text = str(wert)
+    for zeichen in ("\r\n", "\r", "\n", "\t"):
+        text = text.replace(zeichen, " ")
+    while "  " in text:
+        text = text.replace("  ", " ")
+    return text.strip()
+
+
 # ---------------------------------------------------------------------------
 # Pfade aus dem EIGENEN Ablageort ableiten.
 #
@@ -50,7 +86,7 @@ PNAME = SELF.name
 if len(SELF.parents) >= 3:
     LBHOME = SELF.parents[2]
 else:
-    LBHOME = Path(os.environ.get("LBHOMEDIR") or "/opt/loxberry")
+    LBHOME = Path(os.environ.get("LBHOMEDIR") or lb_wurzel_ermitteln())
 PDATA = LBHOME / "data" / "plugins" / PNAME
 PLOG = LBHOME / "log" / "plugins" / PNAME
 PCONFIG = LBHOME / "config" / "plugins" / PNAME
@@ -259,7 +295,7 @@ def mqtt_senden(paare: dict, praefix: str) -> None:
         for k, v in paare.items():
             if v is None:
                 continue
-            s.sendto(f"publish {praefix}/{k} {v}".encode("utf-8"), ("127.0.0.1", z["udpport"]))
+            s.sendto(f"publish {praefix}/{k} {mqtt_wert_saeubern(v)}".encode("utf-8"), ("127.0.0.1", z["udpport"]))
     except OSError as err:
         melde_gebremst("mqtt_senden", f"MQTT: Senden fehlgeschlagen ({err}).")
     finally:
