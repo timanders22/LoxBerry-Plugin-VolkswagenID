@@ -112,16 +112,9 @@ if ($vw_post && isset($_POST['speichern'])) {
         $vw_fehler[] = vw_t('EINST.FEHLER_TEMP_TAUSCH');
     }
 
-    $vw_cfg['mqtt_ein'] = isset($_POST['mqtt_ein']) ? 1 : 0;
     $vw_cfg['steuerung_ein'] = isset($_POST['steuerung_ein']) ? 1 : 0;
     $vw_cfg['zugriff_erzwingen'] = isset($_POST['zugriff_erzwingen']) ? 1 : 0;
 
-    $vw_topic = trim(preg_replace('/[\x00-\x1F\x7F"\']/', '', (string) $_POST['mqtt_topic']));
-    if ($vw_topic === '' || !preg_match('#^[A-Za-z0-9_/\-]{1,64}$#', $vw_topic)) {
-        $vw_fehler[] = vw_t('EINST.FEHLER_TOPIC');
-    } else {
-        $vw_cfg['mqtt_topic'] = trim($vw_topic, '/');
-    }
 
     /* Zugangsdaten: eigene Datei mit Rechten 0600. Ein leer zurueckgegebenes
      * Passwortfeld loescht nichts - sonst stuende irgendwann ein leeres
@@ -164,6 +157,37 @@ if ($vw_post && isset($_POST['speichern'])) {
         }
     }
     $vw_tab = 'tab-settings';
+
+    /* mqtt_ein und mqtt_topic werden hier bewusst NICHT angefasst: sie wohnen im
+     * Reiter MQTT und haben dort ein eigenes Formular. Die Konfiguration
+     * kommt aus vw_config(), die Werte ueberleben also unveraendert. Stuende
+     * hier weiter "isset($_POST['mqtt_ein']) ? 1 : 0", wuerde jedes Speichern
+     * der Einstellungen MQTT stillschweigend abschalten. */
+}
+
+/* ---------------- MQTT (eigener Reiter, eigenes Formular) ----------------
+ *
+ * Eigenes Formular UND eigener Handler gehoeren zusammen. Loesten beide
+ * Formulare denselben Handler aus, setzte dieser die Haken des jeweils
+ * nicht abgeschickten Formulars per isset() auf 0 - der Benutzer verloere
+ * Werte, die er nie gesehen hat. Der Handler laedt darum den Bestand und
+ * ruehrt ausschliesslich die MQTT-Werte an. */
+if ($vw_post && isset($_POST['save_mqtt'])) {
+    $vw_mcfg = vw_config();
+    $vw_mcfg['mqtt_ein'] = isset($_POST['mqtt_ein']) ? 1 : 0;
+    $vw_mtopic = trim(preg_replace('/[\x00-\x1F\x7F"\']/', '',
+        (string) (isset($_POST['mqtt_topic']) ? $_POST['mqtt_topic'] : '')));
+    if ($vw_mtopic === '' || !preg_match('#^[A-Za-z0-9_/\-]{1,64}$#', $vw_mtopic)) {
+        $vw_fehler[] = vw_t('EINST.FEHLER_TOPIC');
+    } else {
+        $vw_mcfg['mqtt_topic'] = trim($vw_mtopic, '/');
+    }
+    if (!$vw_fehler) {
+        if (vw_config_speichern($vw_mcfg)) {
+        $vw_meldungen[] = vw_t('EINST.GESPEICHERT');
+        }
+    }
+    $vw_tab = 'tab-mqtt';
 }
 
 /* ---------------- Dienst starten, anhalten, neu starten ---------------- */
@@ -501,18 +525,8 @@ $vw_beschriftung = array(
   <div class="sm-hilfe"><?= vw_t('EINST.H_WARTEZEIT') ?></div>
 </div>
 
-<h2>MQTT</h2>
-<div class="sm-feld">
-  <label style="display:inline-flex;align-items:center;gap:8px;">
-    <input data-role="none" type="checkbox" name="mqtt_ein" value="1" <?= !empty($vw_cfg['mqtt_ein']) ? 'checked' : '' ?>>
-    <?= vw_e(vw_t('EINST.L_MQTT_EIN')) ?>
-  </label>
-</div>
-<div class="sm-feld">
-  <label for="mqtt_topic"><?= vw_e(vw_t('EINST.L_MQTT_TOPIC')) ?></label>
-  <input data-role="none" type="text" id="mqtt_topic" name="mqtt_topic" value="<?= vw_e($vw_cfg['mqtt_topic']) ?>" placeholder="vw">
-  <div class="sm-hilfe"><?= vw_t('EINST.H_MQTT_TOPIC') ?></div>
-</div>
+<?php /* MQTT stand hier bis zu dieser Fassung. Es wohnt jetzt
+         vollstaendig im Reiter MQTT - eine Sache, eine Stelle. */ ?>
 
 <div class="sm-knopfreihe">
   <button data-role="none" class="sm-btn sm-b-aktion" type="submit"><?= vw_e(vw_t('ALLG.SPEICHERN')) ?></button>
@@ -543,6 +557,27 @@ $vw_beschriftung = array(
 
 <!-- ================= Reiter: MQTT ================= -->
 <div class="sm-seite<?= $vw_tab === 'tab-mqtt' ? ' sm-active' : '' ?>" id="tab-mqtt">
+
+<h2>MQTT</h2>
+<form action="index.php" method="post">
+<input data-role="none" type="hidden" name="save_mqtt" value="1">
+<input data-role="none" type="hidden" name="activetab" value="tab-mqtt">
+<div class="sm-feld">
+  <label style="display:inline-flex;align-items:center;gap:8px;">
+    <input data-role="none" type="checkbox" name="mqtt_ein" value="1" <?= !empty($vw_cfg['mqtt_ein']) ? 'checked' : '' ?>>
+    <?= vw_e(vw_t('EINST.L_MQTT_EIN')) ?>
+  </label>
+</div>
+<div class="sm-feld">
+  <label for="mqtt_topic"><?= vw_e(vw_t('EINST.L_MQTT_TOPIC')) ?></label>
+  <input data-role="none" type="text" id="mqtt_topic" name="mqtt_topic" value="<?= vw_e($vw_cfg['mqtt_topic']) ?>" placeholder="vw">
+  <div class="sm-hilfe"><?= vw_t('EINST.H_MQTT_TOPIC') ?></div>
+</div>
+<div class="sm-legende"><span><i class="sm-punkt sm-b-aktion"></i> <?= vw_t('LEGENDE.AKTION') ?></span></div>
+<div class="sm-knopfreihe">
+  <button data-role="none" class="sm-btn sm-b-aktion" type="submit"><?= vw_e(vw_t('ALLG.SPEICHERN')) ?></button>
+</div>
+</form>
 <h2><?= vw_e(vw_t('MQTT.H_ZUSTAND')) ?></h2>
 <p class="sm-hilfe"><?= vw_t('MQTT.GATEWAY_ERKLAERUNG') ?></p>
 
