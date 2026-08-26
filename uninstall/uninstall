@@ -132,4 +132,8 @@ echo "<INFO> und gehen mit diesem weg."
 echo "<INFO> Die virtuelle Python-Umgebung ($PBIN/venv) wird mit dem"
 echo "<INFO> bin-Ordner des Plugins entfernt - dafuer ist nichts zu tun."
 
+# Ein Merker, der die Deinstallation ueberlebt, startet den Dienst bei
+# einer spaeteren Installation ungefragt wieder.
+rm -f "$BASE/config/plugins/$PFOLDER.lief_vorher"
+
 exit 0

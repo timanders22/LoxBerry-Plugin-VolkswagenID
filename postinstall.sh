@@ -160,6 +160,46 @@ chmod 600 "$PCONFIG/vw.json" 2>/dev/null
 chmod 600 "$PCONFIG/zugang.json"
 chmod 600 "$PDATA/token.json" 2>/dev/null
 
+# ---------- Dienst wieder starten, wenn er vor dem Upgrade lief ----------
+#
+# Der Merker entsteht nur in preupgrade.sh und nur dann, wenn dort ein
+# laufender Vorgang angehalten wurde. Bei einer Erstinstallation gibt es
+# ihn nicht, und dann passiert hier nichts.
+#
+# Er behebt keinen Stillstand: der Sollmerker unter data/ ueberlebt das
+# Upgrade (gemessen an sbin/plugininstall.pl), und der Cron-Waechter holt
+# den Dienst binnen einer Minute zurueck. Dieser Start hier ist sofort und
+# unabhaengig vom Waechter - das ist der ganze Gewinn, und mehr wird nicht
+# behauptet.
+#
+# Er wird IN JEDEM FALL entfernt, auch wenn der Start scheitert. Ein
+# liegengebliebener Merker startete den Dienst bei einer spaeteren
+# Installation ungefragt - auch dann, wenn er absichtlich abgeschaltet
+# worden war.
+MERKER="$BASE/config/plugins/$PFOLDER.lief_vorher"
+if [ -f "$MERKER" ]; then
+    rm -f "$MERKER"
+    if [ ! -x "$PBIN/dienst.sh" ]; then
+        echo "<INFO> $PBIN/dienst.sh fehlt - der Dienst wurde nicht gestartet."
+    else
+        # Als loxberry und nicht als root: der Dienst schreibt in data/
+        # und log/. Was root dort anlegt, kann die Oberflaeche danach
+        # nicht mehr ueberschreiben.
+        if [ "$(id -u)" = "0" ]; then
+            AUSGABE=$(su -s /bin/bash -c "$PBIN/dienst.sh start" loxberry 2>&1)
+        else
+            AUSGABE=$("$PBIN/dienst.sh" start 2>&1)
+        fi
+        case "$AUSGABE" in
+            *gestartet*|*laeuft*)
+                echo "<OK> Dienst wieder gestartet: $AUSGABE" ;;
+            *)
+                echo "<INFO> Der Dienst liess sich nicht wieder starten: $AUSGABE"
+                echo "<INFO> Reiter Einstellungen, Knopf 'Dienst starten'." ;;
+        esac
+    fi
+fi
+
 echo "<OK> Installation abgeschlossen."
 echo "<INFO> Bitte die Plugin-Oberflaeche oeffnen, die Zugangsdaten des Volkswagen-Kontos"
 echo "<INFO> eintragen und den Dienst im Reiter Einstellungen starten."

@@ -272,6 +272,54 @@ $vw_rahmen = class_exists('LBWeb', false);
 if ($vw_rahmen) {
     LBWeb::lbheader('Volkswagen ID', 'https://wiki.loxberry.de/', 'help.html');
 }
+
+/* ---------------- Einstellungen sichern ----------------
+ *
+ * Ausgegeben wird die VOLLE Konfiguration - samt Aktionstoken. Ohne ihn
+ * stuenden nach dem Zurueckspielen alle Felder richtig, und das Plugin
+ * kaeme trotzdem nicht an die Anlage; die Datei waere wertlos. Damit
+ * traegt sie ein Geheimnis, und der Hinweis am Knopf sagt das. */
+if ($vw_post && isset($_POST['vw_sichern'])) {
+    $vw_js = json_encode(vw_config(),
+        JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    if ($vw_js !== false) {
+        header('Content-Type: application/json; charset=utf-8');
+        header('Content-Disposition: attachment; filename="volkswagenid_einstellungen_'
+               . date('Ymd_His') . '.json"');
+        echo $vw_js;
+        exit;
+    }
+    $vw_fehler[] = vw_t('EINST.SICH_SCHREIBFEHLER');
+}
+
+/* ---------------- Einstellungen zurueckspielen ----------------
+ *
+ * is_uploaded_file() ZUERST: ohne diese Pruefung liesse sich jede Datei des
+ * Servers unterschieben. Dann die Groessengrenze - eine Sicherung dieses
+ * Plugins ist wenige Kilobyte gross; alles darueber wird gar nicht gelesen. */
+if ($vw_post && isset($_POST['vw_zurueck'])) {
+    if (!isset($_FILES['vw_sicherung']) || !is_array($_FILES['vw_sicherung'])
+        || !isset($_FILES['vw_sicherung']['tmp_name'])
+        || !@is_uploaded_file($_FILES['vw_sicherung']['tmp_name'])) {
+        $vw_fehler[] = vw_t('EINST.SICH_KEINE_DATEI');
+    } elseif ((int) $_FILES['vw_sicherung']['size'] > 262144) {
+        $vw_fehler[] = vw_t('EINST.SICH_ZU_GROSS');
+    } else {
+        list($vw_neu, $vw_mangel, $vw_n) = vw_sicherung_lesen(
+            (string) @file_get_contents($_FILES['vw_sicherung']['tmp_name']));
+        if ($vw_neu === null) {
+            /* ALLE Beanstandungen, nicht nur die erste - und geaendert wird
+             * nichts. */
+            $vw_fehler[] = vw_t('EINST.SICH_ABGELEHNT') . ' '
+                            . implode(' ', $vw_mangel);
+        } elseif (vw_config_speichern($vw_neu)) {
+            $vw_meldungen[] = sprintf(vw_t('EINST.SICH_UEBERNOMMEN'), $vw_n);
+        } else {
+            $vw_fehler[] = vw_t('EINST.SICH_SCHREIBFEHLER');
+        }
+    }
+}
+
 ?>
 <style>
 /* Hausstandard, wortgetreu aus VORLAGE_hausstandard.css.html uebernommen.
@@ -553,6 +601,25 @@ $vw_beschriftung = array(
 </table>
 <p class="sm-hilfe"><?= vw_t('EINST.VIN_HINWEIS') ?></p>
 <?php } ?>
+
+<h2><?= vw_t('EINST.H_SICHERUNG') ?></h2>
+<div class="sm-hinweis"><?= vw_t('EINST.SICH_ERKLAERUNG') ?></div>
+<div class="sm-warnung"><?= vw_t('EINST.SICH_WARNUNG') ?></div>
+<div class="sm-knopfreihe">
+  <!-- ZWEI GETRENNTE Formulare. Das Sichern schickt einen Download und ruft
+       exit auf; das Zurueckspielen braucht enctype="multipart/form-data".
+       Wer beides in ein Formular legt, bekommt entweder keinen Upload oder
+       einen Download, der das Speichern verschluckt. -->
+  <form action="index.php" method="post">
+    <input data-role="none" type="hidden" name="activetab" value="tab-settings">
+    <button data-role="none" class="sm-btn sm-b-lesen" type="submit" name="vw_sichern" value="1"><?= vw_t('EINST.K_SICHERN') ?></button>
+  </form>
+  <form action="index.php" method="post" enctype="multipart/form-data">
+    <input data-role="none" type="hidden" name="activetab" value="tab-settings">
+    <input data-role="none" type="file" name="vw_sicherung" accept=".json">
+    <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="vw_zurueck" value="1"><?= vw_t('EINST.K_ZURUECK') ?></button>
+  </form>
+</div>
 </div>
 
 <!-- ================= Reiter: MQTT ================= -->
@@ -598,7 +665,7 @@ $vw_beschriftung = array(
 </table>
 
 <h2><?= vw_e(vw_t('MQTT.H_ABO')) ?></h2>
-<div class="sm-warnung"><?= vw_t('MQTT.ABO_WARNUNG') ?></div>
+<div class="sm-warnung"><?= vw_abo_text() ?></div>
 <div class="sm-step">
 <?= vw_t('MQTT.ABO_SCHRITTE') ?>
 <p><span class="sm-mono"><?= vw_e($vw_cfg['mqtt_topic']) ?>/#</span></p>
@@ -628,7 +695,7 @@ $vw_beschriftung = array(
 <div class="sm-step"><b><?= vw_e(vw_t('LOX.S2_TITEL')) ?></b><br>
 <?= vw_t('LOX.S2_TEXT') ?>
 <p><span class="sm-mono"><?= vw_e($vw_cfg['mqtt_topic']) ?>/#</span></p>
-<div class="sm-warnung"><?= vw_t('LOX.S2_WARNUNG') ?></div>
+<div class="sm-warnung"><?= vw_abo_text() ?></div>
 </div>
 
 <div class="sm-step"><b><?= vw_e(vw_t('LOX.S3_TITEL')) ?></b><br>
@@ -645,7 +712,7 @@ $vw_beschriftung = array(
     <th><?= vw_e(vw_t('LOX.T_EINHEIT')) ?></th><th><?= vw_e(vw_t('LOX.T_BEDEUTUNG')) ?></th></tr>
 <?php foreach (vw_status_felder() as $vw_feld => $vw_info) { ?>
 <tr><td><span class="sm-mono">VW_1_<?= vw_e($vw_feld) ?></span></td>
-    <td><span class="sm-mono">\i<?= vw_e($vw_feld) ?>=\i\v</span></td>
+    <td><span class="sm-mono"><?= vw_e(vw_check($vw_feld)) ?></span></td>
     <td><?= $vw_info[0] ?></td><td><?= vw_t($vw_info[1]) ?></td></tr>
 <?php } ?>
 </table>
@@ -682,7 +749,7 @@ $vw_beschriftung = array(
 <table class="sm-tbl">
 <tr><th><?= vw_e(vw_t('LOX.T_BEFEHL')) ?></th><th><?= vw_e(vw_t('LOX.T_EINHEIT')) ?></th><th><?= vw_e(vw_t('LOX.T_BEDEUTUNG')) ?></th></tr>
 <?php foreach (vw_laden_felder() as $vw_feld => $vw_info) { ?>
-<tr><td><span class="sm-mono">\i<?= vw_e($vw_feld) ?>=\i\v</span></td>
+<tr><td><span class="sm-mono"><?= vw_e(vw_check($vw_feld)) ?></span></td>
     <td><?= $vw_info[0] ?></td><td><?= vw_t($vw_info[1]) ?></td></tr>
 <?php } ?>
 </table>
@@ -690,14 +757,14 @@ $vw_beschriftung = array(
 <table class="sm-tbl">
 <tr><th><?= vw_e(vw_t('LOX.T_BEFEHL')) ?></th><th><?= vw_e(vw_t('LOX.T_EINHEIT')) ?></th><th><?= vw_e(vw_t('LOX.T_BEDEUTUNG')) ?></th></tr>
 <?php foreach (vw_wartung_felder() as $vw_feld => $vw_info) { ?>
-<tr><td><span class="sm-mono">\i<?= vw_e($vw_feld) ?>=\i\v</span></td>
+<tr><td><span class="sm-mono"><?= vw_e(vw_check($vw_feld)) ?></span></td>
     <td><?= $vw_info[0] ?></td><td><?= vw_t($vw_info[1]) ?></td></tr>
 <?php } ?>
 </table>
 <?= vw_t('LOX.S4_POSITION') ?>
 <table class="sm-tbl">
 <tr><td><span class="sm-mono"><?= vw_e($vw_basis) ?>?token=<?= vw_e($vw_token) ?>&amp;aktion=position&amp;fahrzeug=1</span></td>
-    <td><span class="sm-mono">\iBREITE=\i\v</span> / <span class="sm-mono">\iLAENGE=\i\v</span></td></tr>
+    <td><span class="sm-mono"><?= vw_e(vw_check('BREITE')) ?></span> / <span class="sm-mono"><?= vw_e(vw_check('LAENGE')) ?></span></td></tr>
 </table>
 </div>
 
@@ -775,7 +842,7 @@ function vw_bausteine()
         array(11, 'BAUSTEIN.T_VE',      'BAUSTEIN.N11', 'BAUSTEIN.P11', '&mdash;'),
         array(12, 'BAUSTEIN.T_VE',      'BAUSTEIN.N12', 'BAUSTEIN.P12', '&mdash;'),
         array(13, 'BAUSTEIN.T_NICHT',   'BAUSTEIN.N13', '',             'I &larr; #5'),
-        array(14, 'BAUSTEIN.T_ODER',    'BAUSTEIN.N14', '',             'I1 &larr; #13, I2 &larr; #6, I3 &larr; #7, I4 &larr; #8'),
+        array(14, 'BAUSTEIN.T_ODER',    'BAUSTEIN.N14', '',             'I1 &larr; #13, #6 &middot; I2 &larr; #7, #8'),
         array(15, 'BAUSTEIN.T_EVZ',     'BAUSTEIN.N15', 'BAUSTEIN.P15', 'I &larr; #14'),
         array(16, 'BAUSTEIN.T_BENACHR', 'BAUSTEIN.N16', 'BAUSTEIN.P16', 'I &larr; #15'),
         array(17, 'BAUSTEIN.T_SWS',     'BAUSTEIN.N17', 'BAUSTEIN.P17', 'I &larr; #1'),

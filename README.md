@@ -19,6 +19,88 @@ Plug-in-Hybrid führt das Plugin beide.
 > gegen Attrappen, sondern gegen **echte Objekte der Bibliothek**. Deshalb
 > 0.9.x und nicht 1.0.0, und deshalb sind schreibende Befehle ab Werk gesperrt.
 
+## Was 0.9.8 ändert
+
+Vier Korrekturen, alle aus einem Zeile-für-Zeile-Vergleich mit den
+Schwesterplugins. Die erste verlangt **einen Handgriff in Loxone Config**;
+die dritte schließt eine Lücke, in der bisher gar nicht geprüft wurde.
+
+### Der Suchtext des Kilometerstands war zweideutig — bitte nachtragen
+
+Der virtuelle Eingang für `KM` trug bisher den Suchtext `\iKM=\i\v`. Die
+Antwort des Wartungs-Abrufs lautet aber
+
+    WARTUNG;OK=1;INSPTAGE=…;INSPKM=15000;OELTAGE=…;OELKM=…;KM=48210;ALTER=…
+
+und Loxone nimmt die **erste** Fundstelle: `INSPKM=`. Der Kilometerstand las
+damit die Inspektionsvorgabe — im Beispiel 15 000 statt 48 210. Beide Zahlen
+sehen aus wie ein Kilometerstand, der Fehler meldet sich nicht.
+
+Alle Suchtexte tragen jetzt das Semikolon: `\i;KM=\i\v`. Sie entstehen dazu
+an **einer** Stelle im Quelltext statt an fünf — genau diese Verdopplung hatte
+die Regel auseinanderlaufen lassen.
+
+> **Was Sie tun müssen:** Wer die Importdatei neu erzeugt, bekommt die
+> berichtigten Suchtexte automatisch. Wer die Eingänge behalten will, ändert in
+> Loxone Config bei den **drei Eingängen mit `KM` im Namen** (`INSPKM`, `OELKM`,
+> `KM`) den Suchtext von `\iNAME=` auf `\i;NAME=`. Bei allen anderen Eingängen
+> wirkt sich das Semikolon nicht aus — es schadet aber auch dort nicht, und der
+> Reiter *Einbindung in Loxone* zeigt jetzt überall die Fassung mit Semikolon.
+
+### Nach einer Aktualisierung läuft der Dienst wieder
+
+`preupgrade.sh` hält den Dienst an. Ein Merker **neben** dem
+Konfigurationsordner sagt dem `postinstall.sh`, dass er lief, und der startet
+ihn wieder — sofort und ohne Umweg. Der Merker wird nur gesetzt, wenn der
+Vorgang wirklich lief, und in jedem Fall wieder entfernt.
+
+> **Was diese Korrektur NICHT ist, und das gehört hierher.** Ursprünglich stand
+> hier, das Plugin habe nach jeder Aktualisierung stillgestanden, weil der
+> Installateur `data/` ausräume. **Das war falsch und nie gemessen.** Nachgelesen
+> in `sbin/plugininstall.pl`: beim Upgrade werden `config/` und `data/` des
+> Plugins angelegt, falls sie fehlen, und der Archivinhalt wird darüber kopiert
+> (`:891`, `:895`, `:996`, `:1000`); gelöscht werden sie nur in
+> `purge_installation` (`:1604`, `:1606`), und die läuft ausschließlich beim
+> **Deinstallieren** (`:233`). Der Sollmerker `soll_laufen` überlebt das Upgrade
+> also, und der Cron-Wächter holt den Dienst binnen einer Minute von selbst
+> zurück. Diese Korrektur verkürzt ein Fenster von bis zu 60 Sekunden und macht
+> den Start unabhängig vom Wächter — sie behebt keinen Stillstand.
+
+`preupgrade.sh` legt jetzt einen Merker **neben** dem Konfigurationsordner ab —
+denn auch der wird ausgeräumt — und zwar nur dann, wenn der Vorgang wirklich
+lief. `postinstall.sh` startet danach und entfernt den Merker in jedem Fall,
+auch wenn der Start scheitert; ein liegengebliebener Merker hätte den Dienst
+beim nächsten Upgrade ungefragt gestartet.
+
+### Die Reiter werden jetzt geprüft — vorher tat es niemand
+
+Die Reiterleiste entsteht in einer Schleife über `$vw_reiter_ids`. Das ist die
+richtige Lösung: die Namen stehen nur einmal da. Nur sucht
+`hausstandard_pruefen.py` die Reiter als wörtliche Zeichenketten im Quelltext
+und findet in einer erzeugten Leiste keine — die Spalte `tab` blieb ein
+**Strich**. Ein Strich liest sich wie „nichts zu beanstanden", er heißt aber
+„nichts gemessen". Einen eigenen Test dafür gab es nicht.
+
+Der Reiter *Test* prüft es jetzt selbst, am Quelltext der Oberfläche, und nennt
+drei Fälle beim Namen: eine Fläche ohne Eintrag in der Liste (der Reiter ist
+unerreichbar und die Seite springt nach jedem Absenden zurück), ein Eintrag
+ohne Fläche (der Reiter bleibt leer) und ein Eintrag ohne Beschriftung. Die
+Leiste selbst wird **nicht** verglichen, und das ist keine Lücke: sie entsteht
+aus derselben Liste. Geeicht mit
+`Werkzeuge/reiterpruefung_eichung.py` — alle drei Fälle werden rot, und zwar
+mit dem richtigen Grund.
+
+### Baustein #14 hatte vier Eingänge
+
+Bei `UND` und `ODER` ist die Zahl der Eingänge eine Eigenschaft des Bausteins,
+die Loxone Config selbst setzt. Wer einen dritten Eingang aufzieht, verliert
+beim nächsten Öffnen der Datei **alle Verbindungen, die daran hingen** — ohne
+Meldung. Die Baustein-Liste im Reiter *Einbindung in Loxone* nennt für #14
+jetzt zwei Eingänge mit je zwei Quellen; an einem ODER werden mehrere Quellen
+an einem Eingang ODER-verknüpft, das Ergebnis ist dasselbe. Bei #30 (ein UND)
+hängt weiterhin genau eine Quelle je Eingang — dort wäre dieselbe Form falsch,
+weil sie das UND still in ein ODER verwandelte.
+
 ## Was 0.9.1 ändert
 
 **Der Plugin-Ordner wird ermittelt, nicht geraten.** `vw_paths()` fiel auf den

@@ -121,10 +121,85 @@ function vw_pruefungen()
         $zeilen[] = vw_pruefzeile(0, vw_t('TEST.F_MQTT'), vw_t('TEST.A_MQTT_AUS'));
     }
 
+    /* ---- Reiter: Liste, Beschriftungen und Bereiche ----
+     * Der Fall, den kein Werkzeug dieses Hauses hier gesehen hat: die Leiste
+     * entsteht in einer Schleife, und hausstandard_pruefen.py sucht
+     * woertliche Namen im Quelltext - es meldete einen Strich, also "nichts
+     * gemessen", was sich wie "nichts zu beanstanden" liest. */
+    $r = vw_reiter_lesen();
+    if ($r === null || !$r['liste'] || !$r['bereiche']) {
+        $zeilen[] = vw_pruefzeile(-1, vw_t('TEST.F_REITER'),
+            vw_t('TEST.A_REITER_UNKLAR'));
+    } else {
+        $abw = array();
+        $ohne_bereich = array_values(array_diff($r['liste'], $r['bereiche']));
+        if ($ohne_bereich) {
+            $abw[] = sprintf(vw_t('TEST.A_REITER_OHNE_BEREICH'),
+                vw_e(implode(', ', $ohne_bereich)));
+        }
+        $ohne_liste = array_values(array_diff($r['bereiche'], $r['liste']));
+        if ($ohne_liste) {
+            $abw[] = sprintf(vw_t('TEST.A_REITER_OHNE_LISTE'),
+                vw_e(implode(', ', $ohne_liste)));
+        }
+        $ohne_text = array_values(array_diff($r['liste'], $r['text']));
+        if ($ohne_text) {
+            $abw[] = sprintf(vw_t('TEST.A_REITER_OHNE_TEXT'),
+                vw_e(implode(', ', $ohne_text)));
+        }
+        // Ein woertlicher Eintrag in der Leiste, den die Liste nicht kennt.
+        // Heute gibt es keinen - aber wer die Schleife spaeter aufloest,
+        // soll es hier erfahren und nicht am Bildschirm.
+        $leiste_fremd = array_values(array_diff($r['leiste_fest'], $r['liste']));
+        if ($leiste_fremd) {
+            $abw[] = sprintf(vw_t('TEST.A_REITER_LEISTE_FEST'),
+                vw_e(implode(', ', $leiste_fremd)));
+        }
+        $zeilen[] = vw_pruefzeile($abw ? 0 : 1, vw_t('TEST.F_REITER'),
+            $abw ? sprintf(vw_t('TEST.A_REITER_FEHL'), implode(' ', $abw))
+                 : sprintf(vw_t('TEST.A_REITER_OK'), count($r['liste'])));
+    }
+
     $zeilen[] = vw_pruefzeile(!empty($cfg['steuerung_ein']) ? 1 : -1, vw_t('TEST.F_STEUERUNG'),
         !empty($cfg['steuerung_ein']) ? vw_t('TEST.A_STEUERUNG_EIN') : vw_t('TEST.A_STEUERUNG_AUS'));
 
     return $zeilen;
+}
+
+/**
+ * Welche Reiternamen kennen Liste, Beschriftungstabelle und Bereiche?
+ *
+ * Gelesen wird der QUELLTEXT der Oberflaeche, nicht der Zustand zur Laufzeit.
+ * Nur so faellt ein Bereich auf, den es in der Datei gibt und den zur Laufzeit
+ * niemand oeffnet.
+ *
+ * Die Reiterleiste wird NICHT verglichen, und das ist keine Luecke: sie
+ * entsteht in einer Schleife ueber dieselbe Liste und kann deshalb nicht
+ * abweichen. Woertliche Eintraege in der Leiste - die es hier nicht gibt -
+ * wuerden trotzdem auffallen; sie werden mitgelesen.
+ */
+function vw_reiter_lesen()
+{
+    $f = __DIR__ . '/index.php';
+    if (!is_file($f)) {
+        return null;
+    }
+    $t = (string) @file_get_contents($f);
+    $aus = array('liste' => array(), 'text' => array(),
+                 'bereiche' => array(), 'leiste_fest' => array());
+    if (preg_match('/\$vw_reiter_ids\s*=\s*array\((.*?)\);/s', $t, $m)) {
+        preg_match_all("/'([a-z0-9]+)'/", $m[1], $x);
+        $aus['liste'] = $x[1];
+    }
+    if (preg_match('/\$vw_beschriftung\s*=\s*array\((.*?)\);/s', $t, $m)) {
+        preg_match_all("/'([a-z0-9]+)'\s*=>/", $m[1], $x);
+        $aus['text'] = $x[1];
+    }
+    preg_match_all('/id="tab-([a-z0-9]+)"/', $t, $z);
+    $aus['bereiche'] = $z[1];
+    preg_match_all('/data-ziel="tab-([a-z0-9]+)"/', $t, $y);
+    $aus['leiste_fest'] = $y[1];
+    return $aus;
 }
 
 /**
