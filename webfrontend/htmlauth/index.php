@@ -70,6 +70,23 @@ $vw_fehler = array();      // Beanstandungen - gesammelt, nicht ueberschrieben
 $vw_testausgabe = '';
 $vw_post = (isset($_SERVER['REQUEST_METHOD']) ? $_SERVER['REQUEST_METHOD'] : '') === 'POST';
 
+/* ==================================================================
+ * DIE HANDLER STEHEN VOR lbheader() - DAS IST BAUVORSCHRIFT
+ * ==================================================================
+ *
+ * Stand der Kopf davor, war er beim Aufruf von header() schon
+ * geschrieben - "Cannot modify header information", und der Knopf
+ * "Einstellungen sichern" lieferte eine Seite mit angehaengtem JSON
+ * statt einer Datei.
+ *
+ * Am PHP-CLI ist das unsichtbar: header() ist dort wirkungslos und
+ * headers_sent() immer falsch. Und wer OHNE gueltiges Formularmerkmal
+ * misst, wird vom Wachposten abgewiesen, bevor der Handler anlaeuft.
+ * Beides hat den Fehler lange verdeckt.
+ *
+ * Reihenfolge: Bibliothek, Konfiguration, Wachposten, Reiterwahl,
+ * ALLE Handler samt Downloads, dann erst lbheader(), dann HTML.
+ * ================================================================== */
 /* ---------------- Vorlage herunterladen ---------------- */
 if ($vw_post && isset($_POST['vorlage'])) {
     $vw_nr = preg_match('/^[0-9]{1,2}$/', (string) $_POST['vorlage']) ? (int) $_POST['vorlage'] : 1;
@@ -269,9 +286,6 @@ $vw_basis = 'http://' . $vw_host . '/plugins/' . $vw_p['plugin'] . '/index.php';
 $vw_logzeilen = is_file($vw_p['log']) ? vw_log_ende($vw_p['log'], 400) : array();
 
 $vw_rahmen = class_exists('LBWeb', false);
-if ($vw_rahmen) {
-    LBWeb::lbheader('Volkswagen ID', 'https://wiki.loxberry.de/', 'help.html');
-}
 
 /* ---------------- Einstellungen sichern ----------------
  *
@@ -318,6 +332,11 @@ if ($vw_post && isset($_POST['vw_zurueck'])) {
             $vw_fehler[] = vw_t('EINST.SICH_SCHREIBFEHLER');
         }
     }
+}
+
+
+if ($vw_rahmen) {
+    LBWeb::lbheader('Volkswagen ID', 'https://wiki.loxberry.de/', 'help.html');
 }
 
 ?>
