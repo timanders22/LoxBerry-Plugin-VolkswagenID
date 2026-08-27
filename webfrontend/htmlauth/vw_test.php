@@ -162,8 +162,373 @@ function vw_pruefungen()
 
     $zeilen[] = vw_pruefzeile(!empty($cfg['steuerung_ein']) ? 1 : -1, vw_t('TEST.F_STEUERUNG'),
         !empty($cfg['steuerung_ein']) ? vw_t('TEST.A_STEUERUNG_EIN') : vw_t('TEST.A_STEUERUNG_AUS'));
+    $zeilen[] = vw_pruefzeile(!empty($cfg['eingreifend_ein']) ? 1 : -1,
+        vw_t('TEST.F_EINGREIFEND'),
+        !empty($cfg['eingreifend_ein']) ? vw_t('TEST.A_EINGREIFEND_EIN')
+                                        : vw_t('TEST.A_EINGREIFEND_AUS'));
+
+    /* ---- ab 0.9.10: die Zeilen des Hausstandards ---- */
+
+    // Arbeitet der Dienst noch? Eine Prozessnummer beantwortet das nicht -
+    // ein Prozess kann dastehen und nichts mehr tun. Der Zaehler laeuft bei
+    // jedem Takt eine Stelle weiter, auch bei einer Stoerung.
+    $zu2 = vw_zustand();
+    $zzeit = isset($zu2['ts']) && is_numeric($zu2['ts']) ? (int) $zu2['ts'] : 0;
+    if ($pid <= 0) {
+        // Ueber einen Dienst, der gar nicht laeuft, wird kein Herzschlag beurteilt.
+        $zeilen[] = vw_pruefzeile(-1, vw_t('TEST.F_HERZ'), vw_t('TEST.A_HERZ_KEIN_DIENST'));
+    } elseif ($zzeit <= 0) {
+        $zeilen[] = vw_pruefzeile(-1, vw_t('TEST.F_HERZ'), vw_t('TEST.A_HERZ_UNBEKANNT'));
+    } else {
+        $alt = time() - $zzeit;
+        $frisch2 = $alt <= max(600, 3 * (int) $cfg['intervall']);
+        $zeilen[] = vw_pruefzeile($frisch2 ? 1 : 0, vw_t('TEST.F_HERZ'),
+            sprintf(vw_t('TEST.A_HERZ'), $alt,
+                    isset($zu2['zaehler']) ? (int) $zu2['zaehler'] : -1));
+    }
+
+    // Ist die Konfiguration heil? Jeder Zustand, den der Code erzeugen kann,
+    // braucht seinen Satz.
+    $lage = vw_config_lesen(true);
+    $mangel = array();
+    if ($lage['abgewiesen']) {
+        $mangel[] = sprintf(vw_t('TEST.A_KONFIG_ABGEWIESEN'),
+            vw_e(implode(', ', array_keys($lage['abgewiesen']))));
+    }
+    if ($lage['fremd']) {
+        $mangel[] = sprintf(vw_t('TEST.A_KONFIG_FREMD'), vw_e(implode(', ', $lage['fremd'])));
+    }
+    $zeilen[] = vw_pruefzeile(($lage['lage'] === 'ok' && !$mangel) ? 1 : 0,
+        vw_t('TEST.F_KONFIG'),
+        vw_t('ALLG.KONFIG_' . strtoupper($lage['lage'])) . ($mangel ? ' ' . implode(' ', $mangel) : ''));
+
+    // Antwortet der eigene Endpunkt? Ein echter Aufruf auf 127.0.0.1 - er
+    // findet die getrennten Baeume, die keine Lesepruefung sieht.
+    $zeilen[] = vw_endpunkt_zeile($cfg);
+
+    // Tragen alle Formulare das Merkmal? Ein Formular vergisst man. Gemeldet
+    // wird die ZAHL der angesehenen Stellen: eine Null ist kein "in Ordnung",
+    // sondern ein Hinweis, dass nichts gemessen wurde.
+    $f = vw_formulare_lesen();
+    if ($f === null || $f['formulare'] === 0) {
+        $zeilen[] = vw_pruefzeile(-1, vw_t('TEST.F_MERKMAL'), vw_t('TEST.A_MERKMAL_UNKLAR'));
+    } else {
+        $zeilen[] = vw_pruefzeile($f['ohne'] === 0 ? 1 : 0, vw_t('TEST.F_MERKMAL'),
+            $f['ohne'] === 0 ? sprintf(vw_t('TEST.A_MERKMAL_OK'), $f['formulare'])
+                             : sprintf(vw_t('TEST.A_MERKMAL_FEHLT'), $f['ohne'], $f['formulare']));
+    }
+
+    // Stimmt die Themenliste mit dem Sendecode ueberein? Die Tabelle im Reiter
+    // MQTT ist die Anleitung - eine Liste, die niemand nachmisst, laeuft
+    // auseinander.
+    $zeilen[] = vw_themen_zeile();
+
+    // Sind die Vorlagen wohlgeformt? Eine kaputte Vorlage merkt der Anwender
+    // sonst erst in Loxone Config.
+    $zeilen[] = vw_vorlagen_zeile();
+
+    // Laufen die beiden Entfernungsrechnungen (PHP und Python) gleich?
+    // Muenchen - Berlin sind rund 504 km.
+    $e = vw_entfernung_m(48.1372, 11.5756, 52.5200, 13.4050);
+    $zeilen[] = vw_pruefzeile(($e !== null && $e >= 500000 && $e <= 508000) ? 1 : 0,
+        vw_t('TEST.F_ENTFERNUNG'),
+        sprintf(vw_t('TEST.A_ENTFERNUNG'), $e === null ? '-' : $e));
+
+    // Der Horcher - nur wenn er gebraucht wird.
+    if ($cfg['empf_thema'] !== '' || (!empty($cfg['abfahrt_ein']) && $cfg['abfahrt_thema'] !== '')) {
+        $h = isset($zu2['horcher']) ? (int) $zu2['horcher'] : -1;
+        $zeilen[] = vw_pruefzeile($h === 1 ? 1 : ($h === 0 ? 0 : -1), vw_t('TEST.F_HORCHER'),
+            $h === 1 ? vw_t('TEST.A_HORCHER_OK')
+                     : (!empty($zu2['horcher_grund']) ? vw_e($zu2['horcher_grund'])
+                                                      : vw_t('TEST.A_HORCHER_UNBEKANNT')));
+    }
+
+    // Sind die Schluessel da, die erst zur Laufzeit entstehen?
+    $zeilen[] = vw_dynamische_schluessel_zeile();
+
+    // Zum Schluss: wie viele Striche stehen in dieser Liste? Ein Strich ist
+    // ausdruecklich kein Haken - wer ihn beim Ueberfliegen wie einen
+    // einsammelt, hat eine Pruefung weniger, als er glaubt.
+    $striche = 0;
+    foreach ($zeilen as $z2) {
+        if ($z2['stand'] === -1) {
+            $striche++;
+        }
+    }
+    $zeilen[] = vw_pruefzeile(-1, vw_t('TEST.F_BILANZ'),
+        sprintf(vw_t('TEST.A_BILANZ'), count($zeilen), $striche));
 
     return $zeilen;
+}
+
+/**
+ * Die Schluessel, die erst zur Laufzeit aus einer Vorsilbe entstehen.
+ *
+ * Sie stehen hier WOERTLICH, und das ist der ganze Zweck: ein Sucher nach
+ * vw_t('X') findet einen zusammengesetzten Aufruf wie
+ * vw_t('LOX.ART_' . strtoupper($art)) nicht und meldet die Schluessel als
+ * unbenutzt. Wer sie daraufhin loescht, bekommt eine Seite, auf der der
+ * Schluesselname selbst steht.
+ *
+ * Und es ist keine Attrappe fuer den Sucher: die Zeile im Reiter Test ruft
+ * jeden Schluessel wirklich ab. vw_t() gibt bei einem unbekannten Schluessel
+ * den Namen zurueck - daran ist ein fehlender Text zu erkennen.
+ */
+function vw_dynamische_schluessel()
+{
+    /* AUSGESCHRIEBEN, nicht erzeugt. Ein Sucher findet nur woertliche Namen;
+     * eine Schleife ueber vw_befehle() haette dieselben Schluessel geliefert
+     * und trotzdem als unbenutzt gemeldet. */
+    return array(
+        'ALLG.KONFIG_OK', 'ALLG.KONFIG_LEER', 'ALLG.KONFIG_KAPUTT',
+        'ALLG.KONFIG_AUS_ZWEITSCHRIFT',
+        'EINST.DIENST_START', 'EINST.DIENST_STOP', 'EINST.DIENST_RESTART',
+        'LOX.ART_STATUS', 'LOX.ART_LADEN', 'LOX.ART_WARTUNG', 'LOX.ART_POSITION',
+        'LOX.ART_VERBRAUCH', 'LOX.ART_BEFEHLE',
+        'VW_BEF.KLIMA_START_H', 'VW_BEF.KLIMA_STOP_H', 'VW_BEF.ZIELTEMP_H',
+        'VW_BEF.LADEN_START_H', 'VW_BEF.LADEN_STOP_H', 'VW_BEF.LADEGRENZE_H',
+        'VW_BEF.LADESTROM_H', 'VW_BEF.SCHEIBE_EIN_H', 'VW_BEF.SCHEIBE_AUS_H',
+        'VW_BEF.WECKEN_H', 'VW_BEF.ABRUF_H', 'VW_BEF.ENTRIEGELN_H',
+        'VW_BEF.VERRIEGELN_H', 'VW_BEF.BLINKEN_H', 'VW_BEF.HUPEN_H',
+        'VW_BEF.EINSTELLUNG_H',
+        'EINST.L_INTERVALL', 'EINST.L_TAKT_WARTUNG', 'EINST.L_TEMP_MIN',
+        'EINST.L_TEMP_MAX', 'EINST.L_VERLAUF_TAGE', 'EINST.L_WARTEZEIT',
+        'EINST.L_WARTEZEIT_ENDPUNKT', 'EINST.L_HEIM_RADIUS', 'EINST.L_ABSTAND_ABRUF',
+        'EINST.L_BEFEHLE_STUNDE', 'EINST.L_ENTPRELLUNG', 'EINST.L_ABFAHRT_VORLAUF',
+        'EINST.L_ABFAHRT_TEMP', 'EINST.L_HEIM_BREITE', 'EINST.L_HEIM_LAENGE',
+        'EINST.L_EMPF_GRENZE', 'EINST.L_EMPF_THEMA', 'EINST.L_ABFAHRT_THEMA',
+    );
+}
+
+/**
+ * Gegenprobe: deckt die ausgeschriebene Liste wirklich ab, was der Code
+ * zusammensetzt?
+ *
+ * Ohne diese Probe waere die Liste oben eine Behauptung. Wer einen Befehl
+ * ergaenzt und den Hilfstext vergisst, erfaehrt es hier - und nicht erst,
+ * wenn der Anwender in der Tabelle einen Schluesselnamen liest.
+ */
+function vw_dynamische_schluessel_soll()
+{
+    $soll = array();
+    foreach (array_merge(vw_vorlagenarten(), array('befehle')) as $a) {
+        $soll[] = 'LOX.ART_' . strtoupper($a);
+    }
+    foreach (array_keys(vw_befehle()) as $b) {
+        $soll[] = 'VW_BEF.' . strtoupper($b) . '_H';
+    }
+    return $soll;
+}
+
+function vw_dynamische_schluessel_zeile()
+{
+    $alle = vw_dynamische_schluessel();
+    $fehlt = array();
+    foreach ($alle as $k) {
+        // vw_t() gibt den Schluessel selbst zurueck, wenn es ihn nicht gibt.
+        if (vw_t($k) === $k) {
+            $fehlt[] = $k;
+        }
+    }
+    // Und was der Code bildet, ohne dass es in der Liste steht.
+    $ungenannt = array_values(array_diff(vw_dynamische_schluessel_soll(), $alle));
+    foreach ($ungenannt as $k) {
+        if (!in_array($k, $fehlt, true)) {
+            $fehlt[] = $k;
+        }
+    }
+    return vw_pruefzeile($fehlt ? 0 : 1, vw_t('TEST.F_DYNAMISCH'),
+        $fehlt ? sprintf(vw_t('TEST.A_DYNAMISCH_FEHLT'), count($fehlt),
+                         vw_e(implode(', ', array_slice($fehlt, 0, 8))))
+               : sprintf(vw_t('TEST.A_DYNAMISCH_OK'), count($alle)));
+}
+
+/**
+ * Ein echter HTTP-Aufruf gegen den eigenen Endpunkt.
+ *
+ * DREI Ausgaenge, nicht zwei. Der dritte ist der wichtige: ein Webserver, der
+ * nur eine Anfrage zugleich bearbeitet, kann sich waehrend des Seitenaufbaus
+ * nicht selbst aufrufen - ein Kreuz waere dort ein Kreuz, das nichts bedeutet.
+ *
+ * Das Ergebnis wird 300 Sekunden zwischengespeichert, sonst ruft sich der
+ * Webserver bei jedem Klick auf einen Reiter selbst auf.
+ */
+function vw_endpunkt_zeile($cfg)
+{
+    $p = vw_paths();
+    $speicher = $p['datadir'] . '/.endpunkt_probe.json';
+    $alt = vw_json_lesen($speicher);
+    if (isset($alt['ts']) && (time() - (int) $alt['ts']) < 300 && isset($alt['stand'])) {
+        return vw_pruefzeile((int) $alt['stand'], vw_t('TEST.F_ENDPUNKT'), (string) $alt['text']);
+    }
+    $token = trim((string) $cfg['aktionstoken']);
+    if ($token === '') {
+        return vw_pruefzeile(-1, vw_t('TEST.F_ENDPUNKT'), vw_t('TEST.A_ENDPUNKT_KEIN_TOKEN'));
+    }
+    $url = 'http://127.0.0.1/plugins/' . rawurlencode($p['plugin'])
+         . '/index.php?token=' . rawurlencode($token) . '&aktion=status&fahrzeug=1';
+    $kontext = stream_context_create(array('http' => array(
+        'timeout' => 4, 'ignore_errors' => true, 'method' => 'GET')));
+    /* Ein EIGENER Fehler-Aufnehmer um den Aufruf.
+     *
+     * Ein vorangestelltes @ schaltet nur die AUSGABE ab, nicht den
+     * Fehler-Aufnehmer: eine verweigerte Verbindung - der Normalfall auf einem
+     * Webserver, der sich nicht selbst aufrufen kann - landete damit in jedem
+     * Fehlerprotokoll und in jedem Renderlauf des Pruefstands. Die verweigerte
+     * Verbindung ist hier aber ein gueltiges MESSERGEBNIS, kein Fehler; sie
+     * fuehrt zum dritten Ausgang. */
+    $vorher = set_error_handler(function () { return true; });
+    $antwort = file_get_contents($url, false, $kontext);
+    $kopf = isset($http_response_header) ? $http_response_header : null;
+    if ($vorher === null) {
+        restore_error_handler();
+    } else {
+        set_error_handler($vorher);
+    }
+    $code = 0;
+    if (is_array($kopf) && isset($kopf[0])
+        && preg_match('#HTTP/\S+\s+(\d{3})#', (string) $kopf[0], $m)) {
+        $code = (int) $m[1];
+    }
+    if ($antwort === false || $antwort === '') {
+        $stand = -1;
+        $text = vw_t('TEST.A_ENDPUNKT_KEINE_ANTWORT');
+    } elseif ($code === 200 && strpos($antwort, 'VOLKSWAGEN;') === 0) {
+        $stand = 1;
+        $text = sprintf(vw_t('TEST.A_ENDPUNKT_OK'), $code);
+    } else {
+        $stand = 0;
+        $text = sprintf(vw_t('TEST.A_ENDPUNKT_FALSCH'), $code,
+            vw_e(substr(trim((string) $antwort), 0, 60)));
+    }
+    @file_put_contents($speicher, json_encode(
+        array('ts' => time(), 'stand' => $stand, 'text' => $text)));
+    return vw_pruefzeile($stand, vw_t('TEST.F_ENDPUNKT'), $text);
+}
+
+/**
+ * Zaehlt die Formulare der Oberflaeche und die darin gefuehrten Merkmale.
+ *
+ * Gelesen wird der QUELLTEXT, nicht der Zustand zur Laufzeit - nur so faellt
+ * ein Formular auf, das es in der Datei gibt und das zur Laufzeit niemand
+ * oeffnet.
+ */
+function vw_formulare_lesen()
+{
+    $f = __DIR__ . '/index.php';
+    if (!is_file($f)) {
+        return null;
+    }
+    $t = (string) @file_get_contents($f);
+    if (!preg_match_all('#<form\b.*?</form>#s', $t, $m)) {
+        return array('formulare' => 0, 'ohne' => 0);
+    }
+    $ohne = 0;
+    foreach ($m[0] as $block) {
+        // Gesucht wird der AUFRUF, der das Feld erzeugt - und dass er einen
+        // Wert traegt. Ein woertlich kopiertes Feld mit leerem value hat bei
+        // AudiConnect als Rohtext in der Seite gestanden.
+        if (strpos($block, 'vw_formfeld(') === false) {
+            $ohne++;
+        }
+    }
+    return array('formulare' => count($m[0]), 'ohne' => $ohne);
+}
+
+/**
+ * Sendet der Dienst genau die Themen, die die Oberflaeche verspricht?
+ *
+ * Der teuerste Befund der Renault-Sitzung: Oberflaeche, Baustein-Liste und
+ * erzeugte Importdatei nannten fuenf Themen, die der Sendecode nie
+ * veroeffentlicht hat. Wer die Datei einlas, bekam virtuelle Eingaenge, die
+ * dauerhaft auf 0 standen - ohne Fehlermeldung.
+ */
+function vw_themen_zeile()
+{
+    $dienst = vw_mqtt_themen_im_dienst();
+    if ($dienst === null) {
+        return vw_pruefzeile(-1, vw_t('TEST.F_THEMEN'), vw_t('TEST.A_THEMEN_UNKLAR'));
+    }
+    $soll_zahl = array();
+    $soll_text = array();
+    $soll_oben = array();
+    foreach (vw_mqtt_themen() as $thema => $info) {
+        if (strpos($thema, 'fahrzeugN/') === 0) {
+            $name = substr($thema, 10);
+            if (!empty($info['text'])) {
+                $soll_text[] = $name;
+            } else {
+                $soll_zahl[] = $name;
+            }
+        } else {
+            $soll_oben[] = $thema;
+        }
+    }
+    $mangel = array();
+    foreach (array(array('Zahlen', $soll_zahl, $dienst['felder']),
+                   array('Texte', $soll_text, $dienst['text']),
+                   array('oben', $soll_oben, $dienst['oben'])) as $paar) {
+        $nur_liste = array_values(array_diff($paar[1], $paar[2]));
+        $nur_dienst = array_values(array_diff($paar[2], $paar[1]));
+        if ($nur_liste) {
+            $mangel[] = sprintf(vw_t('TEST.A_THEMEN_NUR_LISTE'), $paar[0],
+                vw_e(implode(', ', $nur_liste)));
+        }
+        if ($nur_dienst) {
+            $mangel[] = sprintf(vw_t('TEST.A_THEMEN_NUR_DIENST'), $paar[0],
+                vw_e(implode(', ', $nur_dienst)));
+        }
+    }
+    $n = count($soll_zahl) + count($soll_text) + count($soll_oben);
+    return vw_pruefzeile($mangel ? 0 : 1, vw_t('TEST.F_THEMEN'),
+        $mangel ? implode(' ', $mangel) : sprintf(vw_t('TEST.A_THEMEN_OK'), $n));
+}
+
+/**
+ * Sind alle erzeugbaren Vorlagen wohlgeformt?
+ *
+ * Geprueft wird das ERZEUGNIS, nicht der Quelltext: jede Vorlage wird gebaut
+ * und durch den XML-Parser geschickt. Dazu die drei Merkmale des
+ * Hausstandards, die bis 0.9.9 fehlten.
+ */
+function vw_vorlagen_zeile()
+{
+    $mangel = array();
+    $anzahl = 0;
+    $frueher = libxml_use_internal_errors(true);
+    foreach (array_merge(vw_vorlagenarten(), array('befehle', 'mqtt')) as $art) {
+        if ($art === 'befehle') {
+            list($name, $xml) = vw_vorlage_vo(1);
+        } elseif ($art === 'mqtt') {
+            list($name, $xml) = vw_vorlage_mqtt(1);
+        } else {
+            list($name, $xml) = vw_vorlage(1, $art);
+        }
+        $anzahl++;
+        libxml_clear_errors();
+        $doc = simplexml_load_string($xml);
+        if ($doc === false) {
+            $e = libxml_get_errors();
+            $mangel[] = sprintf(vw_t('TEST.A_VORLAGE_KAPUTT'), vw_e($art),
+                vw_e($e ? trim($e[0]->message) : '?'));
+            continue;
+        }
+        if (strpos($xml, '<Info templateType=') === false) {
+            $mangel[] = sprintf(vw_t('TEST.A_VORLAGE_OHNE_INFO'), vw_e($art));
+        }
+        if (strpos($xml, 'HintText=""') === false) {
+            $mangel[] = sprintf(vw_t('TEST.A_VORLAGE_OHNE_HINT'), vw_e($art));
+        }
+        // CRLF ueberall, keine nackte LF. Loxone Config nimmt beides an, der
+        // Abgleich gegen die Ausfuhren der Anlage aber nicht.
+        if (preg_match('/(?<!\r)\n/', $xml)) {
+            $mangel[] = sprintf(vw_t('TEST.A_VORLAGE_LF'), vw_e($art));
+        }
+    }
+    libxml_clear_errors();
+    libxml_use_internal_errors($frueher);
+    return vw_pruefzeile($mangel ? 0 : 1, vw_t('TEST.F_VORLAGEN'),
+        $mangel ? implode(' ', $mangel) : sprintf(vw_t('TEST.A_VORLAGEN_OK'), $anzahl));
 }
 
 /**
@@ -255,6 +620,30 @@ function vw_test_aktion($aktion)
 
         case 'wecken':
             return vw_befehl_absetzen(array('aktion' => 'wecken', 'fahrzeug' => $nr));
+
+        case 'zieltemperatur':
+            $temp = isset($_POST['test_temp']) ? str_replace(',', '.', (string) $_POST['test_temp']) : '';
+            if (!preg_match('/^[0-9]{1,2}(\.[05])?$/', $temp)) {
+                return array(0, vw_t('TEST.M_TEMP_UNGUELTIG'));
+            }
+            return vw_befehl_absetzen(array('aktion' => 'zieltemperatur',
+                                            'fahrzeug' => $nr, 'temp' => $temp));
+
+        case 'verriegeln':
+        case 'entriegeln':
+        case 'blinken':
+        case 'hupen':
+            return vw_befehl_absetzen(array('aktion' => $aktion, 'fahrzeug' => $nr));
+
+        case 'einstellung_ein':
+        case 'einstellung_aus':
+            $name = isset($_POST['test_schalter']) && is_string($_POST['test_schalter'])
+                  ? (string) $_POST['test_schalter'] : '';
+            if (!isset(vw_schalter()[$name])) {
+                return array(0, vw_t('TEST.M_SCHALTER_UNGUELTIG'));
+            }
+            return vw_befehl_absetzen(array('aktion' => 'einstellung', 'fahrzeug' => $nr,
+                'name' => $name, 'wert' => $aktion === 'einstellung_ein' ? 1 : 0));
 
         default:
             return array(0, vw_t('TEST.M_UNBEKANNT'));

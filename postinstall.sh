@@ -132,6 +132,24 @@ if ! "$VENV/bin/python3" -m pip install --no-cache-dir \
     echo "<INFO> 'Rohdaten als JSON ansehen' aufrufen und vergleichen."
 fi
 
+# ---------- paho-mqtt: freiwillig, und ein Fehlschlag ist keiner ----------
+#
+# Gebraucht wird es NUR fuer die Ladeempfehlung und die Vorklimatisierung -
+# beide sind ab Werk aus. Ohne paho laeuft alles uebrige unveraendert; der
+# Selbsttest sagt dann, was fehlt. Deshalb bricht ein Fehlschlag hier die
+# Installation NICHT ab: ein Plugin, das wegen einer freiwilligen Zutat gar
+# nicht erst startet, ist schlechter als eines mit einer Funktion weniger.
+echo "<INFO> Installiere paho-mqtt (nur fuer Ladeempfehlung und Vorklimatisierung) ..."
+if "$VENV/bin/python3" -m pip install --no-cache-dir "paho-mqtt" >/dev/null 2>&1 \
+   && "$VENV/bin/python3" -c 'import paho.mqtt.client' 2>/dev/null; then
+    echo "<OK> paho-mqtt ist vorhanden."
+else
+    echo "<INFO> paho-mqtt liess sich nicht installieren. Das ist KEIN Fehler:"
+    echo "<INFO> Abruf, Endpunkt, MQTT-Ausgabe und alle Schaltbefehle arbeiten"
+    echo "<INFO> unveraendert. Es entfallen nur Ladeempfehlung und"
+    echo "<INFO> Vorklimatisierung; der Reiter Test sagt es ebenfalls."
+fi
+
 # Rueckgabewert allein genuegt nicht - es wird nachgesehen, ob sich beide
 # Pakete auch laden lassen.
 if ! "$VENV/bin/python3" -c 'from carconnectivity.carconnectivity import CarConnectivity' 2>/dev/null; then

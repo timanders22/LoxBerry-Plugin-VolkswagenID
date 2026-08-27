@@ -1,0 +1,148 @@
+#!/usr/bin/env php
+<?php
+/**
+ * Volkswagen ID - Healthcheck des LoxBerry
+ *
+ * Seit LoxBerry 2.2 ruft sbin/healthcheck.pl eine ausfuehrbare Datei dieses
+ * Namens im bin/-Ordner des Plugins auf, einmal mit "title" und einmal mit
+ * "check". plugininstall.pl setzt bin/ rekursiv auf 755; die Datei ist damit
+ * von selbst ausfuehrbar.
+ *
+ * Antwort ist JSON mit desc, status, result, optional url und logfile.
+ * Statuswerte nach der LoxBerry-Skala:
+ *     leer/0  unbekannt
+ *     3       Fehler
+ *     4       Warnung
+ *     5       in Ordnung
+ *     6       Hinweis
+ *
+ * Nebeneffekt ohne Zusatzarbeit: healthcheck.pl veroeffentlicht das Ergebnis
+ * zusaetzlich retained nach MQTT unter <rechnername>/healthcheck/<titel>.
+ *
+ * WARUM DAS ZAEHLT
+ * Stirbt der Abrufdienst, steht der Klartext dazu ausschliesslich auf der
+ * Plugin-Seite. Wer sie nicht oeffnet, sieht ein unauffaelliges Symbol - und
+ * in Loxone behaelt der virtuelle Eingang seinen letzten Wert, es sieht also
+ * aus wie ein Auto, an dem sich nichts tut.
+ *
+ * Beurteilt wird dasselbe wie in der Zeile "Arbeitet der Dienst noch?" des
+ * Reiters Test: das Lebenszeichen, nicht die Prozessnummer. Ein Prozess kann
+ * dastehen und nichts mehr tun.
+ *
+ * Kompatibel mit PHP 7.4 und PHP 8.x.
+ */
+
+error_reporting(E_ALL & ~E_DEPRECATED & ~E_NOTICE);
+ini_set('display_errors', '0');
+
+$vw_was = isset($argv[1]) ? (string) $argv[1] : 'check';
+
+/* Den LoxBerry-Wurzelordner ohne festen Systempfad bestimmen. */
+function vw_hc_wurzel()
+{
+    $d = __DIR__;
+    for ($i = 0; $i < 8; $i++) {
+        if (is_dir($d . '/config/plugins') && is_dir($d . '/webfrontend')) {
+            return $d;
+        }
+        $eltern = dirname($d);
+        if ($eltern === $d) {
+            break;
+        }
+        $d = $eltern;
+    }
+    return '';
+}
+
+function vw_hc_antwort($desc, $status, $result, $extra = array())
+{
+    $a = array('desc' => $desc, 'status' => $status, 'result' => $result);
+    foreach ($extra as $k => $v) {
+        $a[$k] = $v;
+    }
+    $j = json_encode($a, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+    // json_encode gibt bei ungueltigem UTF-8 false zurueck - dann lieber eine
+    // knappe Antwort als gar keine.
+    echo $j !== false ? $j : '{"desc":"Volkswagen ID","status":0,"result":"unlesbar"}';
+    exit(0);
+}
+
+if ($vw_was === 'title') {
+    vw_hc_antwort('Volkswagen ID', 5, 'Volkswagen ID');
+}
+
+$vw_home = vw_hc_wurzel();
+$vw_ordner = basename(dirname(__DIR__)) === 'plugins' ? basename(__DIR__) : 'volkswagenid';
+$vw_pdata = $vw_home . '/data/plugins/' . $vw_ordner;
+$vw_url = '/admin/plugins/' . $vw_ordner . '/index.php';
+$vw_log = $vw_home . '/log/plugins/' . $vw_ordner . '/vw.log';
+
+/* Der Sollmerker sagt, ob der Dienst ueberhaupt laufen SOLL. Ein bewusst
+ * angehaltener Dienst ist kein Fehler und wird nicht als einer gemeldet. */
+if (!is_file($vw_pdata . '/soll_laufen')) {
+    vw_hc_antwort('Volkswagen ID', 6,
+        'Der Abrufdienst ist angehalten. Das ist kein Fehler, sondern eine Einstellung.',
+        array('url' => $vw_url));
+}
+
+$vw_z = array();
+if (is_file($vw_pdata . '/zustand.json')) {
+    $vw_d = json_decode((string) @file_get_contents($vw_pdata . '/zustand.json'), true);
+    if (is_array($vw_d)) {
+        $vw_z = $vw_d;
+    }
+}
+if (!$vw_z || !isset($vw_z['ts'])) {
+    vw_hc_antwort('Volkswagen ID', 0,
+        'Es liegt noch kein Lebenszeichen vor. Der erste Durchgang nach dem Start erzeugt eines.',
+        array('url' => $vw_url, 'logfile' => $vw_log));
+}
+
+$vw_alter = time() - (int) $vw_z['ts'];
+$vw_takt = isset($vw_z['intervall']) && is_numeric($vw_z['intervall'])
+         ? (int) $vw_z['intervall'] : 300;
+/* Dieselbe Grenze wie im Reiter Test: dreimal der Takt, mindestens zehn
+ * Minuten. Drei Stellen, die dasselbe anders sagen, sind zwei zu viel. */
+$vw_grenze = max(600, 3 * $vw_takt);
+
+if ($vw_alter > $vw_grenze) {
+    vw_hc_antwort('Volkswagen ID', 3, sprintf(
+        'Der Abrufdienst soll laufen, hat sich aber seit %d Minuten nicht mehr gemeldet '
+        . '(erwartet hoechstens %d). In Loxone stehen die Werte still, ohne dass es dort '
+        . 'auffaellt.', (int) round($vw_alter / 60), (int) round($vw_grenze / 60)),
+        array('url' => $vw_url, 'logfile' => $vw_log));
+}
+
+/* Der Dienst lebt. Jetzt erst zaehlt, ob die Abrufe auch ankommen. */
+$vw_folge = isset($vw_z['fehler_folge']) && is_numeric($vw_z['fehler_folge'])
+          ? (int) $vw_z['fehler_folge'] : 0;
+$vw_grund = isset($vw_z['grund']) ? (string) $vw_z['grund'] : '';
+$vw_fehler = isset($vw_z['fehler']) ? trim((string) $vw_z['fehler']) : '';
+
+if ($vw_folge >= 3) {
+    vw_hc_antwort('Volkswagen ID', 3, sprintf(
+        '%d Abrufe in Folge fehlgeschlagen (%s). %s',
+        $vw_folge, $vw_grund !== '' ? $vw_grund : 'ohne Grundangabe',
+        $vw_fehler !== '' ? $vw_fehler : ''),
+        array('url' => $vw_url, 'logfile' => $vw_log));
+}
+if ($vw_folge > 0) {
+    vw_hc_antwort('Volkswagen ID', 4, sprintf(
+        '%d Abruf(e) in Folge fehlgeschlagen (%s). Ein einzelner Aussetzer ist bei einer '
+        . 'Herstellerschnittstelle normal; ab drei wird daraus ein Fehler.',
+        $vw_folge, $vw_grund !== '' ? $vw_grund : 'ohne Grundangabe'),
+        array('url' => $vw_url, 'logfile' => $vw_log));
+}
+
+$vw_anzahl = isset($vw_z['anzahl_fahrzeuge']) ? (int) $vw_z['anzahl_fahrzeuge'] : 0;
+if ($vw_anzahl < 1) {
+    vw_hc_antwort('Volkswagen ID', 4,
+        'Der Dienst laeuft und ruft ab, das Konto fuehrt aber kein Fahrzeug.',
+        array('url' => $vw_url, 'logfile' => $vw_log));
+}
+
+vw_hc_antwort('Volkswagen ID', 5, sprintf(
+    '%d Fahrzeug(e), letzter Abruf vor %d s, Zaehlerstand %d.',
+    $vw_anzahl, $vw_alter,
+    isset($vw_z['zaehler']) ? (int) $vw_z['zaehler'] : -1),
+    array('url' => $vw_url, 'logfile' => $vw_log));

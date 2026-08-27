@@ -5,19 +5,109 @@ Ladezustand, Reichweite, Kilometerstand, Verriegelung, Türen, Fenster, Licht,
 Handbremse, Fahrzeugzustand, Klimatisierung, Scheibenheizung, Ladewerte,
 Standort sowie Inspektions- und Ölservice-Fristen. Auf Wunsch lassen sich
 Klimatisierung, Ladevorgang, Ladegrenze, Ladestrom und Scheibenheizung
-schalten.
+schalten — und hinter einem zweiten Haken auch verriegeln, entriegeln,
+hupen und blinken.
 
 Gebaut für die **ID-Reihe** (ID.3, ID.4, ID.5, ID.7, ID.Buzz). Andere
 vernetzte Volkswagen funktionieren ebenfalls — dann bleiben die rein
 elektrischen Werte leer und die des Verbrenners sind belegt. Bei einem
 Plug-in-Hybrid führt das Plugin beide.
 
-> **Fassung 0.9.1 — ungeprüft.** Das Plugin wurde ohne Volkswagen-Konto und
+> **Fassung 0.9.x — ungeprüft.** Das Plugin wurde ohne Volkswagen-Konto und
 > ohne Fahrzeug gebaut. Ob die Anmeldung gelingt, ob ein bestimmtes Fahrzeug
 > alle abgefragten Werte liefert und ob die schreibenden Befehle die erwartete
 > Wirkung haben, ist **nicht** geprüft. Alles übrige ist es — und zwar nicht
 > gegen Attrappen, sondern gegen **echte Objekte der Bibliothek**. Deshalb
 > 0.9.x und nicht 1.0.0, und deshalb sind schreibende Befehle ab Werk gesperrt.
+
+## Was 0.9.10 ändert
+
+Die größte Fassung seit dem ersten Release: zwölf Befunde behoben und rund
+sechzehn Erweiterungen. Alle Befunde sind an einem Prüfstand mit `php -S` und
+einer LoxBerry-Attrappe **gemessen**, nicht aus dem Quelltext erschlossen.
+
+### Behoben
+
+**Formulare tragen jetzt ein Merkmal gegen fremde Absender.** `htmlauth`
+schützt gegen den unangemeldeten Aufruf, nicht dagegen, dass der Browser eines
+angemeldeten Bedieners ein Formular abschickt, das auf einer fremden Seite
+steht. Gemessen: ein einziger fremder POST erzeugte ein neues Aktionstoken
+(danach beantwortet der Endpunkt jeden Virtuellen Ausgang mit 403, und ein
+Virtueller Ausgang wertet die Antwort nicht aus — der Ausfall bleibt still),
+ein zweiter legte einen Klimabefehl in die Warteschlange, ein dritter löschte
+die Volkswagen-Zugangsdaten samt Zweitschrift.
+
+**Eine beschädigte Konfiguration reißt die Zweitschrift nicht mehr mit.** Die
+Selbstheilung prüfte bisher nur auf leer und `{}`. Eine beim Schreiben
+abgeschnittene Datei — Stromausfall — ist keins von beidem; es galt dann die
+Werkseinstellung mit leerem Token, und das erste Öffnen der Oberfläche schrieb
+ein neu erzeugtes Token über die intakte Zweitschrift. Gemessen gingen dabei
+Takt, Thema, Steuerungshaken und alle Loxone-Adressen verloren. Die
+Zweitschrift wird jetzt **gelesen**, nicht kopiert, und die beschädigte Datei
+bleibt als `vw.json.kaputt` liegen.
+
+**Nach dem Zurückspielen zeigt die Oberfläche den neuen Stand.** Der Handler
+stand hinter dem Laden der Anzeigewerte: die Datei trug danach die neuen
+Werte, die Seite zeigte neunzehnmal das alte Aktionstoken und jedes Feld auf
+altem Stand. Wer daraufhin auf *Speichern* drückte, schrieb den alten Stand
+zurück.
+
+**Die Sicherungsdatei wird Wert für Wert geprüft**, nicht nur Schlüssel für
+Schlüssel. Eine Datei mit elf bekannten Schlüsseln und elf unsinnigen Werten
+wurde bisher mit „11 Werte übernommen" quittiert.
+
+**Der unangemeldete Endpunkt schreibt nichts mehr.** Ein Aufruf ohne Token,
+korrekt mit 403 beantwortet, hat bisher die Konfigurationsdatei aus der
+Zweitschrift zurückgeschrieben.
+
+**Ein Tippfehler in der Fahrgestellnummer schaltet nicht mehr das falsche
+Auto.** `int("WVW…")` warf, und der Auffangzweig nahm Fahrzeug 1 — bei zwei
+Fahrzeugen startete die Klimatisierung damit am falschen und meldete `OK=1`.
+
+**Ein einziger fehlgeschlagener Abruf sperrt nicht mehr alle Schaltbefehle.**
+Die Fahrzeugliste wurde bei jedem Durchgang geleert; nach einer Netzstörung
+meldete jeder Befehl minutenlang „Es ist noch kein Fahrzeug bekannt".
+
+**`"0"` als Zeichenkette öffnet das Schreibtor nicht mehr.** `bool("0")` ist in
+Python wahr, `empty("0")` in PHP ebenfalls — ein solcher Wert in `vw.json` ließ
+den Dienst schalten, während Oberfläche und Endpunkt „gesperrt" anzeigten.
+
+**Der Schreibweg hat jetzt eine Zeitgrenze.** Ein Schreibbefehl ist keine
+Zuweisung, sondern eine blockierende HTTP-Anfrage von bis zu neun Minuten.
+
+**Keine Neustartschleife mehr** bei fehlenden Zugangsdaten oder vollem
+Datenträger: der Sollmerker wird mitgenommen, und `dienst.sh` prüft die
+Zugangsdatei auf Inhalt statt nur auf Vorhandensein.
+
+**Der Selbsttest meldet MQTT nicht mehr als Fehler**, wenn MQTT ausgeschaltet
+ist. **Die Ladegrenze** liest ihre Grenzen aus der Bibliothek, statt 10 bis 100
+zu behaupten und den Anwender in ein rohes `ValueError` laufen zu lassen.
+
+### Neu
+
+* **Vorlagen für alles**: fünf Eingangsvorlagen (Status, Laden, Wartung,
+  Position, Verbrauch), eine **Ausgangsvorlage** mit allen schaltenden Befehlen
+  und eine MQTT-Vorlage — je Fahrzeug. Bisher gab es genau eine.
+* **Lebenszeichen**: ein umlaufender Zähler 0…999 in jeder Statuszeile und über
+  MQTT, dazu `ts` und `FEHLFOLGE`. Anders als `ALTER` übersteht ein Zähler den
+  Zeitsprung, den ein Raspberry ohne Echtzeituhr beim ersten Zeitabgleich macht.
+* **Rund fünfzig neue Werte**, alle aus Daten, die der Dienst ohnehin las:
+  Batterietemperatur, WLTP-Reichweite, AdBlue, Ladesäule mit Name und Betreiber,
+  Einzeltüren und -fenster mit Namen, Standzeit, Höhe — dazu sechzehn Textthemen
+  über MQTT.
+* **Entfernung und *zuhause*** aus einem hinterlegten Heimatort.
+* **Ladeprotokoll und Verbrauch** in einem eigenen Reiter *Verlauf*, mit
+  Tagwahl für die letzten vierzehn Tage.
+* **Drosselung**: Mindestabstand für Sofortabrufe, Befehle je Stunde und eine
+  Entprellung. Beim Überschussladen liefert Loxone denselben Sollwert im
+  Sekundentakt — ohne Entprellung wären das dreitausend Schreibbefehle je Stunde.
+* **Ver- und Entriegeln, Hupe und Lichthupe** hinter einem zweiten Haken.
+* **Ladeempfehlung** aus einem fremden MQTT-Thema und **Vorklimatisierung** zur
+  Abfahrt.
+* **`retain`** für den MQTT-Weg, ein **Healthcheck** für das
+  Benachrichtigungszentrum des LoxBerry und **neun neue Prüfzeilen** im Reiter
+  Test — darunter ein echter HTTP-Aufruf des eigenen Endpunkts und ein Abgleich
+  der Themenliste gegen den Sendecode.
 
 ## Was 0.9.8 ändert
 

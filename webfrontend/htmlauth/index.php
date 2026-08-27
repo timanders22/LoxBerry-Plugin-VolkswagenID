@@ -47,82 +47,216 @@ if ($vw_p['home'] !== '' && is_file($vw_p['home'] . '/libs/phplib/loxberry_syste
     require_once $vw_p['home'] . '/libs/phplib/loxberry_web.php';
 }
 
-/* Aktiver Reiter. Wer einen Reiter hinzufuegt, muss diese Positivliste
- * mitziehen - sonst springt die Seite nach jedem Absenden zurueck auf
- * Einstellungen, obwohl der Reiter sichtbar und anklickbar ist. */
-/* EINE Quelle fuer Reihenfolge, Positivliste und Beschriftung.
+/* ==================================================================
+ * DIE REIHENFOLGE IST BAUVORSCHRIFT, NICHT GESCHMACKSSACHE
+ * ==================================================================
  *
- * Bis 0.9.0 standen die Reiternamen an drei Stellen: in diesem Muster, in
- * der Reiterleiste und in den fuenf Flaechen-ids. Wer einen Reiter ergaenzt
- * und eine davon vergisst, bekommt keinen Fehler, sondern eine Seite, die
- * nach jedem Absenden auf Einstellungen zurueckspringt. */
-$vw_reiter_ids = array('settings', 'mqtt', 'loxone', 'test', 'log');
-$vw_muster = '/^tab-(' . implode('|', $vw_reiter_ids) . ')$/';
-$vw_tab = 'tab-settings';
-if (isset($_POST['activetab']) && preg_match($vw_muster, (string) $_POST['activetab'])) {
-    $vw_tab = (string) $_POST['activetab'];
-} elseif (isset($_GET['form']) && preg_match($vw_muster, 'tab-' . (string) $_GET['form'])) {
-    $vw_tab = 'tab-' . (string) $_GET['form'];
-}
+ *   1. Bibliothek laden                     (steht oben)
+ *   2. Konfiguration lesen, Merkwort erzeugen
+ *   3. WACHPOSTEN
+ *   4. Reiterwahl
+ *   5. ALLE Handler - darunter jeder Download, der mit exit endet
+ *   6. ERST JETZT LBWeb::lbheader()
+ *   7. HTML
+ *
+ * Zu 5 und 6: stand der Kopf davor, war er beim Aufruf von header() schon
+ * geschrieben - "Cannot modify header information", und der Knopf
+ * "Einstellungen sichern" lieferte eine Seite mit angehaengtem JSON statt
+ * einer Datei. Am PHP-CLI ist das unsichtbar: header() ist dort wirkungslos
+ * und headers_sent() immer falsch.
+ *
+ * Zu 3 und 4: der Wachposten steht VOR der Reiterwahl. Sonst uebernimmt sie
+ * das activetab eines abgewiesenen POST, und ein fremdes Formular kann
+ * wenigstens noch den Reiter umschalten.
+ * ================================================================== */
 
 $vw_meldungen = array();   // Erfolgsmeldungen
 $vw_fehler = array();      // Beanstandungen - gesammelt, nicht ueberschrieben
 $vw_testausgabe = '';
 $vw_post = (isset($_SERVER['REQUEST_METHOD']) ? $_SERVER['REQUEST_METHOD'] : '') === 'POST';
 
+/* ---------------- 2. Konfiguration und Merkwort ---------------- */
+$vw_cfg = vw_config();
+$vw_token = vw_token();
+$vw_lage = vw_config_lesen(true);
+
 /* ==================================================================
- * DIE HANDLER STEHEN VOR lbheader() - DAS IST BAUVORSCHRIFT
+ * 3. WACHPOSTEN
  * ==================================================================
  *
- * Stand der Kopf davor, war er beim Aufruf von header() schon
- * geschrieben - "Cannot modify header information", und der Knopf
- * "Einstellungen sichern" lieferte eine Seite mit angehaengtem JSON
- * statt einer Datei.
+ * htmlauth schuetzt gegen den unangemeldeten Aufruf - nicht dagegen, dass der
+ * Browser eines angemeldeten Bedieners ein Formular abschickt, das auf einer
+ * fremden Seite steht. Bis 0.9.9 gab es das Merkmal nicht, obwohl der
+ * Kommentar an dieser Stelle es beschrieb. Am Pruefstand gemessen
+ * (27.08.2026): ein einziger fremder POST erzeugte ein neues Aktionstoken
+ * (danach beantwortet der Endpunkt jeden Virtuellen Ausgang mit 403, und ein
+ * Virtueller Ausgang wertet die Antwort nicht aus - der Ausfall bleibt still),
+ * ein zweiter legte einen Klimabefehl in die Warteschlange, ein dritter
+ * loeschte die Volkswagen-Zugangsdaten samt Zweitschrift.
  *
- * Am PHP-CLI ist das unsichtbar: header() ist dort wirkungslos und
- * headers_sent() immer falsch. Und wer OHNE gueltiges Formularmerkmal
- * misst, wird vom Wachposten abgewiesen, bevor der Handler anlaeuft.
- * Beides hat den Fehler lange verdeckt.
+ * Geprueft wird an EINER Stelle vor allen Handlern, und faellt die Pruefung
+ * durch, wird $_POST bis auf den aktiven Reiter GELEERT. Das ist mit Absicht
+ * gruendlicher als eine Abfrage vor jedem Handler: der naechste Handler, den
+ * jemand ergaenzt, ist damit von selbst mitgeschuetzt. Ein Schutz, den man
+ * beim Erweitern vergessen kann, ist keiner.
  *
- * Reihenfolge: Bibliothek, Konfiguration, Wachposten, Reiterwahl,
- * ALLE Handler samt Downloads, dann erst lbheader(), dann HTML.
+ * Und es wird GEMELDET. Ein Formular, das wortlos nichts tut, schickt den
+ * Anwender auf die Suche nach einem Fehler, den es nicht gibt.
  * ================================================================== */
-/* ---------------- Vorlage herunterladen ---------------- */
+if ($vw_post && !vw_formtoken_ok($vw_cfg)) {
+    $vw_behalten = isset($_POST['activetab']) && is_string($_POST['activetab'])
+                 ? $_POST['activetab'] : null;
+    $_POST = array();
+    if ($vw_behalten !== null) {
+        $_POST['activetab'] = $vw_behalten;
+    }
+    $vw_post = false;
+    $vw_fehler[] = vw_t('ALLG.WACHPOSTEN');
+}
+
+/* ---------------- 4. Reiterwahl ----------------
+ * EINE Quelle fuer Reihenfolge, Positivliste und Beschriftung.
+ *
+ * Bis 0.9.0 standen die Reiternamen an drei Stellen: in diesem Muster, in
+ * der Reiterleiste und in den Flaechen-ids. Wer einen Reiter ergaenzt
+ * und eine davon vergisst, bekommt keinen Fehler, sondern eine Seite, die
+ * nach jedem Absenden auf Einstellungen zurueckspringt. */
+$vw_reiter_ids = array('settings', 'mqtt', 'loxone', 'verlauf', 'test', 'log');
+$vw_muster = '/^tab-(' . implode('|', $vw_reiter_ids) . ')$/';
+$vw_tab = 'tab-settings';
+if (isset($_POST['activetab']) && is_string($_POST['activetab'])
+    && preg_match($vw_muster, (string) $_POST['activetab'])) {
+    $vw_tab = (string) $_POST['activetab'];
+} elseif (isset($_GET['form']) && is_string($_GET['form'])
+          && preg_match($vw_muster, 'tab-' . (string) $_GET['form'])) {
+    $vw_tab = 'tab-' . (string) $_GET['form'];
+}
+
+/* ==================================================================
+ * 5. HANDLER - alle vor lbheader()
+ * ================================================================== */
+
+/* ---------------- Vorlagen herunterladen ----------------
+ * Fuenf Eingangsarten, dazu die Ausgangsvorlage und die MQTT-Vorlage. Bis
+ * 0.9.9 gab es nur den Status-Eingang fuer Fahrzeug 1. */
 if ($vw_post && isset($_POST['vorlage'])) {
-    $vw_nr = preg_match('/^[0-9]{1,2}$/', (string) $_POST['vorlage']) ? (int) $_POST['vorlage'] : 1;
-    list($vw_name, $vw_inhalt) = vw_vorlage($vw_nr);
-    header('Content-Type: application/xml; charset=utf-8');
-    header('Content-Disposition: attachment; filename="' . $vw_name . '"');
-    echo $vw_inhalt;
-    exit;
+    $vw_nr = isset($_POST['vorlage_nr']) && preg_match('/^[0-9]{1,2}$/', (string) $_POST['vorlage_nr'])
+           ? (int) $_POST['vorlage_nr'] : 1;
+    $vw_art = (string) $_POST['vorlage'];
+    if ($vw_art === 'befehle') {
+        list($vw_name, $vw_inhalt) = vw_vorlage_vo($vw_nr);
+    } elseif ($vw_art === 'mqtt') {
+        list($vw_name, $vw_inhalt) = vw_vorlage_mqtt($vw_nr);
+    } elseif (in_array($vw_art, vw_vorlagenarten(), true)) {
+        list($vw_name, $vw_inhalt) = vw_vorlage($vw_nr, $vw_art);
+    } else {
+        $vw_name = '';
+        $vw_inhalt = '';
+        $vw_fehler[] = vw_t('LOX.VORLAGE_UNBEKANNT');
+    }
+    if ($vw_name !== '') {
+        header('Content-Type: application/xml; charset=utf-8');
+        header('Content-Disposition: attachment; filename="' . $vw_name . '"');
+        echo $vw_inhalt;
+        exit;
+    }
+}
+
+/* ---------------- Einstellungen sichern ----------------
+ *
+ * Ausgegeben wird die VOLLE Konfiguration - samt Aktionstoken. Ohne ihn
+ * stuenden nach dem Zurueckspielen alle Felder richtig, und das Plugin
+ * kaeme trotzdem nicht an die Anlage; die Datei waere wertlos. Damit
+ * traegt sie ein Geheimnis, und der Hinweis am Knopf sagt das.
+ *
+ * Der Handler steht hier oben, nicht unten: bis 0.9.9 stand er NACH dem
+ * Laden der Anzeigewerte, und das Zurueckspielen zeigte danach jeden Wert
+ * auf altem Stand. */
+if ($vw_post && isset($_POST['vw_sichern'])) {
+    $vw_js = vw_sicherung_schreiben();
+    if ($vw_js !== false) {
+        header('Content-Type: application/json; charset=utf-8');
+        header('Content-Disposition: attachment; filename="volkswagenid_einstellungen_'
+               . date('Ymd_His') . '.json"');
+        echo $vw_js;
+        exit;
+    }
+    $vw_fehler[] = vw_t('EINST.SICH_SCHREIBFEHLER');
+}
+
+/* ---------------- Einstellungen zurueckspielen ----------------
+ *
+ * is_uploaded_file() ZUERST: ohne diese Pruefung liesse sich jede Datei des
+ * Servers unterschieben. Dann die Groessengrenze - eine Sicherung dieses
+ * Plugins ist wenige Kilobyte gross; alles darueber wird gar nicht gelesen.
+ *
+ * Nach dem Uebernehmen wird der Zwischenspeicher der Konfiguration geleert
+ * und alles neu gelesen. Bis 0.9.9 fehlte das: die Datei trug danach die
+ * neuen Werte, die Seite zeigte neunzehnmal das alte Aktionstoken und jedes
+ * Feld auf altem Stand. Wer daraufhin auf Speichern drueckte - naheliegend,
+ * weil es aussah, als sei nichts angekommen -, schrieb den alten Stand
+ * zurueck. Gemessen am 27.08.2026. */
+if ($vw_post && isset($_POST['vw_zurueck'])) {
+    if (!isset($_FILES['vw_sicherung']) || !is_array($_FILES['vw_sicherung'])
+        || !isset($_FILES['vw_sicherung']['tmp_name'])
+        || !@is_uploaded_file($_FILES['vw_sicherung']['tmp_name'])) {
+        $vw_fehler[] = vw_t('EINST.SICH_KEINE_DATEI');
+    } elseif ((int) $_FILES['vw_sicherung']['size'] > 65536) {
+        $vw_fehler[] = vw_t('EINST.SICH_ZU_GROSS');
+    } else {
+        list($vw_neu, $vw_mangel, $vw_n) = vw_sicherung_lesen(
+            (string) @file_get_contents($_FILES['vw_sicherung']['tmp_name']));
+        if ($vw_neu === null) {
+            /* ALLE Beanstandungen, nicht nur die erste - und geaendert wird
+             * nichts. Eine zur Haelfte uebernommene Konfiguration ist
+             * schlimmer als die alte, und man sieht es ihr nicht an. */
+            $vw_fehler[] = vw_t('EINST.SICH_ABGELEHNT') . ' ' . implode(' ', $vw_mangel);
+        } elseif (vw_config_speichern($vw_neu)) {
+            $vw_meldungen[] = sprintf(vw_t('EINST.SICH_UEBERNOMMEN'), $vw_n);
+            /* Den Dienst nachziehen und SAGEN, was mit ihm geschehen ist.
+             * Der Dienst liest die Konfiguration bei jedem Takt neu; ein
+             * Neustart ist deshalb nur noetig, wenn er gerade laeuft und der
+             * Takt lang ist. Gesagt wird es in jedem Fall. */
+            if (vw_dienst_pid() > 0) {
+                list($vw_dok, $vw_daus) = vw_dienst('restart');
+                $vw_meldungen[] = $vw_dok ? vw_t('EINST.SICH_DIENST_NEU')
+                                          : vw_t('EINST.SICH_DIENST_FEHL') . ' ' . vw_e($vw_daus);
+            } else {
+                $vw_meldungen[] = vw_t('EINST.SICH_DIENST_AUS');
+            }
+        } else {
+            $vw_fehler[] = vw_t('EINST.SICH_SCHREIBFEHLER');
+        }
+    }
+    $vw_tab = 'tab-settings';
 }
 
 /* ---------------- Einstellungen speichern ---------------- */
 if ($vw_post && isset($_POST['speichern'])) {
     $vw_cfg = vw_config();
 
-    foreach (array(
-        // Untergrenze 180 s: der Volkswagen-Connector wirft darunter beim
-        // Anlegen einen ValueError. Lieber hier abweisen als dort abstuerzen.
-        'intervall'    => array(180, 3600),
-        'takt_wartung' => array(1, 240),
-        'temp_min'     => array(10, 30),
-        'temp_max'     => array(10, 30),
-        'verlauf_tage' => array(1, 90),
-        'wartezeit'    => array(0, 30),
-    ) as $vw_feld => $vw_grenzen) {
-        $vw_wert = isset($_POST[$vw_feld]) ? trim((string) $_POST[$vw_feld]) : '';
+    /* Die Grenzen kommen aus vw_regeln() - derselben Quelle, gegen die auch
+     * die Sicherungsdatei und die Konfiguration beim Lesen geprueft werden.
+     * Eine zweite Wahrheit ueber zulaessige Werte gibt es nicht. */
+    $vw_regeln = vw_regeln();
+    foreach (array('intervall', 'takt_wartung', 'temp_min', 'temp_max', 'verlauf_tage',
+                   'wartezeit', 'wartezeit_endpunkt', 'heim_radius', 'abstand_abruf',
+                   'befehle_stunde', 'entprellung', 'abfahrt_vorlauf', 'abfahrt_temp')
+             as $vw_feld) {
+        $vw_wert = isset($_POST[$vw_feld]) && is_string($_POST[$vw_feld])
+                 ? trim((string) $_POST[$vw_feld]) : '';
         if (!preg_match('/^[0-9]+$/', $vw_wert)) {
             $vw_fehler[] = sprintf(vw_t('EINST.FEHLER_ZAHL'), vw_t('EINST.L_' . strtoupper($vw_feld)));
             continue;
         }
-        $vw_zahl = (int) $vw_wert;
-        if ($vw_zahl < $vw_grenzen[0] || $vw_zahl > $vw_grenzen[1]) {
+        list($vw_ok2, $vw_rein) = vw_wert_pruefen($vw_feld, $vw_wert);
+        if (!$vw_ok2) {
+            $vw_g = $vw_regeln[$vw_feld];
             $vw_fehler[] = sprintf(vw_t('EINST.FEHLER_BEREICH'),
-                vw_t('EINST.L_' . strtoupper($vw_feld)), $vw_grenzen[0], $vw_grenzen[1]);
+                vw_t('EINST.L_' . strtoupper($vw_feld)), $vw_g[1], $vw_g[2]);
             continue;
         }
-        $vw_cfg[$vw_feld] = $vw_zahl;
+        $vw_cfg[$vw_feld] = $vw_rein;
     }
     if (isset($vw_cfg['temp_min'], $vw_cfg['temp_max'])
         && $vw_cfg['temp_min'] > $vw_cfg['temp_max']) {
@@ -131,6 +265,53 @@ if ($vw_post && isset($_POST['speichern'])) {
 
     $vw_cfg['steuerung_ein'] = isset($_POST['steuerung_ein']) ? 1 : 0;
     $vw_cfg['zugriff_erzwingen'] = isset($_POST['zugriff_erzwingen']) ? 1 : 0;
+    $vw_cfg['eingreifend_ein'] = isset($_POST['eingreifend_ein']) ? 1 : 0;
+    $vw_cfg['abfahrt_ein'] = isset($_POST['abfahrt_ein']) ? 1 : 0;
+    $vw_cfg['empf_kleiner'] = isset($_POST['empf_kleiner']) ? 1 : 0;
+
+    /* Heimatort und Ladeempfehlung: Kommazahlen und Themen. Ein LEERES Feld
+     * ist hier zulaessig und heisst "nicht eingerichtet" - es wird nicht zu 0
+     * gemacht. Eine 0/0 waere ein Punkt im Atlantik, und jede Entfernung
+     * daraus waere eine Zahl, die richtig aussieht. */
+    foreach (array('heim_breite', 'heim_laenge', 'empf_grenze') as $vw_feld) {
+        $vw_wert = isset($_POST[$vw_feld]) && is_string($_POST[$vw_feld])
+                 ? trim((string) $_POST[$vw_feld]) : '';
+        if ($vw_wert === '') {
+            $vw_cfg[$vw_feld] = '';
+            continue;
+        }
+        list($vw_ok2, $vw_rein) = vw_wert_pruefen($vw_feld, $vw_wert);
+        if (!$vw_ok2) {
+            $vw_g = $vw_regeln[$vw_feld];
+            $vw_fehler[] = sprintf(vw_t('EINST.FEHLER_BEREICH'),
+                vw_t('EINST.L_' . strtoupper($vw_feld)), $vw_g[1], $vw_g[2]);
+            continue;
+        }
+        $vw_cfg[$vw_feld] = $vw_rein;
+    }
+    /* Ein Heimatort ist ein PAAR. Nur eine Haelfte ergibt keine Entfernung,
+     * und ein Feld, das nichts bewirkt, ist schlimmer als ein fehlendes. */
+    if (($vw_cfg['heim_breite'] === '') !== ($vw_cfg['heim_laenge'] === '')) {
+        $vw_fehler[] = vw_t('EINST.FEHLER_HEIM_PAAR');
+    }
+    foreach (array('empf_thema', 'abfahrt_thema') as $vw_feld) {
+        $vw_wert = isset($_POST[$vw_feld]) && is_string($_POST[$vw_feld])
+                 ? trim((string) $_POST[$vw_feld]) : '';
+        list($vw_ok2, $vw_rein) = vw_wert_pruefen($vw_feld, $vw_wert);
+        if (!$vw_ok2) {
+            $vw_fehler[] = sprintf(vw_t('EINST.FEHLER_THEMA'),
+                vw_t('EINST.L_' . strtoupper($vw_feld)));
+            continue;
+        }
+        $vw_cfg[$vw_feld] = $vw_rein;
+    }
+    /* Eine Grenze ohne Thema wirkt nicht, ein Thema ohne Grenze auch nicht. */
+    if (($vw_cfg['empf_thema'] === '') !== ($vw_cfg['empf_grenze'] === '')) {
+        $vw_fehler[] = vw_t('EINST.FEHLER_EMPF_PAAR');
+    }
+    if ($vw_cfg['abfahrt_ein'] && $vw_cfg['abfahrt_thema'] === '') {
+        $vw_fehler[] = vw_t('EINST.FEHLER_ABFAHRT_THEMA');
+    }
 
 
     /* Zugangsdaten: eigene Datei mit Rechten 0600. Ein leer zurueckgegebenes
@@ -192,16 +373,22 @@ if ($vw_post && isset($_POST['speichern'])) {
 if ($vw_post && isset($_POST['save_mqtt'])) {
     $vw_mcfg = vw_config();
     $vw_mcfg['mqtt_ein'] = isset($_POST['mqtt_ein']) ? 1 : 0;
+    $vw_mcfg['mqtt_retain'] = isset($_POST['mqtt_retain']) ? 1 : 0;
     $vw_mtopic = trim(preg_replace('/[\x00-\x1F\x7F"\']/', '',
-        (string) (isset($_POST['mqtt_topic']) ? $_POST['mqtt_topic'] : '')));
-    if ($vw_mtopic === '' || !preg_match('#^[A-Za-z0-9_/\-]{1,64}$#', $vw_mtopic)) {
+        (string) (isset($_POST['mqtt_topic']) && is_string($_POST['mqtt_topic'])
+                  ? $_POST['mqtt_topic'] : '')));
+    $vw_mtopic = trim($vw_mtopic, '/');
+    list($vw_mok, $vw_mrein) = vw_wert_pruefen('mqtt_topic', $vw_mtopic);
+    if (!$vw_mok) {
         $vw_fehler[] = vw_t('EINST.FEHLER_TOPIC');
     } else {
-        $vw_mcfg['mqtt_topic'] = trim($vw_mtopic, '/');
+        $vw_mcfg['mqtt_topic'] = $vw_mrein;
     }
     if (!$vw_fehler) {
         if (vw_config_speichern($vw_mcfg)) {
-        $vw_meldungen[] = vw_t('EINST.GESPEICHERT');
+            $vw_meldungen[] = vw_t('EINST.GESPEICHERT');
+        } else {
+            $vw_fehler[] = sprintf(vw_t('EINST.FEHLER_SPEICHERN'), $vw_p['config']);
         }
     }
     $vw_tab = 'tab-mqtt';
@@ -268,9 +455,12 @@ if ($vw_post && isset($_POST['selbsttest'])) {
     $vw_tab = 'tab-test';
 }
 
-/* ---------------- Laden ---------------- */
+/* ==================================================================
+ * Laden - NACH allen Handlern, damit die Anzeige den neuen Stand zeigt
+ * ================================================================== */
 $vw_cfg = vw_config();
 $vw_token = vw_token();
+$vw_lage = vw_config_lesen(true);
 $vw_zg = vw_zugang();
 $vw_fahrzeuge = vw_fahrzeuge();
 $vw_zustand = vw_zustand();
@@ -286,54 +476,6 @@ $vw_basis = 'http://' . $vw_host . '/plugins/' . $vw_p['plugin'] . '/index.php';
 $vw_logzeilen = is_file($vw_p['log']) ? vw_log_ende($vw_p['log'], 400) : array();
 
 $vw_rahmen = class_exists('LBWeb', false);
-
-/* ---------------- Einstellungen sichern ----------------
- *
- * Ausgegeben wird die VOLLE Konfiguration - samt Aktionstoken. Ohne ihn
- * stuenden nach dem Zurueckspielen alle Felder richtig, und das Plugin
- * kaeme trotzdem nicht an die Anlage; die Datei waere wertlos. Damit
- * traegt sie ein Geheimnis, und der Hinweis am Knopf sagt das. */
-if ($vw_post && isset($_POST['vw_sichern'])) {
-    $vw_js = json_encode(vw_config(),
-        JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-    if ($vw_js !== false) {
-        header('Content-Type: application/json; charset=utf-8');
-        header('Content-Disposition: attachment; filename="volkswagenid_einstellungen_'
-               . date('Ymd_His') . '.json"');
-        echo $vw_js;
-        exit;
-    }
-    $vw_fehler[] = vw_t('EINST.SICH_SCHREIBFEHLER');
-}
-
-/* ---------------- Einstellungen zurueckspielen ----------------
- *
- * is_uploaded_file() ZUERST: ohne diese Pruefung liesse sich jede Datei des
- * Servers unterschieben. Dann die Groessengrenze - eine Sicherung dieses
- * Plugins ist wenige Kilobyte gross; alles darueber wird gar nicht gelesen. */
-if ($vw_post && isset($_POST['vw_zurueck'])) {
-    if (!isset($_FILES['vw_sicherung']) || !is_array($_FILES['vw_sicherung'])
-        || !isset($_FILES['vw_sicherung']['tmp_name'])
-        || !@is_uploaded_file($_FILES['vw_sicherung']['tmp_name'])) {
-        $vw_fehler[] = vw_t('EINST.SICH_KEINE_DATEI');
-    } elseif ((int) $_FILES['vw_sicherung']['size'] > 262144) {
-        $vw_fehler[] = vw_t('EINST.SICH_ZU_GROSS');
-    } else {
-        list($vw_neu, $vw_mangel, $vw_n) = vw_sicherung_lesen(
-            (string) @file_get_contents($_FILES['vw_sicherung']['tmp_name']));
-        if ($vw_neu === null) {
-            /* ALLE Beanstandungen, nicht nur die erste - und geaendert wird
-             * nichts. */
-            $vw_fehler[] = vw_t('EINST.SICH_ABGELEHNT') . ' '
-                            . implode(' ', $vw_mangel);
-        } elseif (vw_config_speichern($vw_neu)) {
-            $vw_meldungen[] = sprintf(vw_t('EINST.SICH_UEBERNOMMEN'), $vw_n);
-        } else {
-            $vw_fehler[] = vw_t('EINST.SICH_SCHREIBFEHLER');
-        }
-    }
-}
-
 
 if ($vw_rahmen) {
     LBWeb::lbheader('Volkswagen ID', 'https://wiki.loxberry.de/', 'help.html');
@@ -433,12 +575,47 @@ if ($vw_rahmen) {
   </div>
   <div class="sm-kachel">MQTT
     <b class="<?= $vw_mqtt['autostart'] ? 'sm-an' : 'sm-aus' ?>"><?= $vw_mqtt['autostart'] ? vw_e(vw_t('ALLG.EIN')) : vw_e(vw_t('ALLG.AUS')) ?></b>
-    <span class="sm-hilfe"><?= vw_e(vw_t('ALLG.GATEWAY')) ?></span>
+    <span class="sm-hilfe"><?= vw_e(vw_t('ALLG.GATEWAY')) ?><?= (int) $vw_mqtt['fassung'] > 0 ? ' V' . (int) $vw_mqtt['fassung'] : '' ?></span>
+  </div>
+  <?php
+  /* Das Lebenszeichen. Es haengt NICHT am Abbild: ein Abruf kann
+   * fehlschlagen, waehrend der Dienst tadellos arbeitet. -1 heisst
+   * "noch nie gelaufen"; 0 waere ein gueltiger Stand. */
+  $vw_zaehler = isset($vw_zustand['zaehler']) && is_numeric($vw_zustand['zaehler'])
+              ? (int) $vw_zustand['zaehler'] : -1;
+  ?>
+  <div class="sm-kachel"><?= vw_e(vw_t('ALLG.LEBENSZEICHEN')) ?>
+    <b class="<?= $vw_zaehler >= 0 ? 'sm-an' : 'sm-aus' ?>"><?= $vw_zaehler < 0 ? '&ndash;' : (int) $vw_zaehler ?></b>
+    <span class="sm-hilfe"><?= vw_e(vw_t('ALLG.LEBENSZEICHEN_H')) ?></span>
   </div>
 </div>
 
 <?php if (!empty($vw_zustand['fehler'])) { ?>
-<div class="sm-warnung"><b><?= vw_e(vw_t('ALLG.LETZTE_STOERUNG')) ?></b> <?= vw_e($vw_zustand['fehler']) ?></div>
+<div class="sm-warnung"><b><?= vw_e(vw_t('ALLG.LETZTE_STOERUNG')) ?></b>
+<?= vw_e($vw_zustand['fehler']) ?>
+<?php if (!empty($vw_zustand['grund'])) { ?><span class="sm-mono"><?= vw_e($vw_zustand['grund']) ?></span><?php } ?>
+</div>
+<?php } ?>
+
+<?php
+/* Die Lage der Konfiguration - jeder Zustand, den der Code erzeugen kann,
+ * braucht seinen Satz. Ein stiller Rueckgriff auf die Zweitschrift ist eine
+ * Auskunft, die der Anwender bekommen muss: sie heisst, dass die lebende
+ * Datei fehlte oder unbrauchbar war. */
+if ($vw_lage['lage'] !== 'ok') { ?>
+<div class="sm-warnung"><b><?= vw_e(vw_t('ALLG.KONFIGLAGE')) ?></b>
+<?= vw_t('ALLG.KONFIG_' . strtoupper($vw_lage['lage'])) ?></div>
+<?php }
+if ($vw_lage['abgewiesen']) { ?>
+<div class="sm-warnung"><b><?= vw_e(vw_t('ALLG.KONFIG_ABGEWIESEN')) ?></b>
+<?php foreach ($vw_lage['abgewiesen'] as $vw_k => $vw_v) { ?>
+<br><span class="sm-mono"><?= vw_e($vw_k) ?></span> = <span class="sm-mono"><?= vw_e(substr((string) $vw_v, 0, 40)) ?></span>
+<?php } ?>
+</div>
+<?php }
+if ($vw_lage['fremd']) { ?>
+<div class="sm-warnung"><b><?= vw_e(vw_t('ALLG.KONFIG_FREMD')) ?></b>
+<span class="sm-mono"><?= vw_e(implode(', ', $vw_lage['fremd'])) ?></span></div>
 <?php } ?>
 
 <?php foreach ($vw_fahrzeuge as $vw_nr => $vw_fz) { ?>
@@ -469,8 +646,9 @@ if ($vw_rahmen) {
      faellt das Skript aus, ist die Seite weiterhin bedienbar. -->
 <?php
 $vw_beschriftung = array(
-    'settings' => 'REITER.EINSTELLUNGEN', 'mqtt' => '', 'loxone' => 'REITER.LOXONE',
-    'test'     => 'REITER.TEST',          'log'  => 'REITER.LOG',
+    'settings' => 'REITER.EINSTELLUNGEN', 'mqtt'    => '', 'loxone' => 'REITER.LOXONE',
+    'verlauf'  => 'REITER.VERLAUF',       'test'    => 'REITER.TEST',
+    'log'      => 'REITER.LOG',
 );
 ?>
 <div class="sm-tabs">
@@ -496,18 +674,22 @@ $vw_beschriftung = array(
 <div class="sm-knopfreihe">
   <form action="index.php" method="post">
     <input data-role="none" type="hidden" name="activetab" value="tab-settings">
+    <?= vw_formfeld($vw_cfg) ?>
     <button data-role="none" class="sm-btn sm-b-lesen" type="submit" name="dienst" value="start"><?= vw_e(vw_t('EINST.K_START')) ?></button>
   </form>
   <form action="index.php" method="post">
     <input data-role="none" type="hidden" name="activetab" value="tab-settings">
+    <?= vw_formfeld($vw_cfg) ?>
     <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="dienst" value="restart"><?= vw_e(vw_t('EINST.K_NEUSTART')) ?></button>
   </form>
   <form action="index.php" method="post">
     <input data-role="none" type="hidden" name="activetab" value="tab-settings">
+    <?= vw_formfeld($vw_cfg) ?>
     <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="dienst" value="stop"><?= vw_e(vw_t('EINST.K_STOPP')) ?></button>
   </form>
   <form action="index.php" method="post">
     <input data-role="none" type="hidden" name="activetab" value="tab-settings">
+    <?= vw_formfeld($vw_cfg) ?>
     <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="sitzung_verwerfen" value="1"><?= vw_e(vw_t('EINST.K_SITZUNG')) ?></button>
   </form>
 </div>
@@ -515,6 +697,7 @@ $vw_beschriftung = array(
 <form action="index.php" method="post" autocomplete="off">
 <input data-role="none" type="hidden" name="speichern" value="1">
 <input data-role="none" type="hidden" name="activetab" value="tab-settings">
+<?= vw_formfeld($vw_cfg) ?>
 
 <h2><?= vw_e(vw_t('EINST.H_KONTO')) ?></h2>
 <div class="sm-warnung"><?= vw_t('EINST.KONTO_ERKLAERUNG') ?></div>
@@ -591,6 +774,104 @@ $vw_beschriftung = array(
   <input data-role="none" type="number" id="wartezeit" name="wartezeit" value="<?= (int) $vw_cfg['wartezeit'] ?>" min="0" max="30">
   <div class="sm-hilfe"><?= vw_t('EINST.H_WARTEZEIT') ?></div>
 </div>
+<div class="sm-feld">
+  <label for="wartezeit_endpunkt"><?= vw_e(vw_t('EINST.L_WARTEZEIT_ENDPUNKT')) ?></label>
+  <input data-role="none" type="number" id="wartezeit_endpunkt" name="wartezeit_endpunkt" value="<?= (int) $vw_cfg['wartezeit_endpunkt'] ?>" min="0" max="15">
+  <div class="sm-hilfe"><?= vw_t('EINST.H_WARTEZEIT_ENDPUNKT') ?></div>
+</div>
+
+<h2><?= vw_e(vw_t('EINST.H_EINGREIFEND')) ?></h2>
+<div class="sm-warnung"><?= vw_t('EINST.EINGREIFEND_ERKLAERUNG') ?></div>
+<div class="sm-feld">
+  <label style="display:inline-flex;align-items:center;gap:8px;">
+    <input data-role="none" type="checkbox" name="eingreifend_ein" value="1" <?= !empty($vw_cfg['eingreifend_ein']) ? 'checked' : '' ?>>
+    <?= vw_e(vw_t('EINST.L_EINGREIFEND_EIN')) ?>
+  </label>
+  <div class="sm-hilfe"><?= vw_t('EINST.H_EINGREIFEND_EIN') ?></div>
+</div>
+<?php if (!empty($vw_cfg['eingreifend_ein']) && $vw_zg['spin_laenge'] !== 4) { ?>
+<div class="sm-warnung"><?= vw_t('EINST.EINGREIFEND_OHNE_SPIN') ?></div>
+<?php } ?>
+
+<h2><?= vw_e(vw_t('EINST.H_BREMSE')) ?></h2>
+<div class="sm-warnung"><?= vw_t('EINST.BREMSE_ERKLAERUNG') ?></div>
+<div class="sm-feld">
+  <label for="abstand_abruf"><?= vw_e(vw_t('EINST.L_ABSTAND_ABRUF')) ?></label>
+  <input data-role="none" type="number" id="abstand_abruf" name="abstand_abruf" value="<?= (int) $vw_cfg['abstand_abruf'] ?>" min="0" max="3600">
+  <div class="sm-hilfe"><?= vw_t('EINST.H_ABSTAND_ABRUF') ?></div>
+</div>
+<div class="sm-feld">
+  <label for="befehle_stunde"><?= vw_e(vw_t('EINST.L_BEFEHLE_STUNDE')) ?></label>
+  <input data-role="none" type="number" id="befehle_stunde" name="befehle_stunde" value="<?= (int) $vw_cfg['befehle_stunde'] ?>" min="1" max="240">
+  <div class="sm-hilfe"><?= vw_t('EINST.H_BEFEHLE_STUNDE') ?></div>
+</div>
+<div class="sm-feld">
+  <label for="entprellung"><?= vw_e(vw_t('EINST.L_ENTPRELLUNG')) ?></label>
+  <input data-role="none" type="number" id="entprellung" name="entprellung" value="<?= (int) $vw_cfg['entprellung'] ?>" min="0" max="600">
+  <div class="sm-hilfe"><?= vw_t('EINST.H_ENTPRELLUNG') ?></div>
+</div>
+
+<h2><?= vw_e(vw_t('EINST.H_HEIMAT')) ?></h2>
+<div class="sm-hinweis"><?= vw_t('EINST.HEIMAT_ERKLAERUNG') ?></div>
+<div class="sm-feld">
+  <label for="heim_breite"><?= vw_e(vw_t('EINST.L_HEIM_BREITE')) ?></label>
+  <input data-role="none" type="text" id="heim_breite" name="heim_breite" value="<?= vw_e($vw_cfg['heim_breite']) ?>" placeholder="48.137200">
+</div>
+<div class="sm-feld">
+  <label for="heim_laenge"><?= vw_e(vw_t('EINST.L_HEIM_LAENGE')) ?></label>
+  <input data-role="none" type="text" id="heim_laenge" name="heim_laenge" value="<?= vw_e($vw_cfg['heim_laenge']) ?>" placeholder="11.575600">
+  <div class="sm-hilfe"><?= vw_t('EINST.H_HEIM_KOORDINATEN') ?></div>
+</div>
+<div class="sm-feld">
+  <label for="heim_radius"><?= vw_e(vw_t('EINST.L_HEIM_RADIUS')) ?></label>
+  <input data-role="none" type="number" id="heim_radius" name="heim_radius" value="<?= (int) $vw_cfg['heim_radius'] ?>" min="10" max="5000">
+  <div class="sm-hilfe"><?= vw_t('EINST.H_HEIM_RADIUS') ?></div>
+</div>
+
+<h2><?= vw_e(vw_t('EINST.H_EMPFEHLUNG')) ?></h2>
+<div class="sm-hinweis"><?= vw_t('EINST.EMPFEHLUNG_ERKLAERUNG') ?></div>
+<?php if (!empty($vw_zustand['horcher_grund'])) { ?>
+<div class="sm-warnung"><?= vw_e($vw_zustand['horcher_grund']) ?></div>
+<?php } ?>
+<div class="sm-feld">
+  <label for="empf_thema"><?= vw_e(vw_t('EINST.L_EMPF_THEMA')) ?></label>
+  <input data-role="none" type="text" id="empf_thema" name="empf_thema" value="<?= vw_e($vw_cfg['empf_thema']) ?>" placeholder="awattar/jetzt/preis">
+  <div class="sm-hilfe"><?= vw_t('EINST.H_EMPF_THEMA') ?></div>
+</div>
+<div class="sm-feld">
+  <label for="empf_grenze"><?= vw_e(vw_t('EINST.L_EMPF_GRENZE')) ?></label>
+  <input data-role="none" type="text" id="empf_grenze" name="empf_grenze" value="<?= vw_e($vw_cfg['empf_grenze']) ?>" placeholder="12.5">
+</div>
+<div class="sm-feld">
+  <label style="display:inline-flex;align-items:center;gap:8px;">
+    <input data-role="none" type="checkbox" name="empf_kleiner" value="1" <?= !empty($vw_cfg['empf_kleiner']) ? 'checked' : '' ?>>
+    <?= vw_e(vw_t('EINST.L_EMPF_KLEINER')) ?>
+  </label>
+  <div class="sm-hilfe"><?= vw_t('EINST.H_EMPF_KLEINER') ?></div>
+</div>
+
+<h2><?= vw_e(vw_t('EINST.H_ABFAHRT')) ?></h2>
+<div class="sm-hinweis"><?= vw_t('EINST.ABFAHRT_ERKLAERUNG') ?></div>
+<div class="sm-feld">
+  <label style="display:inline-flex;align-items:center;gap:8px;">
+    <input data-role="none" type="checkbox" name="abfahrt_ein" value="1" <?= !empty($vw_cfg['abfahrt_ein']) ? 'checked' : '' ?>>
+    <?= vw_e(vw_t('EINST.L_ABFAHRT_EIN')) ?>
+  </label>
+</div>
+<div class="sm-feld">
+  <label for="abfahrt_thema"><?= vw_e(vw_t('EINST.L_ABFAHRT_THEMA')) ?></label>
+  <input data-role="none" type="text" id="abfahrt_thema" name="abfahrt_thema" value="<?= vw_e($vw_cfg['abfahrt_thema']) ?>" placeholder="abfahrt/ABFAHRT_IN">
+  <div class="sm-hilfe"><?= vw_t('EINST.H_ABFAHRT_THEMA') ?></div>
+</div>
+<div class="sm-feld">
+  <label for="abfahrt_vorlauf"><?= vw_e(vw_t('EINST.L_ABFAHRT_VORLAUF')) ?></label>
+  <input data-role="none" type="number" id="abfahrt_vorlauf" name="abfahrt_vorlauf" value="<?= (int) $vw_cfg['abfahrt_vorlauf'] ?>" min="5" max="180">
+</div>
+<div class="sm-feld">
+  <label for="abfahrt_temp"><?= vw_e(vw_t('EINST.L_ABFAHRT_TEMP')) ?></label>
+  <input data-role="none" type="number" id="abfahrt_temp" name="abfahrt_temp" value="<?= (int) $vw_cfg['abfahrt_temp'] ?>" min="10" max="30">
+  <div class="sm-hilfe"><?= vw_t('EINST.H_ABFAHRT_TEMP') ?></div>
+</div>
 
 <?php /* MQTT stand hier bis zu dieser Fassung. Es wohnt jetzt
          vollstaendig im Reiter MQTT - eine Sache, eine Stelle. */ ?>
@@ -631,10 +912,12 @@ $vw_beschriftung = array(
        einen Download, der das Speichern verschluckt. -->
   <form action="index.php" method="post">
     <input data-role="none" type="hidden" name="activetab" value="tab-settings">
+    <?= vw_formfeld($vw_cfg) ?>
     <button data-role="none" class="sm-btn sm-b-lesen" type="submit" name="vw_sichern" value="1"><?= vw_t('EINST.K_SICHERN') ?></button>
   </form>
   <form action="index.php" method="post" enctype="multipart/form-data">
     <input data-role="none" type="hidden" name="activetab" value="tab-settings">
+    <?= vw_formfeld($vw_cfg) ?>
     <input data-role="none" type="file" name="vw_sicherung" accept=".json">
     <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="vw_zurueck" value="1"><?= vw_t('EINST.K_ZURUECK') ?></button>
   </form>
@@ -648,6 +931,7 @@ $vw_beschriftung = array(
 <form action="index.php" method="post">
 <input data-role="none" type="hidden" name="save_mqtt" value="1">
 <input data-role="none" type="hidden" name="activetab" value="tab-mqtt">
+<?= vw_formfeld($vw_cfg) ?>
 <div class="sm-feld">
   <label style="display:inline-flex;align-items:center;gap:8px;">
     <input data-role="none" type="checkbox" name="mqtt_ein" value="1" <?= !empty($vw_cfg['mqtt_ein']) ? 'checked' : '' ?>>
@@ -656,8 +940,15 @@ $vw_beschriftung = array(
 </div>
 <div class="sm-feld">
   <label for="mqtt_topic"><?= vw_e(vw_t('EINST.L_MQTT_TOPIC')) ?></label>
-  <input data-role="none" type="text" id="mqtt_topic" name="mqtt_topic" value="<?= vw_e($vw_cfg['mqtt_topic']) ?>" placeholder="vw">
+  <input data-role="none" type="text" id="mqtt_topic" name="mqtt_topic" value="<?= vw_e($vw_cfg['mqtt_topic']) ?>" placeholder="volkswagen">
   <div class="sm-hilfe"><?= vw_t('EINST.H_MQTT_TOPIC') ?></div>
+</div>
+<div class="sm-feld">
+  <label style="display:inline-flex;align-items:center;gap:8px;">
+    <input data-role="none" type="checkbox" name="mqtt_retain" value="1" <?= !empty($vw_cfg['mqtt_retain']) ? 'checked' : '' ?>>
+    <?= vw_e(vw_t('EINST.L_MQTT_RETAIN')) ?>
+  </label>
+  <div class="sm-hilfe"><?= vw_t('EINST.H_MQTT_RETAIN') ?></div>
 </div>
 <div class="sm-legende"><span><i class="sm-punkt sm-b-aktion"></i> <?= vw_t('LEGENDE.AKTION') ?></span></div>
 <div class="sm-knopfreihe">
@@ -684,22 +975,65 @@ $vw_beschriftung = array(
 </table>
 
 <h2><?= vw_e(vw_t('MQTT.H_ABO')) ?></h2>
-<div class="sm-warnung"><?= vw_abo_text() ?></div>
+<?php
+/* Der Hinweis UND seine Warnstufe UND die Anleitung daneben verzweigen
+ * gemeinsam. Bis 0.9.9 verzweigte nur der Text: vw_abo_text() lieferte unter
+ * Gateway V2 richtig "einzutragen ist hier nichts" - und stand in einem roten
+ * Warnkasten, gefolgt von der unbedingten Anweisung "folgende Zeile eintragen
+ * und speichern". Der V2-Anwender wurde damit zu einem Eingabeplatz
+ * geschickt, den es nicht gibt.
+ *
+ * Drei Ausgaenge, nicht zwei: ist die Fassung nicht feststellbar, werden
+ * BEIDE Faelle genannt statt einer behauptet. */
+$vw_gw = (int) $vw_mqtt['fassung'];
+?>
+<div class="<?= $vw_gw >= 2 ? 'sm-hinweis' : 'sm-warnung' ?>"><?= vw_abo_text() ?></div>
+<?php if ($vw_gw !== 2) { /* V1 oder unbekannt: die Anleitung wird gebraucht */ ?>
 <div class="sm-step">
 <?= vw_t('MQTT.ABO_SCHRITTE') ?>
 <p><span class="sm-mono"><?= vw_e($vw_cfg['mqtt_topic']) ?>/#</span></p>
 </div>
+<?php } else { ?>
+<div class="sm-step"><?= vw_t('MQTT.ABO_V2_SCHRITTE') ?>
+<p><span class="sm-mono"><?= vw_e($vw_cfg['mqtt_topic']) ?>/#</span></p>
+</div>
+<?php } ?>
 
 <h2><?= vw_e(vw_t('MQTT.H_THEMEN')) ?></h2>
 <p class="sm-hilfe"><?= vw_t('MQTT.THEMEN_ERKLAERUNG') ?></p>
+<?php
+$vw_themen = vw_mqtt_themen();
+$vw_zahl_t = count(array_filter($vw_themen, function ($i) { return empty($i['text']); }));
+$vw_text_t = count($vw_themen) - $vw_zahl_t;
+?>
+<p class="sm-hilfe"><?= sprintf(vw_t('MQTT.THEMEN_ZAHL'), count($vw_themen), $vw_zahl_t, $vw_text_t) ?></p>
+<div style="overflow-x:auto;">
 <table class="sm-tbl">
-<tr><th><?= vw_e(vw_t('MQTT.T_THEMA')) ?></th><th><?= vw_e(vw_t('MQTT.T_BEDEUTUNG')) ?></th></tr>
-<?php foreach (vw_mqtt_themen() as $vw_thema => $vw_schluessel) { ?>
+<tr><th><?= vw_e(vw_t('MQTT.T_THEMA')) ?></th><th><?= vw_e(vw_t('LOX.T_EINHEIT')) ?></th>
+    <th><?= vw_e(vw_t('MQTT.T_BEDEUTUNG')) ?></th></tr>
+<?php foreach ($vw_themen as $vw_thema => $vw_info) { ?>
 <tr><td><span class="sm-mono"><?= vw_e($vw_cfg['mqtt_topic'] . '/' . $vw_thema) ?></span></td>
-    <td><?= vw_t($vw_schluessel) ?></td></tr>
+    <td><?= empty($vw_info['text']) ? $vw_info['e'] : vw_e(vw_t('MQTT.T_TEXTWERT')) ?></td>
+    <td><?= vw_t($vw_info['s']) ?></td></tr>
 <?php } ?>
 </table>
+</div>
 <p class="sm-hilfe"><?= vw_t('MQTT.PLATZHALTER') ?></p>
+<p class="sm-hilfe"><?= vw_t('MQTT.TEXT_ERKLAERUNG') ?></p>
+
+<h2><?= vw_e(vw_t('MQTT.H_VORLAGE')) ?></h2>
+<p class="sm-hilfe"><?= vw_t('MQTT.VORLAGE_ERKLAERUNG') ?></p>
+<div class="sm-legende"><span><i class="sm-punkt sm-b-lesen"></i> <?= vw_t('LEGENDE.LESEN') ?></span></div>
+<div class="sm-knopfreihe">
+<?php foreach (($vw_fahrzeuge ? array_keys($vw_fahrzeuge) : array('1')) as $vw_nr2) { ?>
+  <form action="index.php" method="post">
+    <input data-role="none" type="hidden" name="activetab" value="tab-mqtt">
+    <?= vw_formfeld($vw_cfg) ?>
+    <input data-role="none" type="hidden" name="vorlage_nr" value="<?= (int) $vw_nr2 ?>">
+    <button data-role="none" class="sm-btn sm-b-lesen" type="submit" name="vorlage" value="mqtt"><?= vw_e(sprintf(vw_t('MQTT.K_VORLAGE'), (int) $vw_nr2)) ?></button>
+  </form>
+<?php } ?>
+</div>
 </div>
 
 <!-- ================= Reiter: Einbindung in Loxone ================= -->
@@ -749,13 +1083,56 @@ $vw_beschriftung = array(
 <div class="sm-knopfreihe">
   <form action="index.php" method="post">
     <input data-role="none" type="hidden" name="activetab" value="tab-loxone">
-    <input data-role="none" type="hidden" name="vorlage" value="1">
-    <button data-role="none" class="sm-btn sm-b-lesen" type="submit"><?= vw_e(vw_t('LOX.K_VORLAGE')) ?></button>
+    <?= vw_formfeld($vw_cfg) ?>
+    <input data-role="none" type="hidden" name="vorlage_nr" value="1">
+    <button data-role="none" class="sm-btn sm-b-lesen" type="submit" name="vorlage" value="status"><?= vw_e(vw_t('LOX.K_VORLAGE')) ?></button>
   </form>
 </div>
 <div class="sm-legende">
 <span><i class="sm-punkt sm-b-lesen"></i> <?= vw_t('LEGENDE.LESEN') ?></span>
 </div>
+</div>
+
+<?php
+/* ---------------- Alle Vorlagen, je Fahrzeug ----------------
+ *
+ * Bis 0.9.9 gab es genau eine Vorlage: den Status-Endpunkt fuer Fahrzeug 1.
+ * Die Feldlisten fuer Laden, Wartung, Position und Verbrauch lagen fertig
+ * daneben, und die elf schaltenden Adressen mussten aus einer Tabelle
+ * abgetippt werden. */
+$vw_nummern = $vw_fahrzeuge ? array_keys($vw_fahrzeuge) : array('1');
+?>
+<div class="sm-step"><b><?= vw_e(vw_t('LOX.SV_TITEL')) ?></b><br>
+<?= vw_t('LOX.SV_TEXT') ?>
+<div class="sm-legende">
+<span><i class="sm-punkt sm-b-lesen"></i> <?= vw_t('LEGENDE.LESEN') ?></span>
+</div>
+<?php foreach ($vw_nummern as $vw_nr3) { ?>
+<h3><?= vw_e(sprintf(vw_t('LOX.SV_FAHRZEUG'), (int) $vw_nr3)) ?>
+<?= isset($vw_fahrzeuge[$vw_nr3]['modell']) && $vw_fahrzeuge[$vw_nr3]['modell'] !== ''
+    ? ' &middot; ' . vw_e($vw_fahrzeuge[$vw_nr3]['modell']) : '' ?></h3>
+<div class="sm-knopfreihe">
+<?php foreach (array_merge(vw_vorlagenarten(), array('befehle')) as $vw_art2) {
+    /* Die Ausgangsvorlage nennt die eingreifenden Befehle nur, wenn der
+     * zweite Haken gesetzt ist - ein Ausgang auf eine gesperrte Adresse
+     * bekaeme 403, und ein Virtueller Ausgang wertet die Antwort nicht aus. */
+    ?>
+  <form action="index.php" method="post">
+    <input data-role="none" type="hidden" name="activetab" value="tab-loxone">
+    <?= vw_formfeld($vw_cfg) ?>
+    <input data-role="none" type="hidden" name="vorlage_nr" value="<?= (int) $vw_nr3 ?>">
+    <button data-role="none" class="sm-btn <?= $vw_art2 === 'befehle' ? 'sm-b-aktion' : 'sm-b-lesen' ?>" type="submit" name="vorlage" value="<?= vw_e($vw_art2) ?>"><?= vw_e(vw_t('LOX.ART_' . strtoupper($vw_art2))) ?></button>
+  </form>
+<?php } ?>
+</div>
+<?php } ?>
+<div class="sm-legende">
+<span><i class="sm-punkt sm-b-lesen"></i> <?= vw_t('LEGENDE.LESEN') ?></span>
+<span><i class="sm-punkt sm-b-aktion"></i> <?= vw_t('LEGENDE.AKTION_VORLAGE') ?></span>
+</div>
+<?php if (empty($vw_cfg['eingreifend_ein'])) { ?>
+<div class="sm-hinweis"><?= vw_t('LOX.SV_OHNE_EINGREIFEND') ?></div>
+<?php } ?>
 </div>
 
 <div class="sm-step"><b><?= vw_e(vw_t('LOX.S4_TITEL')) ?></b><br>
@@ -792,24 +1169,43 @@ $vw_beschriftung = array(
 <table class="sm-tbl">
 <tr><th><?= vw_e(vw_t('ALLG.EIGENSCHAFT')) ?></th><th><?= vw_e(vw_t('ALLG.WERT')) ?></th></tr>
 <tr><td><?= vw_e(vw_t('LOX.T_VA_ADRESSE')) ?></td><td><span class="sm-mono">http://<?= vw_e($vw_host) ?></span></td></tr>
-<tr><td><?= vw_e(vw_t('LOX.T_VA_KLIMA_EIN')) ?></td>
-    <td><span class="sm-mono">/plugins/<?= vw_e($vw_p['plugin']) ?>/index.php?token=<?= vw_e($vw_token) ?>&amp;aktion=klima_start&amp;fahrzeug=1&amp;temp=21</span></td></tr>
-<tr><td><?= vw_e(vw_t('LOX.T_VA_KLIMA_AUS')) ?></td>
-    <td><span class="sm-mono">/plugins/<?= vw_e($vw_p['plugin']) ?>/index.php?token=<?= vw_e($vw_token) ?>&amp;aktion=klima_stop&amp;fahrzeug=1</span></td></tr>
-<tr><td><?= vw_e(vw_t('LOX.T_VA_LADEN_EIN')) ?></td>
-    <td><span class="sm-mono">/plugins/<?= vw_e($vw_p['plugin']) ?>/index.php?token=<?= vw_e($vw_token) ?>&amp;aktion=laden_start&amp;fahrzeug=1</span></td></tr>
-<tr><td><?= vw_e(vw_t('LOX.T_VA_LADEN_AUS')) ?></td>
-    <td><span class="sm-mono">/plugins/<?= vw_e($vw_p['plugin']) ?>/index.php?token=<?= vw_e($vw_token) ?>&amp;aktion=laden_stop&amp;fahrzeug=1</span></td></tr>
-<tr><td><?= vw_e(vw_t('LOX.T_VA_LADEGRENZE')) ?></td>
-    <td><span class="sm-mono">/plugins/<?= vw_e($vw_p['plugin']) ?>/index.php?token=<?= vw_e($vw_token) ?>&amp;aktion=ladegrenze&amp;fahrzeug=1&amp;prozent=&lt;v&gt;</span></td></tr>
-<tr><td><?= vw_e(vw_t('LOX.T_VA_LADESTROM')) ?></td>
-    <td><span class="sm-mono">/plugins/<?= vw_e($vw_p['plugin']) ?>/index.php?token=<?= vw_e($vw_token) ?>&amp;aktion=ladestrom&amp;fahrzeug=1&amp;ampere=&lt;v&gt;</span></td></tr>
-<tr><td><?= vw_e(vw_t('LOX.T_VA_SCHEIBE')) ?></td>
-    <td><span class="sm-mono">/plugins/<?= vw_e($vw_p['plugin']) ?>/index.php?token=<?= vw_e($vw_token) ?>&amp;aktion=scheibe_ein&amp;fahrzeug=1</span></td></tr>
-<tr><td><?= vw_e(vw_t('LOX.T_VA_ABRUF')) ?></td>
-    <td><span class="sm-mono">/plugins/<?= vw_e($vw_p['plugin']) ?>/index.php?token=<?= vw_e($vw_token) ?>&amp;aktion=abruf</span></td></tr>
 </table>
+<?php
+/* Die Tabelle entsteht aus vw_befehle() - derselben Quelle, aus der auch die
+ * Positivliste des Endpunkts und die Ausgangsvorlage kommen.
+ *
+ * Bis 0.9.9 stand sie hier woertlich und nannte acht der elf Befehle;
+ * 'zieltemperatur', 'scheibe_aus' und 'wecken' fehlten, und 'zieltemperatur'
+ * kam in der ganzen Oberflaeche nicht vor, obwohl der Endpunkt ihn annahm.
+ * Eine Liste an zwei Stellen ist eine Stelle zu viel. */
+?>
+<div style="overflow-x:auto;">
+<table class="sm-tbl">
+<tr><th><?= vw_e(vw_t('LOX.T_BEFEHL')) ?></th><th><?= vw_e(vw_t('LOX.T_ADRESSE')) ?></th>
+    <th><?= vw_e(vw_t('LOX.T_BEDEUTUNG')) ?></th></tr>
+<?php foreach (vw_befehle() as $vw_bn => $vw_bi) {
+    $vw_gesperrt = !empty($vw_bi['eingreifend']) && empty($vw_cfg['eingreifend_ein']);
+?>
+<tr><td><?= vw_t($vw_bi['s']) ?><?= $vw_gesperrt ? ' <span class="sm-aus">&#9679;</span>' : '' ?></td>
+    <td><span class="sm-mono">/plugins/<?= vw_e($vw_p['plugin']) ?>/index.php?token=<?= vw_e($vw_token) ?>&amp;aktion=<?= vw_e($vw_bn) ?><?= $vw_bn === 'abruf' ? '' : '&amp;fahrzeug=1' ?><?= isset($vw_bi['param']) ? str_replace(array('&', '<', '>'), array('&amp;', '&lt;', '&gt;'), $vw_bi['param']) : '' ?></span></td>
+    <td><?= vw_t($vw_bi['s'] . '_H') ?></td></tr>
+<?php } ?>
+</table>
+</div>
+<p class="sm-hilfe"><span class="sm-aus">&#9679;</span> <?= vw_t('LOX.S5_GESPERRT') ?></p>
 <div class="sm-warnung"><?= vw_t('LOX.S5_WARNUNG') ?></div>
+</div>
+
+<div class="sm-step"><b><?= vw_e(vw_t('LOX.SS_TITEL')) ?></b><br>
+<?= vw_t('LOX.SS_TEXT') ?>
+<table class="sm-tbl">
+<tr><th><?= vw_e(vw_t('LOX.T_BEFEHL')) ?></th><th><?= vw_e(vw_t('LOX.T_ADRESSE')) ?></th></tr>
+<?php foreach (vw_schalter() as $vw_sn => $vw_ss) { ?>
+<tr><td><?= vw_t($vw_ss) ?></td>
+    <td><span class="sm-mono">/plugins/<?= vw_e($vw_p['plugin']) ?>/index.php?token=<?= vw_e($vw_token) ?>&amp;aktion=einstellung&amp;fahrzeug=1&amp;name=<?= vw_e($vw_sn) ?>&amp;wert=&lt;v&gt;</span></td></tr>
+<?php } ?>
+</table>
+<div class="sm-hinweis"><?= vw_t('LOX.SS_UNGEMESSEN') ?></div>
 </div>
 
 <div class="sm-step"><b><?= vw_e(vw_t('LOX.S6_TITEL')) ?></b><br>
@@ -821,6 +1217,7 @@ $vw_beschriftung = array(
 <div class="sm-knopfreihe">
   <form action="index.php" method="post">
     <input data-role="none" type="hidden" name="activetab" value="tab-loxone">
+    <?= vw_formfeld($vw_cfg) ?>
     <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="token_neu" value="1"><?= vw_e(vw_t('LOX.K_TOKEN_NEU')) ?></button>
   </form>
 </div>
@@ -913,6 +1310,80 @@ function vw_bausteine()
 </div>
 </div>
 
+<!-- ================= Reiter: Verlauf ================= -->
+<div class="sm-seite<?= $vw_tab === 'tab-verlauf' ? ' sm-active' : '' ?>" id="tab-verlauf">
+<h2><?= vw_e(vw_t('VERL.H_TITEL')) ?></h2>
+<p class="sm-hilfe"><?= vw_t('VERL.EINLEITUNG') ?></p>
+<?php if (!$vw_fahrzeuge) { ?>
+<div class="sm-warnung"><?= vw_t('EINST.KEINE_FAHRZEUGE') ?></div>
+<?php } else {
+    /* Der gewaehlte Tag. Aus $_GET, weil die Reiterleiste ohnehin ueber die
+     * Adresse arbeitet - und weil ein Blaettern kein Absenden ist. */
+    $vw_tagwahl = isset($_GET['tag']) && is_string($_GET['tag'])
+                  && preg_match('/^[0-9]{8}$/', $_GET['tag']) ? (string) $_GET['tag'] : date('Ymd');
+    foreach ($vw_fahrzeuge as $vw_nr => $vw_fz) {
+        $vw_tage = vw_verlauf_tage((int) $vw_nr, 14);
+        $vw_punkte = vw_verlauf_lesen((int) $vw_nr, $vw_tagwahl);
+?>
+<h3><?= vw_e($vw_fz['modell'] ? $vw_fz['modell'] : vw_t('ALLG.OHNE_NAMEN')) ?>
+  (<?= vw_e(vw_t('ALLG.FAHRZEUG')) ?> <?= vw_e($vw_nr) ?>)</h3>
+<?php if (!$vw_tage) { ?>
+<div class="sm-hinweis"><?= vw_t('VERL.KEINE_TAGE') ?></div>
+<?php } else { ?>
+<p class="sm-hilfe"><?= vw_e(vw_t('VERL.TAGWAHL')) ?>
+<?php foreach ($vw_tage as $vw_t1) {
+    $vw_lesbar = substr($vw_t1, 6, 2) . '.' . substr($vw_t1, 4, 2) . '.'; ?>
+<a href="index.php?form=verlauf&amp;tag=<?= vw_e($vw_t1) ?>"<?= $vw_t1 === $vw_tagwahl ? ' style="font-weight:700;"' : '' ?>><?= vw_e($vw_lesbar) ?></a>
+<?php } ?>
+</p>
+<?php } ?>
+<div><?= vw_soc_svg($vw_punkte) ?></div>
+<div class="sm-hilfe"><?= sprintf(vw_t('VERL.MESSPUNKTE'), count($vw_punkte),
+    vw_e(substr($vw_tagwahl, 6, 2) . '.' . substr($vw_tagwahl, 4, 2) . '.' . substr($vw_tagwahl, 0, 4))) ?></div>
+
+<?php $vw_ladungen = vw_ladungen_lesen((int) $vw_nr, 25); ?>
+<h3><?= vw_e(vw_t('VERL.H_LADUNGEN')) ?></h3>
+<?php if (!$vw_ladungen) { ?>
+<div class="sm-hinweis"><?= vw_t('VERL.KEINE_LADUNGEN') ?></div>
+<?php } else { ?>
+<div style="overflow-x:auto;">
+<table class="sm-tbl">
+<tr><th><?= vw_e(vw_t('VERL.T_BEGINN')) ?></th><th><?= vw_e(vw_t('VERL.T_DAUER')) ?></th>
+    <th><?= vw_e(vw_t('VERL.T_VON')) ?></th><th><?= vw_e(vw_t('VERL.T_BIS')) ?></th>
+    <th><?= vw_e(vw_t('VERL.T_KWH')) ?></th><th><?= vw_e(vw_t('VERL.T_KM')) ?></th>
+    <th><?= vw_e(vw_t('VERL.T_QUELLE')) ?></th></tr>
+<?php foreach ($vw_ladungen as $vw_l) {
+    $vw_dauer = $vw_l['ende'] > $vw_l['start']
+              ? (int) round(($vw_l['ende'] - $vw_l['start']) / 60) : null; ?>
+<tr><td><?= vw_e(date('d.m. H:i', $vw_l['start'])) ?></td>
+    <td><?= $vw_dauer === null ? '&mdash;' : (int) $vw_dauer . ' min' ?></td>
+    <td><?= $vw_l['soc_vor'] === null ? '&mdash;' : vw_e($vw_l['soc_vor']) . ' %' ?></td>
+    <td><?= $vw_l['soc_nach'] === null ? '&mdash;' : vw_e($vw_l['soc_nach']) . ' %' ?></td>
+    <td><?= $vw_l['kwh'] === null ? '&mdash;' : vw_e($vw_l['kwh']) . ' kWh' ?></td>
+    <td><?= $vw_l['km'] === null ? '&mdash;' : vw_e($vw_l['km']) . ' km' ?></td>
+    <td><?= vw_e($vw_l['quelle']) ?></td></tr>
+<?php } ?>
+</table>
+</div>
+<div class="sm-hilfe"><?= vw_t('VERL.LADUNGEN_HINWEIS') ?></div>
+<?php } ?>
+<?php if (isset($vw_fz['verbrauch']) && $vw_fz['verbrauch'] !== null) { ?>
+<div class="sm-kacheln">
+  <div class="sm-kachel"><?= vw_e(vw_t('VERL.K_VERBRAUCH')) ?>
+    <b><?= vw_e($vw_fz['verbrauch']) ?></b><span class="sm-hilfe">kWh/100 km</span></div>
+<?php if (isset($vw_fz['tag_kwh']) && $vw_fz['tag_kwh'] !== null) { ?>
+  <div class="sm-kachel"><?= vw_e(vw_t('VERL.K_TAG')) ?>
+    <b><?= vw_e($vw_fz['tag_kwh']) ?></b><span class="sm-hilfe">kWh</span></div>
+<?php } ?>
+</div>
+<div class="sm-hilfe"><?= sprintf(vw_t('VERL.VERBRAUCH_HINWEIS'), 20) ?></div>
+<?php } else { ?>
+<div class="sm-hinweis"><?= sprintf(vw_t('VERL.KEIN_VERBRAUCH'), 20) ?></div>
+<?php } ?>
+<?php } /* foreach Fahrzeug */ ?>
+<?php } ?>
+</div>
+
 <!-- ================= Reiter: Test ================= -->
 <div class="sm-seite<?= $vw_tab === 'tab-test' ? ' sm-active' : '' ?>" id="tab-test">
 <h2><?= vw_e(vw_t('TEST.H_SELBSTPRUEFUNG')) ?></h2>
@@ -946,6 +1417,7 @@ function vw_bausteine()
 <div class="sm-knopfreihe">
   <form action="index.php" method="post">
     <input data-role="none" type="hidden" name="activetab" value="tab-test">
+    <?= vw_formfeld($vw_cfg) ?>
     <button data-role="none" class="sm-btn sm-b-technik" type="submit" name="selbsttest" value="1"><?= vw_e(vw_t('TEST.K_SELBSTTEST')) ?></button>
   </form>
   <a class="sm-btn sm-b-technik" href="<?= vw_e($vw_basis) ?>?token=<?= vw_e($vw_token) ?>&amp;aktion=roh" target="_blank"><?= vw_e(vw_t('TEST.K_ROH')) ?></a>
@@ -961,6 +1433,7 @@ function vw_bausteine()
 <?php } ?>
 <form action="index.php" method="post">
 <input data-role="none" type="hidden" name="activetab" value="tab-test">
+<?= vw_formfeld($vw_cfg) ?>
 <div class="sm-feld">
   <label for="test_fahrzeug"><?= vw_e(vw_t('TEST.L_FAHRZEUG')) ?></label>
   <input data-role="none" type="number" id="test_fahrzeug" name="test_fahrzeug" value="1" min="1" max="99">
@@ -997,7 +1470,35 @@ function vw_bausteine()
   <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="test" value="ladestrom"><?= vw_e(vw_t('TEST.K_LADESTROM')) ?></button>
   <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="test" value="scheibe_ein"><?= vw_e(vw_t('TEST.K_SCHEIBE_EIN')) ?></button>
   <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="test" value="scheibe_aus"><?= vw_e(vw_t('TEST.K_SCHEIBE_AUS')) ?></button>
+  <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="test" value="zieltemperatur"><?= vw_e(vw_t('TEST.K_ZIELTEMP')) ?></button>
   <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="test" value="wecken"><?= vw_e(vw_t('TEST.K_WECKEN')) ?></button>
+</div>
+
+<h3><?= vw_e(vw_t('TEST.H_SCHALTER')) ?></h3>
+<p class="sm-hilfe"><?= vw_t('TEST.SCHALTER_ERKLAERUNG') ?></p>
+<div class="sm-feld">
+  <label for="test_schalter"><?= vw_e(vw_t('TEST.L_SCHALTER')) ?></label>
+  <select data-role="none" id="test_schalter" name="test_schalter">
+<?php foreach (vw_schalter() as $vw_sn2 => $vw_ss2) { ?>
+    <option value="<?= vw_e($vw_sn2) ?>"><?= vw_t($vw_ss2) ?></option>
+<?php } ?>
+  </select>
+</div>
+<div class="sm-knopfreihe">
+  <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="test" value="einstellung_ein"><?= vw_e(vw_t('TEST.K_SCHALTER_EIN')) ?></button>
+  <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="test" value="einstellung_aus"><?= vw_e(vw_t('TEST.K_SCHALTER_AUS')) ?></button>
+</div>
+
+<h3><?= vw_e(vw_t('TEST.H_EINGREIFEND')) ?></h3>
+<div class="sm-warnung"><?= vw_t('TEST.EINGREIFEND_WARNUNG') ?></div>
+<?php if (empty($vw_cfg['eingreifend_ein'])) { ?>
+<div class="sm-hinweis"><?= vw_t('TEST.EINGREIFEND_GESPERRT') ?></div>
+<?php } ?>
+<div class="sm-knopfreihe">
+  <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="test" value="verriegeln"><?= vw_e(vw_t('TEST.K_VERRIEGELN')) ?></button>
+  <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="test" value="entriegeln"><?= vw_e(vw_t('TEST.K_ENTRIEGELN')) ?></button>
+  <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="test" value="blinken"><?= vw_e(vw_t('TEST.K_BLINKEN')) ?></button>
+  <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="test" value="hupen"><?= vw_e(vw_t('TEST.K_HUPEN')) ?></button>
 </div>
 </form>
 
@@ -1025,6 +1526,7 @@ if (class_exists('LBWeb', false) && method_exists('LBWeb', 'loglist_html')) {
 <div class="sm-knopfreihe">
   <form action="index.php" method="post">
     <input data-role="none" type="hidden" name="activetab" value="tab-log">
+    <?= vw_formfeld($vw_cfg) ?>
     <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="log_leeren" value="1"><?= vw_e(vw_t('LOG.K_LEEREN')) ?></button>
   </form>
 </div>

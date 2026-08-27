@@ -57,20 +57,30 @@ def lb_wurzel_ermitteln():
     return ""
 
 
-def mqtt_wert_saeubern(wert):
+MQTT_MAX = 200
+
+
+def mqtt_wert_saeubern(wert, laenge: int = MQTT_MAX):
     """Einen Wert fuer den UDP-Eingang des MQTT-Gateways unschaedlich machen.
 
     Das Gateway liest zeilenweise. Ein Zeilenumbruch im Wert zerlegt die
     Uebertragung, und aus den Bruchstuecken bildet das Gateway erfundene
     Themen. Ein Tabulator schadet ebenso, weil Leerzeichen Thema und Wert
     trennt.
+
+    Gekappt wird ab 0.9.10, weil seither auch Text hinausgeht: eine Anschrift
+    oder ein Fehlertext hat keine Obergrenze, ein UDP-Datagramm schon. 200
+    Zeichen sind aus MGiSmart uebernommen und NICHT am Gateway nachgemessen.
     """
     text = str(wert)
     for zeichen in ("\r\n", "\r", "\n", "\t"):
         text = text.replace(zeichen, " ")
     while "  " in text:
         text = text.replace("  ", " ")
-    return text.strip()
+    text = text.strip()
+    if laenge > 0 and len(text) > laenge:
+        text = text[:laenge].rstrip()
+    return text
 
 
 # ---------------------------------------------------------------------------
@@ -83,10 +93,31 @@ def mqtt_wert_saeubern(wert):
 # ---------------------------------------------------------------------------
 SELF = Path(__file__).resolve().parent            # <home>/bin/plugins/<ordner>
 PNAME = SELF.name
-if len(SELF.parents) >= 3:
-    LBHOME = SELF.parents[2]
+
+
+def _ist_lbhome(p: Path) -> bool:
+    """Sieht dieses Verzeichnis wie ein LoxBerry aus?"""
+    try:
+        return (p / "config" / "plugins").is_dir() and (p / "webfrontend").is_dir()
+    except OSError:
+        return False
+
+
+# Die drei Ebenen aufwaerts sind der Normalfall - aber sie werden GEPRUEFT.
+#
+# Bis 0.9.9 stand hier `if len(SELF.parents) >= 3`, und das ist bei jedem
+# absoluten Pfad erfuellt: der Rueckfallweg wurde nie genommen, und
+# lb_wurzel_ermitteln() war toter Code. Aus einem entpackten Archiv heraus
+# ergab das LBHOME = <Desktop> und PNAME = "bin" - der Selbsttest meldete
+# dann drei nicht beschreibbare Ordner statt zu sagen, dass das Plugin gar
+# nicht installiert ist. Gemessen am 27.08.2026.
+LBHOME = SELF.parents[2] if len(SELF.parents) >= 3 and _ist_lbhome(SELF.parents[2]) else None
+if LBHOME is None:
+    _ersatz = os.environ.get("LBHOMEDIR") or lb_wurzel_ermitteln()
+    LBHOME = Path(_ersatz) if _ersatz else SELF.parents[min(2, len(SELF.parents) - 1)]
+    NICHT_INSTALLIERT = not _ist_lbhome(LBHOME)
 else:
-    LBHOME = Path(os.environ.get("LBHOMEDIR") or lb_wurzel_ermitteln())
+    NICHT_INSTALLIERT = False
 PDATA = LBHOME / "data" / "plugins" / PNAME
 PLOG = LBHOME / "log" / "plugins" / PNAME
 PCONFIG = LBHOME / "config" / "plugins" / PNAME
@@ -107,17 +138,56 @@ DATEI_LOG = PLOG / "vw.log"
 # Der Takt hat eine harte Untergrenze von 180 Sekunden: der Connector wirft
 # darunter beim Anlegen einen ValueError ("Intervall must be at least 180
 # seconds"). Der Wert wird deshalb schon hier gekappt, nicht erst dort.
+#
+# 'aktionstoken', 'wartezeit' und 'wartezeit_endpunkt' fehlen hier mit Absicht:
+# sie gehen nur die Oberflaeche und den Endpunkt an. vw_pruefen.py zaehlt die
+# gemeinsamen Schluessel nach.
 VORGABEN = {
     "intervall": 300,
     "takt_wartung": 12,
     "mqtt_ein": 0,
     "mqtt_topic": "volkswagen",
+    "mqtt_retain": 1,
     "steuerung_ein": 0,
+    "eingreifend_ein": 0,
     "temp_min": 16,
     "temp_max": 29,
     "verlauf_tage": 8,
     "zugriff_erzwingen": 0,
+    "heim_breite": "",
+    "heim_laenge": "",
+    "heim_radius": 150,
+    "abstand_abruf": 120,
+    "befehle_stunde": 30,
+    "entprellung": 20,
+    "empf_thema": "",
+    "empf_grenze": "",
+    "empf_kleiner": 1,
+    "abfahrt_ein": 0,
+    "abfahrt_thema": "",
+    "abfahrt_vorlauf": 20,
+    "abfahrt_temp": 21,
 }
+
+# Grenzen je Einstellung - dieselben Zahlen wie in vw_regeln() der Bibliothek.
+# Eine Grenze steht an EINER Stelle je Sprache; ueber die Sprachgrenze hinweg
+# gibt es keine gemeinsame Funktion, also wird sie hier wiederholt und von
+# vw_pruefen.py gegengezaehlt.
+GRENZEN_GANZ = {
+    "intervall": (180, 3600),
+    "takt_wartung": (1, 240),
+    "temp_min": (10, 30),
+    "temp_max": (10, 30),
+    "verlauf_tage": (1, 90),
+    "heim_radius": (10, 5000),
+    "abstand_abruf": (0, 3600),
+    "befehle_stunde": (1, 240),
+    "entprellung": (0, 600),
+    "abfahrt_vorlauf": (5, 180),
+    "abfahrt_temp": (10, 30),
+}
+GRENZEN_SCHALT = ("mqtt_ein", "mqtt_retain", "steuerung_ein", "eingreifend_ein",
+                  "zugriff_erzwingen", "empf_kleiner", "abfahrt_ein")
 
 TAKT_MIN = 180
 
@@ -144,6 +214,11 @@ ERREICHBAR = {"online": 1, "reachable": 1, "connected": 1,
 # weitergereicht, statt vorher zu raten.
 LADESTROM_STUFEN = (5, 6, 10, 13, 16, 32)
 
+# Befehle, die das Fahrzeug oeffnen oder auffindbar machen. Sie haengen an
+# einem eigenen Haken, der ab Werk aus ist - muss zu vw_befehle() in
+# webfrontend/html/vw_lib.php passen.
+EINGREIFEND = ("verriegeln", "entriegeln", "blinken", "hupen")
+
 _LAUF = True
 _LOG = logging.getLogger("volkswagen")
 _LETZTE_MELDUNG: dict[str, float] = {}
@@ -157,7 +232,15 @@ _LETZTE_MELDUNG: dict[str, float] = {}
 # Zeile doppelt hinein.
 # ---------------------------------------------------------------------------
 def log_einrichten() -> None:
-    PLOG.mkdir(parents=True, exist_ok=True)
+    # Der mkdir gehoert in dasselbe try wie der Handler. Bis 0.9.9 stand er
+    # davor und ausserhalb jeder Absicherung: ein OSError - Ramdisk voll,
+    # Rechte falsch - beendete den Dienst, bevor die erste Zeile geschrieben
+    # war, und weil der Sollmerker liegenblieb, startete der Waechter ihn im
+    # Minutentakt neu.
+    try:
+        PLOG.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
     _LOG.setLevel(logging.INFO)
     try:
         h = RotatingFileHandler(DATEI_LOG, maxBytes=512000, backupCount=1, encoding="utf-8")
@@ -223,16 +306,69 @@ def ganz(wert, ersatz: int) -> int:
         return ersatz
 
 
+def schalt(wert, ersatz: int = 0) -> int:
+    """Einen Ja/Nein-Wert deuten - und zwar streng.
+
+    Bis 0.9.9 wurde 'steuerung_ein' gar nicht umgewandelt und mit
+    `if not cfg.get(...)` geprueft. bool("0") ist in Python WAHR, empty("0") in
+    PHP dagegen wahr im Sinne von leer: eine Zeichenkette "0" in vw.json - etwa
+    aus einer zurueckgespielten Sicherung - liess den Dienst schalten, waehrend
+    Oberflaeche und Endpunkt "gesperrt" anzeigten. Gemessen am 27.08.2026.
+
+    Deshalb: nur 0/1, "0"/"1", True/False gelten. Alles andere ist der
+    Ersatzwert - und bei einem Sicherheitsschalter ist das die geschlossene
+    Stellung.
+    """
+    if isinstance(wert, bool):
+        return 1 if wert else 0
+    if isinstance(wert, int):
+        return 1 if wert == 1 else (0 if wert == 0 else ersatz)
+    if isinstance(wert, str):
+        s = wert.strip()
+        if s == "1":
+            return 1
+        if s == "0":
+            return 0
+    return ersatz
+
+
+def komma(wert, ersatz=None):
+    """Eine Kommazahl, oder der Ersatz. Leer bleibt leer, nicht 0."""
+    if wert is None or wert == "":
+        return ersatz
+    try:
+        return float(str(wert).replace(",", "."))
+    except (TypeError, ValueError):
+        return ersatz
+
+
 def config() -> dict:
+    """Die Konfiguration - vollstaendig und geprueft.
+
+    Jeder Wert wird gegen dieselben Grenzen gehalten, die auch das Formular
+    benutzt. Eine Datei kann von Hand geschrieben, aus einer Sicherung
+    zurueckgespielt oder aus einer aelteren Fassung uebernommen sein; geprueft
+    wird deshalb an BEIDEN Enden, nicht nur beim Speichern.
+    """
     c = dict(VORGABEN)
     c.update(json_lesen(DATEI_CONFIG))
-    c["intervall"] = max(TAKT_MIN, min(3600, ganz(c.get("intervall"), 300)))
-    c["takt_wartung"] = max(1, min(240, ganz(c.get("takt_wartung"), 12)))
-    c["temp_min"] = max(10, min(30, ganz(c.get("temp_min"), 16)))
-    c["temp_max"] = max(10, min(30, ganz(c.get("temp_max"), 29)))
+    for name, (lo, hi) in GRENZEN_GANZ.items():
+        c[name] = max(lo, min(hi, ganz(c.get(name), VORGABEN[name])))
+    for name in GRENZEN_SCHALT:
+        c[name] = schalt(c.get(name), VORGABEN[name])
     if c["temp_min"] > c["temp_max"]:
         c["temp_min"], c["temp_max"] = c["temp_max"], c["temp_min"]
-    c["verlauf_tage"] = max(1, min(90, ganz(c.get("verlauf_tage"), 8)))
+    c["intervall"] = max(TAKT_MIN, c["intervall"])
+    # Heimatort: leer bleibt leer. Eine 0/0 waere ein Punkt im Atlantik, und
+    # jede Entfernungsangabe daraus waere eine Zahl, die richtig aussieht.
+    for name, lo, hi in (("heim_breite", -90, 90), ("heim_laenge", -180, 180)):
+        v = komma(c.get(name))
+        c[name] = v if (v is not None and lo <= v <= hi) else ""
+    c["empf_grenze"] = komma(c.get("empf_grenze"))
+    if c["empf_grenze"] is None:
+        c["empf_grenze"] = ""
+    for name in ("mqtt_topic", "empf_thema", "abfahrt_thema"):
+        c[name] = str(c.get(name) or "").strip()
     return c
 
 
@@ -274,12 +410,26 @@ def mqtt_zustand() -> dict:
     }
 
 
-def mqtt_senden(paare: dict, praefix: str) -> None:
+def mqtt_senden(paare: dict, praefix: str, retain: int = 1) -> tuple[int, int]:
+    """Veroeffentlicht die Paare ueber den UDP-Eingang des Gateways.
+
+    Rueckgabe: (versucht, misslungen). Bis 0.9.9 gab die Funktion nichts
+    zurueck und meldete nur gebremst ins Protokoll - eine Zahl in der
+    Oberflaeche beantwortet dagegen die Frage, ob ueberhaupt etwas hinausgeht,
+    auch dann, wenn das Gateway gar nicht eingerichtet ist.
+
+    'retain' laesst das Gateway die Werte behalten. Ohne das sind nach einem
+    Neustart des Brokers alle virtuellen Eingaenge in Loxone ohne Wert, bis der
+    naechste Abruf durch ist - bei einem Takt von fuenf Minuten also minutenlang.
+    Das Befehlswort 'retain' des UDP-Eingangs ist im Bestand dreifach belegt
+    (Gardena, Intercom, WOLF ISM NG); an einem Gateway NACHGEMESSEN wurde es
+    hier nicht.
+    """
     z = mqtt_zustand()
     if not z["udpport"]:
         melde_gebremst("mqtt_kein_port",
                        "MQTT: kein UDP-Eingangsport in general.json gefunden - nichts gesendet.")
-        return
+        return (0, 0)
     if not z["autostart"]:
         melde_gebremst(
             "mqtt_aus",
@@ -290,16 +440,34 @@ def mqtt_senden(paare: dict, praefix: str) -> None:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     except OSError as err:
         melde_gebremst("mqtt_socket", f"MQTT: Socket nicht moeglich ({err}).")
-        return
+        return (0, 0)
+    befehl = "retain" if retain else "publish"
+    versucht = 0
+    schlecht = 0
     try:
         for k, v in paare.items():
             if v is None:
                 continue
-            s.sendto(f"publish {praefix}/{k} {mqtt_wert_saeubern(v)}".encode("utf-8"), ("127.0.0.1", z["udpport"]))
+            text = mqtt_wert_saeubern(v)
+            # Eine LEERE Nutzlast loescht mit 'retain' ein behaltenes Thema.
+            # Ein Wert, der nach dem Saeubern nichts uebrig laesst, ist kein
+            # Wert - er wird uebersprungen wie None.
+            if text == "":
+                continue
+            versucht += 1
+            try:
+                s.sendto(f"{befehl} {praefix}/{k} {text}".encode("utf-8"),
+                         ("127.0.0.1", z["udpport"]))
+            except OSError:
+                schlecht += 1
     except OSError as err:
         melde_gebremst("mqtt_senden", f"MQTT: Senden fehlgeschlagen ({err}).")
     finally:
         s.close()
+    if schlecht:
+        melde_gebremst("mqtt_teil",
+                       f"MQTT: {schlecht} von {versucht} Meldungen sind nicht hinausgegangen.")
+    return (versucht, schlecht)
 
 
 # ---------------------------------------------------------------------------
@@ -384,6 +552,40 @@ def zeitstempel(attr) -> int | None:
 # ---------------------------------------------------------------------------
 # Fehlermeldungen, die sagen, wer geantwortet hat
 # ---------------------------------------------------------------------------
+def grund_von(err: Exception) -> str:
+    """Ein kurzes Kennwort fuer die Statuszeile.
+
+    Der Klartext geht in eine eigene Zeile; die Statuszeile bleibt rein aus
+    Zahlen und diesem einen Wort. In Loxone laesst sich darauf eine
+    Benachrichtigung legen, die sagt, WER nicht geantwortet hat - 'unerreichbar'
+    fuer alles hat einmal vier Messbefehle am Geraet gekostet, nur um zu
+    klaeren, welcher Weg scheiterte.
+    """
+    name = type(err).__name__
+    klein = (str(err) or name).lower()
+    if name == "TooManyRequestsError":
+        return "KONTINGENT"
+    if name in ("AuthenticationError", "TemporaryAuthenticationError"):
+        return "ANMELDUNG"
+    if name == "APICompatibilityError":
+        return "SCHNITTSTELLE"
+    if name == "ConfigurationError":
+        return "EINSTELLUNG"
+    if name in ("SetterError", "CommandError"):
+        return "BEFEHL"
+    if name == "TimeoutError" or "timed out" in klein or name in ("ReadTimeout", "ConnectTimeout"):
+        return "ZEITUEBERLAUF"
+    grund = getattr(err, "os_error", None)
+    errno = getattr(grund, "errno", None) if grund is not None else getattr(err, "errno", None)
+    if errno in (111, 113, -2, -3):
+        return "NETZ"
+    if "<html" in klein or "<!doctype" in klein:
+        return "VORGELAGERT"
+    if name in ("RetrievalError", "MultipleRetrievalError", "APIError"):
+        return "ABRUF"
+    return "UNBEKANNT"
+
+
 def fehlertext(err: Exception) -> str:
     name = type(err).__name__
     inhalt = str(err) or name
@@ -461,7 +663,65 @@ def antriebe(fahrzeug) -> dict:
     return {"elektro": elektro, "verbrenner": verbrenner, "anzahl": len(drives)}
 
 
-def abbild_stamm(fahrzeug) -> dict:
+def offene_teile(behaelter, verzeichnis: str) -> tuple:
+    """Zaehlt die offenen Einzelteile und nennt sie beim Namen.
+
+    Der Kern fuehrt neben dem Sammelzustand ein Verzeichnis der Einzelteile,
+    jedes mit eigenem open_state (Tueren zusaetzlich mit lock_state) -
+    gemessen an carconnectivity 0.11.10, doors.py:55 ff., windows.py.
+
+    Ob der Volkswagen-Connector das Verzeichnis fuellt, ist UNGEMESSEN. Ist es
+    leer, kommt (None, "") zurueck - kein Wert, keine 0: eine 0 hiesse
+    "alles zu", und das weiss hier niemand.
+    """
+    d = getattr(behaelter, verzeichnis, None) or {}
+    if not isinstance(d, dict) or not d:
+        return (None, "")
+    offen = []
+    for name, teil in d.items():
+        z = etext(getattr(teil, "open_state", None)).lower()
+        if z in ("open", "ajar"):
+            offen.append(str(name))
+    return (len(offen), ", ".join(sorted(offen)))
+
+
+def geaendert_vor_min(attr):
+    """Minuten seit der letzten AENDERUNG dieses Attributs.
+
+    last_changed, nicht last_updated: das zweite springt bei jedem Abruf, auch
+    wenn sich nichts geruehrt hat, und ergaebe eine Standzeit, die immer null
+    ist.
+    """
+    d = getattr(attr, "last_changed", None) if attr is not None else None
+    if not isinstance(d, datetime):
+        return None
+    jetzt = datetime.now(timezone.utc) if d.tzinfo else datetime.now()
+    m = int((jetzt - d).total_seconds() / 60)
+    return m if m >= 0 else None
+
+
+def entfernung_m(b1, l1, b2, l2):
+    """Entfernung zweier Punkte in Metern (Haversine, Erdradius 6371000 m).
+
+    Dieselbe Formel steht als vw_entfernung_m() in vw_lib.php - ueber die
+    Sprachgrenze hinweg gibt es keine gemeinsame Funktion. Die Selbstpruefung
+    haelt beide gegeneinander.
+    """
+    if None in (b1, l1, b2, l2):
+        return None
+    try:
+        import math
+        r = 6371000.0
+        p1, p2 = math.radians(float(b1)), math.radians(float(b2))
+        dp = math.radians(float(b2) - float(b1))
+        dl = math.radians(float(l2) - float(l1))
+        a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+        return int(round(r * 2 * math.atan2(math.sqrt(a), math.sqrt(max(0.0, 1 - a)))))
+    except (TypeError, ValueError):
+        return None
+
+
+def abbild_stamm(fahrzeug, cfg: dict) -> dict:
     from carconnectivity.units import Length
     return {
         "vin": str(wert(getattr(fahrzeug, "vin", None)) or ""),
@@ -476,18 +736,21 @@ def abbild_stamm(fahrzeug) -> dict:
     }
 
 
-def abbild_status(fahrzeug) -> dict:
+def abbild_status(fahrzeug, cfg: dict) -> dict:
     from carconnectivity.units import Temperature
     tueren = getattr(fahrzeug, "doors", None)
+    fenster = getattr(fahrzeug, "windows", None)
     klima = getattr(fahrzeug, "climatization", None)
     einst = getattr(klima, "settings", None)
+    tz, tn = offene_teile(tueren, "doors")
+    fz, fn = offene_teile(fenster, "windows")
     return {
         "zustand": kennzahl(getattr(fahrzeug, "state", None), FAHRZEUGZUSTAND),
         "zustand_text": etext(getattr(fahrzeug, "state", None)),
         "erreichbar": kennzahl(getattr(fahrzeug, "connection_state", None), ERREICHBAR),
         "verriegelt": kennzahl(getattr(tueren, "lock_state", None), VERRIEGELT),
         "tueren_offen": kennzahl(getattr(tueren, "open_state", None), OFFEN_ZU),
-        "fenster_offen": kennzahl(getattr(getattr(fahrzeug, "windows", None), "open_state", None), OFFEN_ZU),
+        "fenster_offen": kennzahl(getattr(fenster, "open_state", None), OFFEN_ZU),
         "licht_an": kennzahl(getattr(getattr(fahrzeug, "lights", None), "light_state", None), AN_AUS),
         "handbremse": wert(getattr(fahrzeug, "parking_brake", None)),
         "aussentemperatur": wert(getattr(fahrzeug, "outside_temperature", None), Temperature.C, 1),
@@ -499,32 +762,52 @@ def abbild_status(fahrzeug) -> dict:
             getattr(getattr(fahrzeug, "window_heatings", None), "heating_state", None), AN_AUS),
         "sitzheizung_ein": wert(getattr(einst, "seat_heating", None)),
         "klima_bei_entriegeln": wert(getattr(einst, "climatization_at_unlock", None)),
+        "klima_ohne_netz": wert(getattr(einst, "climatization_without_external_power", None)),
+        # ---- ab 0.9.10 ----
+        "tueren_zahl": tz,
+        "tueren_namen": tn,
+        "fenster_zahl": fz,
+        "fenster_namen": fn,
+        "getriebe": etext(getattr(fahrzeug, "gearbox", None)),
+        "standzeit_min": geaendert_vor_min(getattr(fahrzeug, "state", None)),
     }
 
 
-def abbild_reichweite(fahrzeug) -> dict:
-    from carconnectivity.units import Length, Level, Energy
+def abbild_reichweite(fahrzeug, cfg: dict) -> dict:
+    from carconnectivity.units import Length, Level, Energy, Temperature
     a = antriebe(fahrzeug)
     e, v = a["elektro"], a["verbrenner"]
+    batt = getattr(e, "battery", None)
     return {
         "reichweite_km": wert(getattr(getattr(fahrzeug, "drives", None), "total_range", None),
                               Length.KM, 0),
         "anzahl_antriebe": a["anzahl"],
         "soc": wert(getattr(e, "level", None), Level.PERCENTAGE, 0),
         "reichweite_elektro_km": wert(getattr(e, "range", None), Length.KM, 0),
-        "batterie_kwh": wert(getattr(getattr(e, "battery", None), "total_capacity", None),
-                             Energy.KWH, 1),
+        "batterie_kwh": wert(getattr(batt, "total_capacity", None), Energy.KWH, 1),
         "tank_prozent": wert(getattr(v, "level", None), Level.PERCENTAGE, 0),
         "reichweite_verbrenner_km": wert(getattr(v, "range", None), Length.KM, 0),
         "oelstand_prozent": wert(getattr(v, "oil_level", None), Level.PERCENTAGE, 0),
+        # ---- ab 0.9.10 ----
+        "batterie_temp": wert(getattr(batt, "temperature", None), Temperature.C, 1),
+        "batterie_nutzbar_kwh": wert(getattr(batt, "available_capacity", None), Energy.KWH, 1),
+        "reichweite_wltp_km": wert(getattr(e, "range_wltp", None), Length.KM, 0),
+        "reichweite_voll_km": wert(getattr(e, "range_estimated_full", None), Length.KM, 0),
+        # Der Verbrauch der Bibliothek. Wo ihn das Fahrzeug nicht liefert,
+        # rechnet fahrverbrauch_fortschreiben() einen eigenen - und zwar in ein
+        # ANDERES Feld, damit gemessen und gerechnet nicht verwechselt werden.
+        "verbrauch_fahrzeug": wert(getattr(e, "consumption", None), None, 1),
+        "adblue_km": wert(getattr(v, "adblue_range", None), Length.KM, 0),
+        "adblue_prozent": wert(getattr(v, "adblue_level", None), Level.PERCENTAGE, 0),
     }
 
 
-def abbild_laden(fahrzeug) -> dict:
+def abbild_laden(fahrzeug, cfg: dict) -> dict:
     from carconnectivity.units import Power, Speed, Level, Current
     laden = getattr(fahrzeug, "charging", None)
     einst = getattr(laden, "settings", None)
     stecker = getattr(laden, "connector", None)
+    saeule = getattr(laden, "charging_station", None)
     return {
         "laedt": kennzahl(getattr(laden, "state", None), LADEN_AN),
         "ladezustand_text": etext(getattr(laden, "state", None)),
@@ -538,10 +821,18 @@ def abbild_laden(fahrzeug) -> dict:
         "kabel_verbunden": kennzahl(getattr(stecker, "connection_state", None), KABEL),
         "stecker_verriegelt": kennzahl(getattr(stecker, "lock_state", None), STECKER),
         "externe_stromversorgung": etext(getattr(stecker, "external_power", None)),
+        # ---- ab 0.9.10 ----
+        # Die Ladesaeule loest der KERN selbst ueber OpenStreetMap auf, sobald
+        # geladen wird und die Position bekannt ist; im Connector ist dafuer
+        # nichts noetig. Gemessen an carconnectivity 0.11.10,
+        # charging.py:77 und charging_station.py:37 ff.
+        "ladesaeule_name": str(wert(getattr(saeule, "name", None)) or ""),
+        "ladesaeule_betreiber": str(wert(getattr(saeule, "operator_name", None)) or ""),
+        "ladesaeule_kw": wert(getattr(saeule, "max_power", None), Power.KW, 1),
     }
 
 
-def abbild_wartung(fahrzeug) -> dict:
+def abbild_wartung(fahrzeug, cfg: dict) -> dict:
     from carconnectivity.units import Length
     w = getattr(fahrzeug, "maintenance", None)
     return {
@@ -552,20 +843,36 @@ def abbild_wartung(fahrzeug) -> dict:
     }
 
 
-def abbild_position(fahrzeug) -> dict:
+def abbild_position(fahrzeug, cfg: dict) -> dict:
     p = getattr(fahrzeug, "position", None)
     ort = getattr(p, "location", None)
     strasse = " ".join(x for x in (str(wert(getattr(ort, "road", None)) or ""),
                                    str(wert(getattr(ort, "house_number", None)) or "")) if x)
     stadt = str(wert(getattr(ort, "city", None)) or "")
-    return {
-        "breite": wert(getattr(p, "latitude", None), None, 6),
-        "laenge": wert(getattr(p, "longitude", None), None, 6),
+    breite = wert(getattr(p, "latitude", None), None, 6)
+    laenge = wert(getattr(p, "longitude", None), None, 6)
+    d = {
+        "breite": breite,
+        "laenge": laenge,
+        "hoehe": wert(getattr(p, "altitude", None), None, 0),
+        "richtung": wert(getattr(p, "heading", None), None, 0),
         "positionsart": etext(getattr(p, "position_type", None)),
         "strasse": strasse,
         "ort": stadt,
         "adresse": ", ".join(x for x in (strasse, stadt) if x),
     }
+    # Heimatort: nur rechnen, wenn BEIDE Seiten bekannt sind. Ein fehlender
+    # Heimatort ergibt keinen Wert, nicht "nicht zuhause" - das waere eine
+    # Aussage, die niemand geprueft hat.
+    hb, hl = cfg.get("heim_breite"), cfg.get("heim_laenge")
+    if hb != "" and hl != "" and breite is not None and laenge is not None:
+        m = entfernung_m(breite, laenge, hb, hl)
+        d["entfernung_m"] = m
+        d["zuhause"] = None if m is None else (1 if m <= int(cfg.get("heim_radius") or 150) else 0)
+    else:
+        d["entfernung_m"] = None
+        d["zuhause"] = None
+    return d
 
 
 def fahrzeug_abbilden(fahrzeug, cfg: dict, zyklus: int, stamm: dict) -> dict:
@@ -584,17 +891,26 @@ def fahrzeug_abbilden(fahrzeug, cfg: dict, zyklus: int, stamm: dict) -> dict:
         abschnitte.append(("wartung", abbild_wartung))
     for name, funktion in abschnitte:
         try:
-            d.update(funktion(fahrzeug))
+            d.update(funktion(fahrzeug, cfg))
         except Exception as err:  # noqa: BLE001
             ausfaelle[name] = fehlertext(err)
             melde_gebremst(f"ab_{name}", f"Abschnitt '{name}' konnte nicht gelesen werden: "
                                          f"{ausfaelle[name]}", 900)
-    if "wartung" not in [n for n, _ in abschnitte]:
-        # Zwischen zwei Wartungsabrufen den letzten bekannten Stand weiterreichen.
-        for k, v in stamm.items():
-            if k.startswith(("inspektion", "oelservice")):
-                d.setdefault(k, v)
+    # Den letzten bekannten Wartungsstand weiterreichen - und zwar in BEIDEN
+    # Faellen: wenn der Abschnitt ausgelassen wurde UND wenn er ausgefallen ist.
+    #
+    # Bis 0.9.9 sah die Bedingung nur den ersten Fall. Bei einem Ausfall stand
+    # "wartung" ja in abschnitte, der Zweig lief nicht, und der Endpunkt lieferte
+    # fuer diesen einen Takt INSPTAGE=-, obwohl der Wert bekannt war. Am
+    # Bildschirm flackerte er, in Loxone blieb er stehen. Gemessen am 27.08.2026.
+    for k, v in stamm.items():
+        if k.startswith(("inspektion", "oelservice")) and d.get(k) is None:
+            d[k] = v
     d["ausfaelle"] = ausfaelle
+    # Der Ausfalltext geht als eigenes MQTT-Thema hinaus: ein leeres Feld
+    # nennt den Grund nicht, und ein Blick ins Protokoll setzt voraus, dass
+    # jemand hinsieht.
+    d["ausfalltext"] = "; ".join(f"{n}: {t}" for n, t in sorted(ausfaelle.items()))
     d["ok"] = 0 if len(ausfaelle) >= 3 else 1
     return d
 
@@ -602,11 +918,23 @@ def fahrzeug_abbilden(fahrzeug, cfg: dict, zyklus: int, stamm: dict) -> dict:
 # ---------------------------------------------------------------------------
 # Verlauf (Ladezustand beziehungsweise Tankfuellstand ueber den Tag)
 # ---------------------------------------------------------------------------
-def verlauf_anhaengen(nummer: int, stand, reichweite, tage: int) -> None:
+def verlauf_anhaengen(nummer: int, stand, reichweite, km, tage: int) -> None:
+    """Einen Messpunkt an die Tagesdatei haengen.
+
+    Der mkdir steht in einem try: er wird aus abbild_schreiben() gerufen und
+    lag damit bis 0.9.9 ausserhalb jeder Absicherung des Takts. Ein OSError -
+    Datentraeger voll, Ordner schreibgeschuetzt - beendete den ganzen Dienst,
+    und weil der Sollmerker liegenblieb, startete der Waechter ihn im
+    Minutentakt neu.
+    """
     if stand is None:
         return
     ordner = PDATA / "verlauf"
-    ordner.mkdir(parents=True, exist_ok=True)
+    try:
+        ordner.mkdir(parents=True, exist_ok=True)
+    except OSError as err:
+        melde_gebremst("verlauf_ordner", f"Verlaufsordner nicht anlegbar ({err}).")
+        return
     datei = ordner / f"fahrzeug{nummer}_{time.strftime('%Y%m%d')}.csv"
     marke = PDATA / f".verlauf_ts_{nummer}"
     letzte = 0
@@ -618,7 +946,9 @@ def verlauf_anhaengen(nummer: int, stand, reichweite, tage: int) -> None:
         return
     try:
         with datei.open("a", encoding="utf-8") as f:
-            f.write(f"{int(time.time())};{stand};{reichweite if reichweite is not None else ''}\n")
+            f.write(f"{int(time.time())};{stand};"
+                    f"{reichweite if reichweite is not None else ''};"
+                    f"{km if km is not None else ''}\n")
         marke.write_text(str(int(time.time())))
     except OSError:
         return
@@ -629,6 +959,125 @@ def verlauf_anhaengen(nummer: int, stand, reichweite, tage: int) -> None:
                 alt.unlink()
         except OSError:
             pass
+
+
+# ---------------------------------------------------------------------------
+# Ladevorgaenge und Fahrverbrauch
+#
+# Beides braucht ZWEI Momentaufnahmen und ist deshalb aus einem Seitenaufruf
+# grundsaetzlich nicht erreichbar: der Takt ist die einzige Stelle, die den
+# Zustand fortschreibt. Oberflaeche und Endpunkt lesen ihn.
+#
+# Der fortgeschriebene Zustand liegt in einer eigenen Datei, damit er einen
+# Neustart des Dienstes uebersteht. Eine Zweitschrift daneben braucht es nicht:
+# Ladeprotokoll und Verbrauch sind neu erzeugbar, ein Merkwort waere es nicht.
+# ---------------------------------------------------------------------------
+DATEI_FORTSCHREIBUNG = PDATA / "fortschreibung.json"
+DATEI_LADUNGEN = PDATA / "ladungen.csv"
+
+# Unter dieser Fahrstrecke ist ein gerechneter Verbrauch Rauschen: der
+# Ladezustand wird in ganzen Prozent gemeldet, ein Prozent sind bei 60 kWh
+# schon 0,6 kWh. Bei 20 km ergaebe ein einziges Prozent Ablesefehler rund
+# 3 kWh/100 km - deshalb wird erst ab dieser Strecke gerechnet.
+VERBRAUCH_MIN_KM = 20
+
+
+def ladung_anhaengen(nummer: int, start: int, ende: int, soc_vor, soc_nach,
+                     kwh, km, quelle: str) -> None:
+    """Einen abgeschlossenen Ladevorgang protokollieren."""
+    try:
+        neu = not DATEI_LADUNGEN.exists()
+        with DATEI_LADUNGEN.open("a", encoding="utf-8") as f:
+            if neu:
+                f.write("# fahrzeug;start;ende;soc_vor;soc_nach;kwh;km;quelle\n")
+            f.write("%d;%d;%d;%s;%s;%s;%s;%s\n" % (
+                nummer, start, ende,
+                "" if soc_vor is None else soc_vor,
+                "" if soc_nach is None else soc_nach,
+                "" if kwh is None else round(kwh, 2),
+                "" if km is None else km,
+                mqtt_wert_saeubern(quelle, 40).replace(";", " ")))
+    except OSError as err:
+        melde_gebremst("ladungen", f"Ladeprotokoll nicht schreibbar ({err}).")
+        return
+    # Obergrenze: eine Datei, die nur waechst, ist eine Zeitbombe auf einer
+    # Speicherkarte. 2000 Zeilen sind rund 150 kB.
+    try:
+        zeilen = DATEI_LADUNGEN.read_text(encoding="utf-8").splitlines()
+        if len(zeilen) > 2000:
+            kopf = [z for z in zeilen[:1] if z.startswith("#")]
+            rest = [z for z in zeilen if not z.startswith("#")][-1500:]
+            DATEI_LADUNGEN.write_text("\n".join(kopf + rest) + "\n", encoding="utf-8")
+    except OSError:
+        pass
+
+
+def fortschreiben(nummer: int, f: dict, cfg: dict) -> dict:
+    """Ladevorgaenge erkennen und den Fahrverbrauch rechnen.
+
+    Rueckgabe: die Felder, die aus dem Vergleich zweier Momentaufnahmen
+    entstehen. Was sich nicht belegen laesst, bleibt leer - auch ein Verbrauch.
+    """
+    alle = json_lesen(DATEI_FORTSCHREIBUNG)
+    v = alle.get(str(nummer)) or {}
+    jetzt = int(time.time())
+    soc = f.get("soc")
+    km = f.get("kilometerstand")
+    laedt = f.get("laedt")
+    kapazitaet = f.get("batterie_nutzbar_kwh") or f.get("batterie_kwh")
+    aus: dict = {}
+
+    # ---- Ladevorgang ----
+    war = v.get("laedt")
+    if laedt == 1 and war != 1:
+        v["lade_start"] = jetzt
+        v["lade_soc"] = soc
+        v["lade_km"] = km
+    elif laedt == 0 and war == 1 and v.get("lade_start"):
+        vor = v.get("lade_soc")
+        kwh = None
+        if vor is not None and soc is not None and kapazitaet:
+            d = float(soc) - float(vor)
+            # Ein Ladevorgang, bei dem der Stand faellt, ist keiner. Das kommt
+            # vor: das Fahrzeug meldet "charging", waehrend es die Klimaanlage
+            # aus der Batterie speist.
+            kwh = round(d / 100.0 * float(kapazitaet), 2) if d > 0 else None
+        ladung_anhaengen(nummer, int(v["lade_start"]), jetzt, vor, soc, kwh,
+                         km, f.get("ladesaeule_name") or f.get("ladeart") or "")
+        v.pop("lade_start", None)
+        v.pop("lade_soc", None)
+        v.pop("lade_km", None)
+    v["laedt"] = laedt
+
+    # ---- Fahrverbrauch ----
+    # Gerechnet wird ueber einen abgeschlossenen Fahrabschnitt: seit der
+    # letzten Marke wurde nicht geladen, der Kilometerstand ist um mindestens
+    # VERBRAUCH_MIN_KM gestiegen und der Ladezustand ist gefallen.
+    if laedt == 1:
+        v["fahr_km"] = km
+        v["fahr_soc"] = soc
+    elif km is not None and soc is not None:
+        akm, asoc = v.get("fahr_km"), v.get("fahr_soc")
+        if akm is None or asoc is None:
+            v["fahr_km"], v["fahr_soc"] = km, soc
+        else:
+            dkm = float(km) - float(akm)
+            dsoc = float(asoc) - float(soc)
+            if dkm >= VERBRAUCH_MIN_KM and dsoc > 0 and kapazitaet:
+                aus["verbrauch"] = round(dsoc / 100.0 * float(kapazitaet) / dkm * 100.0, 1)
+                v["verbrauch"] = aus["verbrauch"]
+                v["fahr_km"], v["fahr_soc"] = km, soc
+            elif dkm < 0:
+                # Kilometerstand kleiner als zuvor: ein Fahrzeugtausch oder ein
+                # Fehler der Schnittstelle. Neu ansetzen statt eine negative
+                # Strecke zu rechnen.
+                v["fahr_km"], v["fahr_soc"] = km, soc
+    if "verbrauch" not in aus and v.get("verbrauch") is not None:
+        aus["verbrauch"] = v["verbrauch"]
+
+    alle[str(nummer)] = v
+    json_schreiben(DATEI_FORTSCHREIBUNG, alle)
+    return aus
 
 
 # ---------------------------------------------------------------------------
@@ -653,16 +1102,28 @@ def antwort_schreiben(kennung: str, ok: int, meldung: str, zusatz: dict | None =
 
 
 def fahrzeug_waehlen(fahrzeuge: list, nummer_oder_vin):
-    """Nimmt entweder die laufende Nummer (1-basiert) oder die Fahrgestellnummer."""
+    """Nimmt entweder die laufende Nummer (1-basiert) oder die Fahrgestellnummer.
+
+    Abgewiesen, nicht zurechtgebogen. Bis 0.9.9 fing das except jede
+    Zeichenkette ab und setzte n = 1 - eine VIN mit EINEM falschen Zeichen
+    ergab damit Fahrzeug 1. Bei zwei Fahrzeugen startete
+    'klima_start&fahrzeug=<VIN mit Tippfehler>' die Klimatisierung am falschen
+    Auto und meldete OK=1. Gemessen am 27.08.2026; der lesende Weg am Endpunkt
+    hat es immer richtig gemacht.
+
+    Leer oder gar nicht angegeben bleibt Fahrzeug 1 - das ist die Vorgabe,
+    nicht ein missratener Wert.
+    """
     s = str(nummer_oder_vin or "").strip()
+    if s == "":
+        return fahrzeuge[0] if fahrzeuge else None
     for f in fahrzeuge:
         v = str(wert(getattr(f, "vin", None)) or "")
         if v and v.upper() == s.upper():
             return f
-    try:
-        n = int(s)
-    except (TypeError, ValueError):
-        n = 1
+    if not s.isdigit():
+        return None
+    n = int(s)
     return fahrzeuge[n - 1] if 1 <= n <= len(fahrzeuge) else None
 
 
@@ -671,6 +1132,83 @@ def befehl_holen(objekt, name: str):
     cmds = getattr(objekt, "commands", None)
     verzeichnis = getattr(cmds, "commands", None) or {}
     return verzeichnis.get(name)
+
+
+# ---------------------------------------------------------------------------
+# Drosselung
+#
+# Volkswagen weist zu haeufige Anfragen mit HTTP 429 ab, und wer im gleichen
+# Takt weiter anklopft, verlaengert die Sperre. Beim Ueberschussladen liefert
+# Loxone denselben Ladestrom-Sollwert im Sekundentakt - ohne Entprellung
+# entstuenden daraus dreitausend Schreibbefehle in der Stunde.
+#
+# Drei Bremsen, alle einstellbar:
+#   abstand_abruf    Mindestabstand zwischen zwei Sofortabrufen
+#   befehle_stunde   Hoechstzahl schreibender Befehle je gleitender Stunde
+#   entprellung      Sperrzeit fuer denselben Befehl mit demselben Wert
+#
+# Ein gedrosselter Befehl wird ABGEWIESEN und gemeldet, nicht stillschweigend
+# verschluckt: ein Formular, das wortlos nichts tut, schickt den Anwender auf
+# die Suche nach einem Fehler, den es nicht gibt.
+# ---------------------------------------------------------------------------
+class Bremse:
+    """Fuehrt Buch ueber abgesetzte Befehle. Lebt im Dienstprozess."""
+
+    def __init__(self):
+        self.letzte: dict[str, tuple[float, str]] = {}
+        self.stunde: list[float] = []
+        self.letzter_abruf = 0.0
+
+    def _aufraeumen(self, jetzt: float) -> None:
+        grenze = jetzt - 3600
+        self.stunde = [t for t in self.stunde if t >= grenze]
+
+    def abruf_erlaubt(self, cfg: dict) -> tuple[bool, str]:
+        abstand = int(cfg.get("abstand_abruf") or 0)
+        if abstand <= 0:
+            return (True, "")
+        jetzt = time.time()
+        rest = int(self.letzter_abruf + abstand - jetzt)
+        if rest > 0:
+            return (False, f"Der letzte Sofortabruf ist keine {abstand} s her. "
+                           f"Noch {rest} s. Die Wartezeit steht im Reiter Einstellungen; "
+                           f"zu haeufige Anfragen weist Volkswagen mit HTTP 429 ab.")
+        self.letzter_abruf = jetzt
+        return (True, "")
+
+    def befehl_erlaubt(self, cfg: dict, schluessel: str, wert_text: str) -> tuple[bool, str]:
+        jetzt = time.time()
+        self._aufraeumen(jetzt)
+        entprellung = int(cfg.get("entprellung") or 0)
+        if entprellung > 0 and schluessel in self.letzte:
+            zeit, alt = self.letzte[schluessel]
+            if alt == wert_text and jetzt - zeit < entprellung:
+                return (False, f"Derselbe Befehl mit demselben Wert liegt weniger als "
+                               f"{entprellung} s zurueck. Er wird nicht noch einmal gesendet.")
+        hoechst = int(cfg.get("befehle_stunde") or 0)
+        if hoechst > 0 and len(self.stunde) >= hoechst:
+            return (False, f"In der letzten Stunde sind bereits {len(self.stunde)} Befehle "
+                           f"abgesetzt worden - das ist die eingestellte Obergrenze. "
+                           f"Volkswagen sperrt ein Konto, das zu oft schreibt.")
+        self.stunde.append(jetzt)
+        self.letzte[schluessel] = (jetzt, wert_text)
+        return (True, "")
+
+
+_BREMSE = Bremse()
+
+# Die Ja/Nein-Einstellungen, die 'einstellung&name=...' setzen kann.
+# Muessen zu vw_schalter() in webfrontend/html/vw_lib.php passen.
+#
+# Ob der Volkswagen-Connector fuer jede einen Schreibhaken registriert, ist
+# UNGEMESSEN - hier liegt kein Fahrzeug und der Connector ist nicht
+# installiert. Fehlt der Haken, wirft die Bibliothek, und die Antwort sagt es.
+SCHALTER = {
+    "sitzheizung":      ("climatization", "seat_heating"),
+    "klima_entriegeln": ("climatization", "climatization_at_unlock"),
+    "klima_ohne_netz":  ("climatization", "climatization_without_external_power"),
+    "stecker_auto":     ("charging", "auto_unlock"),
+}
 
 
 def befehl_ausfuehren(fahrzeuge: list, cfg: dict, b: dict) -> tuple[int, str, dict]:
@@ -685,11 +1223,21 @@ def befehl_ausfuehren(fahrzeuge: list, cfg: dict, b: dict) -> tuple[int, str, di
     aktion = str(b.get("aktion") or "")
 
     if aktion == "abruf":
+        ok, meldung = _BREMSE.abruf_erlaubt(cfg)
+        if not ok:
+            return (0, meldung, {})
         return (1, "Sofortabruf eingeplant.", {})
 
     if not cfg.get("steuerung_ein"):
         return (0, "Die Steuerung ist ausgeschaltet. Reiter Einstellungen, "
                    "Haken 'Schreibende Befehle zulassen'.", {})
+
+    # Der zweite Haken. Ver- und Entriegeln, Hupe und Lichthupe oeffnen das
+    # Fahrzeug beziehungsweise machen es auffindbar - sie haengen an einem
+    # eigenen Schalter, der ab Werk aus ist.
+    if aktion in EINGREIFEND and not cfg.get("eingreifend_ein"):
+        return (0, "Eingreifende Befehle sind gesperrt. Reiter Einstellungen, "
+                   "Haken 'Eingreifende Befehle zulassen'.", {})
 
     if not fahrzeuge:
         return (0, "Es ist noch kein Fahrzeug bekannt. Erst einen Abruf abwarten.", {})
@@ -697,8 +1245,17 @@ def befehl_ausfuehren(fahrzeuge: list, cfg: dict, b: dict) -> tuple[int, str, di
     f = fahrzeug_waehlen(fahrzeuge, b.get("fahrzeug"))
     if f is None:
         return (0, f"Fahrzeug '{b.get('fahrzeug')}' gibt es nicht. "
-                   f"Bekannt sind {len(fahrzeuge)} Fahrzeuge.", {})
+                   f"Bekannt sind {len(fahrzeuge)} Fahrzeuge. Angegeben werden koennen die "
+                   f"laufende Nummer oder die vollstaendige Fahrgestellnummer.", {})
     vin = str(wert(getattr(f, "vin", None)) or "")
+
+    # Drosselung. Der Schluessel enthaelt das Fahrzeug, damit zwei Autos
+    # einander nicht bremsen.
+    _dro_wert = ";".join(str(b.get(k, "")) for k in ("temp", "prozent", "ampere", "name", "wert"))
+    ok, meldung = _BREMSE.befehl_erlaubt(cfg, f"{vin or '1'}:{aktion}", _dro_wert)
+    if not ok:
+        return (0, meldung, {"vin": vin})
+
     nachsatz = (" Der Volkswagen-Server hat den Auftrag angenommen; ob das Fahrzeug ihn "
                 "ausfuehrt, zeigt der naechste Abruf.")
 
@@ -753,12 +1310,24 @@ def befehl_ausfuehren(fahrzeuge: list, cfg: dict, b: dict) -> tuple[int, str, di
         p = wert_zahl(b.get("prozent"))
         if p is None:
             return (0, "Der Prozentwert fuer die Ladegrenze fehlt oder ist keine Zahl.", {})
-        if p < 10 or p > 100:
-            return (0, f"{p} % ist keine zulaessige Ladegrenze. Zulaessig sind 10 bis 100 %.", {})
         einst = getattr(getattr(f, "charging", None), "settings", None)
         attr = getattr(einst, "target_level", None)
         if attr is None:
             return fehlt("Ladegrenze")
+        # Die Grenzen der BIBLIOTHEK lesen, nicht raten. Der Connector setzt
+        # fuer target_level minimum 50, maximum 100 und precision 10; bis
+        # 0.9.9 liess das Plugin 10 bis 100 zu, und ein Wert darunter kam als
+        # rohes "ValueError: Value 20.0% is below minimum 50.0%" beim Anwender
+        # an. Am Schwester-Connector gemessen; fuer den Volkswagen-Connector
+        # UNGEMESSEN, deshalb mit Rueckfall auf die weiten Grenzen.
+        lo = ganz(getattr(attr, "minimum", None), 10)
+        hi = ganz(getattr(attr, "maximum", None), 100)
+        lo, hi = max(0, min(lo, 100)), max(0, min(hi, 100))
+        if lo > hi:
+            lo, hi = 10, 100
+        if p < lo or p > hi:
+            return (0, f"{p} % ist keine zulaessige Ladegrenze. Dieses Fahrzeug nimmt "
+                       f"{lo} bis {hi} % an.", {})
         attr.value = float(p)
         return (1, f"Ladegrenze {p} % gesetzt (Volkswagen rundet auf die Stufen, die das "
                    f"Fahrzeug kennt - meist Zehnerschritte)." + nachsatz,
@@ -768,7 +1337,11 @@ def befehl_ausfuehren(fahrzeuge: list, cfg: dict, b: dict) -> tuple[int, str, di
         a = wert_zahl(b.get("ampere"))
         if a is None:
             return (0, "Der Ampere-Wert fehlt oder ist keine Zahl.", {})
-        if int(a) not in LADESTROM_STUFEN:
+        # Gerundet, nicht abgeschnitten: int(16.9) waere 16 gewesen, int(15.9)
+        # dagegen 15 und damit abgewiesen. Zwei benachbarte Eingaben, zwei
+        # verschiedene Sorten Antwort - das ist keine Grenze, das ist Zufall.
+        a_ganz = int(round(float(a)))
+        if a_ganz not in LADESTROM_STUFEN:
             return (0, f"{a} A ist keine zulaessige Stufe. Zulaessig sind: "
                        f"{', '.join(str(x) for x in LADESTROM_STUFEN)} A. "
                        f"Welche davon Ihr Fahrzeug kennt, haengt vom Modell ab: manche fuehren "
@@ -778,8 +1351,8 @@ def befehl_ausfuehren(fahrzeuge: list, cfg: dict, b: dict) -> tuple[int, str, di
         attr = getattr(einst, "maximum_current", None)
         if attr is None:
             return fehlt("Ladestrom")
-        attr.value = float(int(a))
-        return (1, f"Ladestrom {int(a)} A gesetzt." + nachsatz, {"ampere": int(a), "vin": vin})
+        attr.value = float(a_ganz)
+        return (1, f"Ladestrom {a_ganz} A gesetzt." + nachsatz, {"ampere": a_ganz, "vin": vin})
 
     if aktion in ("scheibe_ein", "scheibe_aus"):
         cmd = befehl_holen(getattr(f, "window_heatings", None), "start-stop")
@@ -795,6 +1368,50 @@ def befehl_ausfuehren(fahrzeuge: list, cfg: dict, b: dict) -> tuple[int, str, di
             return fehlt("Wecken")
         cmd.value = "wake"
         return (1, "Weckruf gesendet." + nachsatz, {"vin": vin})
+
+    # ---- ab 0.9.10: eingreifende Befehle ----
+    #
+    # Beide Befehlsklassen liegen im Kern von carconnectivity (gemessen an
+    # 0.11.10: LockUnlockCommand, HonkAndFlashCommand). Ob der
+    # Volkswagen-Connector sie registriert, ist UNGEMESSEN - hier liegt kein
+    # Fahrzeug. Fehlt der Befehl, sagt fehlt() es klar, statt zu raten.
+    if aktion in ("verriegeln", "entriegeln"):
+        if not zugang().get("spin"):
+            return (0, "Ver- und Entriegeln verlangt die vierstellige S-PIN des "
+                       "Volkswagen-Kontos. Reiter Einstellungen.", {})
+        cmd = befehl_holen(f, "lock-unlock")
+        if cmd is None:
+            return fehlt("Ver- und Entriegeln")
+        cmd.value = "lock" if aktion == "verriegeln" else "unlock"
+        return (1, ("Verriegeln angefordert." if aktion == "verriegeln"
+                    else "Entriegeln angefordert.") + nachsatz, {"vin": vin})
+
+    if aktion in ("blinken", "hupen"):
+        cmd = befehl_holen(f, "honk-flash")
+        if cmd is None:
+            return fehlt("Hupe und Lichthupe")
+        # Der Kern kennt 'flash' und 'honk-and-flash'; ein Hupen ohne Licht
+        # gibt es nicht. Die Beschriftung sagt das, statt es zu verschweigen.
+        cmd.value = "flash" if aktion == "blinken" else "honk-and-flash"
+        return (1, ("Lichthupe angefordert." if aktion == "blinken"
+                    else "Hupe und Lichthupe angefordert.") + nachsatz, {"vin": vin})
+
+    if aktion == "einstellung":
+        name = str(b.get("name") or "")
+        if name not in SCHALTER:
+            return (0, f"Unbekannte Einstellung '{name}'. Bekannt sind: "
+                       f"{', '.join(sorted(SCHALTER))}.", {})
+        w = schalt(b.get("wert"), -1)
+        if w < 0:
+            return (0, "Der Wert muss 0 oder 1 sein.", {})
+        bereich, feld = SCHALTER[name]
+        einst = getattr(getattr(f, bereich, None), "settings", None)
+        attr = getattr(einst, feld, None)
+        if attr is None:
+            return fehlt(name)
+        attr.value = bool(w)
+        return (1, f"Einstellung '{name}' auf {w} gesetzt." + nachsatz,
+                {"name": name, "wert": w, "vin": vin})
 
     return (0, f"Unbekannte Aktion '{aktion}'.", {})
 
@@ -839,6 +1456,12 @@ def warteschlange(fahrzeuge: list, cfg: dict) -> bool:
 # ---------------------------------------------------------------------------
 # Abbild schreiben
 # ---------------------------------------------------------------------------
+# Die veroeffentlichten Themen. Muessen zu vw_mqtt_themen() in
+# webfrontend/html/vw_lib.php passen; eine Zeile im Reiter Test zaehlt es bei
+# jedem Seitenaufbau nach. Die Tabelle dort ist die Anleitung - eine Liste,
+# die niemand nachmisst, laeuft auseinander.
+#
+# NEUE NAMEN WERDEN HINTEN ANGEHAENGT. Umbenennen bricht jede bestehende Anlage.
 MQTT_FELDER = (
     "soc", "tank_prozent", "reichweite_km", "kilometerstand", "verriegelt",
     "tueren_offen", "fenster_offen", "licht_an", "handbremse", "zustand",
@@ -847,10 +1470,89 @@ MQTT_FELDER = (
     "ladegrenze", "ladestrom_a", "kabel_verbunden", "stecker_verriegelt",
     "laden_fertig_um", "breite", "laenge", "inspektion_tage", "inspektion_km",
     "oelservice_tage", "oelservice_km",
+    # ---- ab 0.9.10 ----
+    "reichweite_elektro_km", "reichweite_verbrenner_km", "reichweite_wltp_km",
+    "batterie_kwh", "batterie_temp", "oelstand_prozent", "anzahl_antriebe",
+    "klima_fertig_um", "sitzheizung_ein", "klima_bei_entriegeln",
+    "stecker_entriegeln", "verbrauch", "adblue_km", "tueren_zahl",
+    "fenster_zahl", "standzeit_min", "hoehe", "entfernung_m", "zuhause",
+    "ladesaeule_kw", "ladeempfehlung", "ladung_kwh", "ladung_dauer_min",
+    "ladung_vor_stunden", "tag_kwh", "ladungen_gesamt",
+)
+
+# Themen mit einer Zeichenkette als Nutzlast. Sie bekommen in der Loxone-
+# Vorlage KEINEN virtuellen Eingang - ein virtueller Eingang ist eine Zahl.
+# Ueber MQTT sind sie trotzdem nuetzlich: der Zustandstext sagt 'conservation',
+# wo die Zahl nur 0 sagt.
+MQTT_TEXTFELDER = (
+    "zustand_text", "klima_text", "ladezustand_text", "ladeart",
+    "externe_stromversorgung", "positionsart", "adresse", "modell", "vin",
+    "kennzeichen", "software", "tueren_namen", "fenster_namen",
+    "ladesaeule_name", "ladesaeule_betreiber", "ausfalltext",
+)
+
+# Themen oberhalb der Fahrzeugebene. 'ts' und 'zaehler' sind das Lebenszeichen:
+# ueber MQTT gibt es kein Alter, nur einen Zeitstempel, und der Miniserver
+# rechnet selbst. Der Zaehler beantwortet, was der Zeitstempel nicht kann - ein
+# Raspberry ohne Echtzeituhr springt beim ersten Zeitabgleich.
+MQTT_OBEN = (
+    "ok", "fahrzeuge", "ts", "zaehler", "fehler_folge", "fehlertext",
 )
 
 
-def abbild_schreiben(stand: dict, cfg: dict, ok: int, fehler: str = "") -> dict:
+def ladebilanz(nummer: int) -> dict:
+    """Die Kennzahlen des Ladeprotokolls fuer ein Fahrzeug.
+
+    Gelesen, nicht gerechnet: geschrieben hat sie fortschreiben(). Der Tageswert
+    zaehlt, was HEUTE beendet wurde - ein Ladevorgang ueber Mitternacht zaehlt
+    zum Tag seines Endes, sonst zaehlte er zweimal oder gar nicht.
+    """
+    aus = {"ladung_kwh": None, "ladung_dauer_min": None, "ladung_vor_stunden": None,
+           "tag_kwh": None, "ladungen_gesamt": None}
+    if not DATEI_LADUNGEN.exists():
+        return aus
+    try:
+        zeilen = DATEI_LADUNGEN.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return aus
+    meine = []
+    for z in zeilen:
+        if not z or z.startswith("#"):
+            continue
+        t = z.split(";")
+        if len(t) < 6 or ganz(t[0], -1) != nummer:
+            continue
+        meine.append(t)
+    if not meine:
+        return aus
+    aus["ladungen_gesamt"] = len(meine)
+    letzt = meine[-1]
+    start, ende = ganz(letzt[1], 0), ganz(letzt[2], 0)
+    if letzt[5] != "":
+        try:
+            aus["ladung_kwh"] = round(float(letzt[5]), 2)
+        except ValueError:
+            pass
+    if ende > start:
+        aus["ladung_dauer_min"] = int(round((ende - start) / 60))
+        aus["ladung_vor_stunden"] = int(round((time.time() - ende) / 3600))
+    tag0 = int(time.mktime(time.strptime(time.strftime("%Y-%m-%d"), "%Y-%m-%d")))
+    summe = 0.0
+    hat = False
+    for t in meine:
+        if ganz(t[2], 0) >= tag0 and t[5] != "":
+            try:
+                summe += float(t[5])
+                hat = True
+            except ValueError:
+                pass
+    if hat:
+        aus["tag_kwh"] = round(summe, 2)
+    return aus
+
+
+def abbild_schreiben(stand: dict, cfg: dict, ok: int, fehler: str = "",
+                     grund: str = "", zaehler: int = -1, fehler_folge: int = 0) -> dict:
     """Schreibt den Zwischenspeicher.
 
     Bei einem fehlgeschlagenen Abruf bleiben die zuletzt gueltigen Werte
@@ -858,11 +1560,20 @@ def abbild_schreiben(stand: dict, cfg: dict, ok: int, fehler: str = "") -> dict:
     sonst meldete der Endpunkt ploetzlich FAHRZEUG_UNBEKANNT, obwohl nur eine
     Anfrage schiefging, und ALTER bliebe klein - woran aber die
     Ausfallerkennung in Loxone haengt.
+
+    Das LEBENSZEICHEN geht dagegen bei JEDEM Durchgang hinaus, auch bei einer
+    Stoerung: ein virtueller Eingang behaelt seinen letzten Wert, bei MQTT mit
+    Retain sogar ueber jeden Neustart des Miniservers hinweg. Ein toter Dienst
+    saehe sonst aus wie ein ruhiges Haus - das ist keine fehlende Auskunft,
+    sondern eine Falschaussage.
     """
     fahrzeuge = stand.get("fahrzeuge") or {}
     lox = {
         "ok": ok,
         "fehler": fehler,
+        "grund": grund,
+        "zaehler": zaehler,
+        "fehler_folge": fehler_folge,
         "letzter_versuch": int(time.time()),
         "anzahl_fahrzeuge": len(fahrzeuge),
         "fahrzeuge": fahrzeuge,
@@ -870,33 +1581,232 @@ def abbild_schreiben(stand: dict, cfg: dict, ok: int, fehler: str = "") -> dict:
     if stand.get("ts"):
         lox["ts"] = int(stand["ts"])
     json_schreiben(DATEI_LOXONE, lox)
-    json_schreiben(DATEI_CACHE, {"ts": int(time.time()), "ok": ok,
+    json_schreiben(DATEI_CACHE, {"letzter_versuch": int(time.time()), "ok": ok,
                                  "fehler": fehler, "fahrzeuge": fahrzeuge})
 
     praefix = str(cfg.get("mqtt_topic") or "volkswagen").strip("/") or "volkswagen"
+    retain = 1 if cfg.get("mqtt_retain") else 0
+
+    # Das Lebenszeichen - immer, und bei einer Stoerung ohne die Messwerte.
+    # Die alten Messwerte erneut zu veroeffentlichen liesse sie frisch aussehen.
+    oben = {
+        "ok": ok,
+        "fahrzeuge": len(fahrzeuge),
+        "ts": int(stand.get("ts") or 0),
+        "zaehler": zaehler,
+        "fehler_folge": fehler_folge,
+        "fehlertext": fehler if fehler else "-",
+    }
     if not ok:
-        # Bei einer Stoerung nur das ok-Thema senden. Die alten Messwerte
-        # erneut zu veroeffentlichen liesse sie frisch aussehen.
         if cfg.get("mqtt_ein"):
-            mqtt_senden({"ok": 0}, praefix)
+            versucht, schlecht = mqtt_senden(oben, praefix, retain)
+            lox["mqtt_versucht"], lox["mqtt_schlecht"] = versucht, schlecht
+            json_schreiben(DATEI_LOXONE, lox)
         return lox
 
     for nummer, f in fahrzeuge.items():
         try:
             verlauf_anhaengen(int(nummer),
                               f.get("soc") if f.get("soc") is not None else f.get("tank_prozent"),
-                              f.get("reichweite_km"), cfg["verlauf_tage"])
+                              f.get("reichweite_km"), f.get("kilometerstand"),
+                              cfg["verlauf_tage"])
         except (TypeError, ValueError):
             pass
 
     if cfg.get("mqtt_ein"):
-        paare = {"ok": ok, "fahrzeuge": len(fahrzeuge)}
+        paare = dict(oben)
         for nummer, f in fahrzeuge.items():
             for feld in MQTT_FELDER:
                 paare[f"fahrzeug{nummer}/{feld}"] = f.get(feld)
-        mqtt_senden(paare, praefix)
+            for feld in MQTT_TEXTFELDER:
+                w = f.get(feld)
+                # Ein leeres Textfeld wird NICHT gesendet: mit Retain loeschte
+                # eine leere Nutzlast das behaltene Thema. mqtt_senden() faengt
+                # das ebenfalls ab; hier steht es, damit die Absicht sichtbar
+                # bleibt.
+                if w is not None and str(w).strip() != "":
+                    paare[f"fahrzeug{nummer}/{feld}"] = w
+        versucht, schlecht = mqtt_senden(paare, praefix, retain)
+        lox["mqtt_versucht"], lox["mqtt_schlecht"] = versucht, schlecht
+        json_schreiben(DATEI_LOXONE, lox)
 
     return lox
+
+
+# ---------------------------------------------------------------------------
+# Horcher auf fremde MQTT-Themen
+#
+# Zwei Verwendungen, beide freiwillig und ab Werk aus:
+#
+#   Ladeempfehlung     ein Thema mit einem Zahlenwert (Strompreis,
+#                      PV-Ueberschuss) wird gegen eine Grenze gehalten. Das
+#                      Ergebnis ist eine 1/0-EMPFEHLUNG als eigenes Feld - das
+#                      Plugin entscheidet nicht, es empfiehlt. Wer daraus eine
+#                      Ladefreigabe macht, tut das in Loxone und sieht es dort.
+#   Abfahrtszeit       das Thema des Abfahrts-Assistenten. Faellt die
+#                      Restzeit unter den eingestellten Vorlauf, wird die
+#                      Klimatisierung EINMAL je Abfahrt angefordert.
+#
+# paho-mqtt ist eine zusaetzliche Abhaengigkeit. Fehlt sie, laeuft alles
+# uebrige weiter und der Selbsttest SAGT es - ein Bedienelement, dessen Wert
+# nirgends ankommt, ist schlimmer als ein fehlendes.
+# ---------------------------------------------------------------------------
+class Horcher:
+    """Haelt eine MQTT-Verbindung und merkt sich die letzten Werte."""
+
+    def __init__(self):
+        self.werte: dict[str, str] = {}
+        self.klient = None
+        self.themen: tuple = ()
+        self.grund = ""
+        self.verbunden = False
+
+    def moeglich(self) -> tuple[bool, str]:
+        try:
+            import paho.mqtt.client  # noqa: F401
+            return (True, "")
+        except ImportError:
+            return (False, "Die Bibliothek paho-mqtt fehlt in der virtuellen Umgebung. "
+                           "Ohne sie gibt es weder Ladeempfehlung noch Vorklimatisierung; "
+                           "alles uebrige arbeitet unveraendert.")
+
+    def gewuenscht(self, cfg: dict) -> tuple:
+        t = []
+        if cfg.get("empf_thema"):
+            t.append(str(cfg["empf_thema"]))
+        if cfg.get("abfahrt_ein") and cfg.get("abfahrt_thema"):
+            t.append(str(cfg["abfahrt_thema"]))
+        return tuple(sorted(set(t)))
+
+    def pflegen(self, cfg: dict) -> None:
+        """Verbindung auf- oder abbauen, je nach Konfiguration.
+
+        Wird bei jedem Takt gerufen. Aendern sich die Themen, wird neu
+        abonniert - Einstellungen sollen ohne Neustart wirken.
+        """
+        soll = self.gewuenscht(cfg)
+        if not soll:
+            self.schliessen()
+            return
+        if self.klient is not None and soll == self.themen:
+            return
+        self.schliessen()
+        ok, grund = self.moeglich()
+        if not ok:
+            self.grund = grund
+            melde_gebremst("horcher_paho", grund, 86400)
+            return
+        z = mqtt_zustand()
+        broker = z.get("broker") or "127.0.0.1"
+        try:
+            port = int(z.get("brokerport") or 1883)
+        except (TypeError, ValueError):
+            port = 1883
+        try:
+            import paho.mqtt.client as mqtt
+
+            def bei_nachricht(_klient, _daten, nachricht):
+                try:
+                    self.werte[nachricht.topic] = nachricht.payload.decode("utf-8", "replace")
+                except Exception:  # noqa: BLE001 - eine unlesbare Nutzlast ist kein Wert
+                    pass
+
+            def bei_verbindung(klient, _daten, _flags, *_rest):
+                self.verbunden = True
+                for th in soll:
+                    try:
+                        klient.subscribe(th)
+                    except Exception:  # noqa: BLE001
+                        pass
+
+            def bei_trennung(*_a):
+                self.verbunden = False
+
+            # Der Aufruf unterscheidet sich zwischen paho 1.x und 2.x. Die
+            # Fassung wird nicht geraten, sondern abgefragt.
+            try:
+                k = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1)   # paho 2.x
+            except (AttributeError, TypeError):
+                k = mqtt.Client()                                    # paho 1.x
+            k.on_message = bei_nachricht
+            k.on_connect = bei_verbindung
+            k.on_disconnect = bei_trennung
+            k.connect_async(broker, port, 60)
+            k.loop_start()
+            self.klient = k
+            self.themen = soll
+            self.grund = ""
+            _LOG.info("MQTT-Horcher gestartet: %s:%s, Themen %s", broker, port, ", ".join(soll))
+        except Exception as err:  # noqa: BLE001
+            self.grund = fehlertext(err)
+            melde_gebremst("horcher_start", f"MQTT-Horcher nicht moeglich: {self.grund}", 3600)
+
+    def schliessen(self) -> None:
+        if self.klient is not None:
+            try:
+                self.klient.loop_stop()
+                self.klient.disconnect()
+            except Exception:  # noqa: BLE001
+                pass
+        self.klient = None
+        self.themen = ()
+        self.verbunden = False
+
+    def zahl(self, thema: str):
+        return komma(self.werte.get(thema))
+
+
+_HORCHER = Horcher()
+
+
+def ladeempfehlung(cfg: dict) -> int | None:
+    """1 = laden empfohlen, 0 = nicht, None = keine Aussage.
+
+    Keine Aussage ist ausdruecklich ein dritter Ausgang: ohne eingestelltes
+    Thema, ohne Grenze oder ohne empfangenen Wert wird nichts behauptet.
+    """
+    thema = str(cfg.get("empf_thema") or "")
+    grenze = komma(cfg.get("empf_grenze"))
+    if thema == "" or grenze is None:
+        return None
+    v = _HORCHER.zahl(thema)
+    if v is None:
+        return None
+    return 1 if ((v <= grenze) if cfg.get("empf_kleiner") else (v >= grenze)) else 0
+
+
+def abfahrt_pruefen(cfg: dict, fahrzeuge: list) -> None:
+    """Klimatisierung vor der naechsten Abfahrt anfordern - einmal je Abfahrt.
+
+    Das Thema des Abfahrts-Assistenten fuehrt die Restzeit in Minuten. Faellt
+    sie unter den Vorlauf, wird EINMAL angefordert; der Merker wird erst
+    zurueckgesetzt, wenn die Restzeit wieder ueber dem Vorlauf liegt. Ohne
+    diesen Merker liefe die Anforderung im Takt weiter, und Volkswagen sperrt
+    ein Konto, das zu oft schreibt.
+    """
+    if not cfg.get("abfahrt_ein") or not cfg.get("abfahrt_thema"):
+        return
+    if not cfg.get("steuerung_ein") or not fahrzeuge:
+        return
+    rest = _HORCHER.zahl(str(cfg["abfahrt_thema"]))
+    if rest is None:
+        return
+    vorlauf = int(cfg.get("abfahrt_vorlauf") or 20)
+    global _ABFAHRT_GEMELDET
+    if rest > vorlauf:
+        _ABFAHRT_GEMELDET = False
+        return
+    if _ABFAHRT_GEMELDET or rest < 0:
+        return
+    _ABFAHRT_GEMELDET = True
+    ok, meldung, _ = befehl_ausfuehren(fahrzeuge, cfg, {
+        "aktion": "klima_start", "fahrzeug": "1",
+        "temp": cfg.get("abfahrt_temp", 21), "von": "abfahrt"})
+    _LOG.info("Vorklimatisierung (Abfahrt in %s min, Vorlauf %s min): ok=%s %s",
+              rest, vorlauf, ok, meldung)
+
+
+_ABFAHRT_GEMELDET = False
 
 
 def zustand_schreiben(**felder) -> None:
@@ -1006,6 +1916,14 @@ def signal_behandeln(*_):
 # belegt sind nur SIGTERM und SIGINT.
 GRENZE_ABRUF = 180
 
+# Dieselbe Ueberlegung fuer den SCHREIBWEG. attr.value = ... ist keine
+# Zuweisung, sondern eine blockierende HTTP-Anfrage: der Connector setzt fuer
+# seine Sitzung timeout 180 mit drei Wiederholungen, also bis zu rund 540
+# Sekunden je Befehl. In dieser Zeit wuerde weder die Warteschlange abgefragt
+# noch der Takt weitergezaehlt. 120 s sind reichlich fuer eine Anfrage, die
+# normalerweise unter einer Sekunde beantwortet wird.
+GRENZE_BEFEHL = 120
+
 
 class Zeitgrenze:
     """Bricht einen haengenden Aufruf nach $sekunden ab."""
@@ -1040,8 +1958,18 @@ def dienst(einmal: bool = False) -> int:
     cfg = config()
     z = zugang()
     if not z["email"] or not z["passwort"]:
-        _LOG.error("Zugangsdaten fehlen. Reiter Einstellungen der Plugin-Oberflaeche oeffnen.")
-        zustand_schreiben(ok=0, fehler="Zugangsdaten fehlen.")
+        # Den Sollmerker MITNEHMEN. Bis 0.9.9 blieb er liegen, der Waechter
+        # startete den Dienst jede Minute neu, jeder Versuch schrieb eine Zeile
+        # ins Protokoll - rund 1440 am Tag, die die Logdatei umwaelzen. Ein
+        # Sollmerker, der einen gescheiterten Start ueberlebt, macht daraus
+        # eine Endlosschleife.
+        try:
+            (PDATA / "soll_laufen").unlink()
+        except OSError:
+            pass
+        _LOG.error("Zugangsdaten fehlen. Reiter Einstellungen der Plugin-Oberflaeche oeffnen. "
+                   "Der Dienst bleibt angehalten, bis sie eingetragen sind.")
+        zustand_schreiben(ok=0, grund="ZUGANG_FEHLT", fehler="Zugangsdaten fehlen.")
         return 1
 
     _LOG.info("Dienst startet (Takt %s s, Steuerung %s).",
@@ -1063,16 +1991,25 @@ def dienst(einmal: bool = False) -> int:
 
     stand: dict = {"ts": 0, "fahrzeuge": {}}
     zyklus = 0
+    zaehler = -1
     fehler_folge = 0
     stammdaten: dict[str, dict] = {}
+    # Die zuletzt bekannte Fahrzeugliste. Bis 0.9.9 stand sie in der Schleife
+    # und wurde bei jedem Durchgang auf [] gesetzt: nach EINEM fehlgeschlagenen
+    # Abruf meldete jeder Schaltbefehl "Es ist noch kein Fahrzeug bekannt" -
+    # mit der Bremse bis zu 3600 Sekunden lang, obwohl das Auto fuenf Minuten
+    # vorher noch da war. Die Garage haelt die Objekte unveraendert weiter;
+    # geleert wird sie erst in connector.shutdown().
+    liste: list = []
 
     try:
         while _LAUF:
             cfg = config()  # Aenderungen aus der Oberflaeche ohne Neustart uebernehmen
+            _HORCHER.pflegen(cfg)
             ok = 0
             fehler = ""
+            grund = "OK"
             fahrzeuge: dict[str, dict] = {}
-            liste: list = []
             try:
                 # Mit Wecker: ohne ihn haelt ein Server, der die Verbindung
                 # annimmt und dann schweigt, den ganzen Dienst an - samt
@@ -1080,30 +2017,53 @@ def dienst(einmal: bool = False) -> int:
                 with Zeitgrenze(GRENZE_ABRUF, "Der Abruf bei Volkswagen"):
                     cc.fetch_all()
                 garage = cc.get_garage()
-                liste = list(garage.list_vehicles()) if garage is not None else []
-                liste.sort(key=lambda f: str(wert(getattr(f, "vin", None)) or ""))
-                for i, f in enumerate(liste, start=1):
+                neu = list(garage.list_vehicles()) if garage is not None else []
+                neu.sort(key=lambda f: str(wert(getattr(f, "vin", None)) or ""))
+                if neu:
+                    liste = neu
+                for i, f in enumerate(neu, start=1):
                     vin = str(wert(getattr(f, "vin", None)) or str(i))
                     stammdaten.setdefault(vin, {})
                     abbild = fahrzeug_abbilden(f, cfg, zyklus, stammdaten[vin])
                     for k, v in abbild.items():
                         if k.startswith(("inspektion", "oelservice")) and v is not None:
                             stammdaten[vin][k] = v
+                    # Was zwei Momentaufnahmen braucht: Ladevorgaenge und
+                    # Fahrverbrauch. Der Takt ist die einzige Stelle, die den
+                    # Zustand fortschreibt.
+                    try:
+                        abbild.update(fortschreiben(i, abbild, cfg))
+                        abbild.update(ladebilanz(i))
+                    except Exception as err:  # noqa: BLE001
+                        melde_gebremst("fortschreibung",
+                                       f"Ladeprotokoll: {fehlertext(err)}", 3600)
+                    abbild["ladeempfehlung"] = ladeempfehlung(cfg)
                     fahrzeuge[str(i)] = abbild
                 ok = 1 if fahrzeuge and any(x.get("ok") for x in fahrzeuge.values()) else 0
-                if not liste:
+                if not neu:
                     fehler = "Das Konto fuehrt kein Fahrzeug."
+                    grund = "KEIN_FAHRZEUG"
+                elif not ok:
+                    grund = "ABSCHNITTE"
                 fehler_folge = 0 if ok else fehler_folge + 1
             except Exception as err:  # noqa: BLE001
                 fehler = fehlertext(err)
+                grund = grund_von(err)
                 fehler_folge += 1
                 melde_gebremst("abruf", f"Abruf fehlgeschlagen: {fehler}", 900)
 
             if ok and fahrzeuge:
                 stand = {"ts": int(time.time()), "fahrzeuge": fahrzeuge}
-            abbild_schreiben(stand, cfg, ok, fehler)
-            zustand_schreiben(ok=ok, fehler=fehler, zyklus=zyklus, fehler_folge=fehler_folge,
+            # Der Zaehler laeuft bei JEDEM Durchgang eine Stelle weiter, auch
+            # bei einer Stoerung: er beantwortet die Frage "arbeitet der Dienst
+            # noch", nicht "war der Abruf erfolgreich". Dafuer gibt es ok.
+            zaehler = (zaehler + 1) % 1000
+            abbild_schreiben(stand, cfg, ok, fehler, grund, zaehler, fehler_folge)
+            zustand_schreiben(ok=ok, fehler=fehler, grund=grund, zyklus=zyklus,
+                              zaehler=zaehler, fehler_folge=fehler_folge,
                               pid=os.getpid(), intervall=cfg["intervall"],
+                              horcher=1 if _HORCHER.verbunden else 0,
+                              horcher_grund=_HORCHER.grund,
                               anzahl_fahrzeuge=len(stand["fahrzeuge"]))
             rechte_sichern()
             zyklus += 1
@@ -1118,13 +2078,23 @@ def dienst(einmal: bool = False) -> int:
                                1800)
             while rest > 0 and _LAUF:
                 try:
-                    if warteschlange(liste, cfg):
-                        break  # Sofortabruf angefordert
+                    # Auch die Warteschlange bekommt einen Wecker. Ein
+                    # Schreibbefehl ist keine Zuweisung, sondern eine
+                    # blockierende HTTP-Anfrage: der Connector setzt timeout
+                    # 180 mit drei Wiederholungen, also bis zu neun Minuten je
+                    # Befehl. Bis 0.9.9 stand der Wecker nur um den Abruf -
+                    # obwohl der Kommentar darueber ihn genau damit begruendet,
+                    # dass sonst die Befehlswarteschlange mit anhaelt.
+                    with Zeitgrenze(GRENZE_BEFEHL, "Ein Schreibbefehl an Volkswagen"):
+                        if warteschlange(liste, cfg):
+                            break  # Sofortabruf angefordert
+                    abfahrt_pruefen(cfg, liste)
                 except Exception as err:  # noqa: BLE001
                     _LOG.error("Warteschlange: %s", fehlertext(err))
                 time.sleep(1)
                 rest -= 1
     finally:
+        _HORCHER.schliessen()
         try:
             cc.shutdown()
         except Exception:  # noqa: BLE001
@@ -1155,6 +2125,12 @@ def rechte_sichern() -> None:
 def selbsttest() -> int:
     zeilen = []
     fehler = 0
+    # Die Konfiguration GANZ am Anfang lesen. Bis zur Messung dieser Fassung
+    # stand sie in der Mitte, und die S-PIN-Zeile darueber griff bereits auf
+    # sie zu: UnboundLocalError, der Selbsttest brach ohne eine einzige
+    # ausgegebene Zeile ab - und gab dabei 1 zurueck, was von aussen wie
+    # "Beanstandungen gefunden" aussieht statt wie "abgestuerzt".
+    c = config()
 
     v = sys.version_info
     if v >= (3, 9):
@@ -1215,9 +2191,18 @@ def selbsttest() -> int:
             fehler += 1
             zeilen.append(f"[FEHL] Die S-PIN hat {len(z['spin'])} Zeichen - erwartet werden "
                           f"genau vier Ziffern")
+    elif c.get("eingreifend_ein"):
+        # Seit 0.9.10 bietet das Plugin Ver- und Entriegeln an - der Satz
+        # "das dieses Plugin nicht anbietet" war damit falsch geworden. Ein
+        # Hilfetext, der eine Funktion verschweigt, die es gibt, ist so
+        # schaedlich wie einer, der eine verspricht, die es nicht gibt.
+        fehler += 1
+        zeilen.append("[FEHL] Keine S-PIN hinterlegt, aber eingreifende Befehle sind "
+                      "zugelassen. Ver- und Entriegeln wird ohne S-PIN abgewiesen; "
+                      "Hupe und Lichthupe gehen auch ohne.")
     else:
-        zeilen.append("[INFO] Keine S-PIN hinterlegt (nur fuer Ver- und Entriegeln noetig, "
-                      "das dieses Plugin nicht anbietet)")
+        zeilen.append("[INFO] Keine S-PIN hinterlegt. Sie wird nur fuer Ver- und Entriegeln "
+                      "gebraucht, und das steht hinter dem zweiten Haken, der aus ist.")
 
     for name, p, soll in (("Zugangsdatei", DATEI_ZUGANG, True),
                           ("Markendatei der Bibliothek", DATEI_TOKEN, False)):
@@ -1235,24 +2220,66 @@ def selbsttest() -> int:
             else:
                 zeilen.append(f"[INFO] {name} noch nicht angelegt (entsteht beim ersten Abruf)")
 
-    c = config()
     zeilen.append(f"[INFO] Takt {c['intervall']} s (Untergrenze der Bibliothek: {TAKT_MIN} s), "
                   f"Wartung alle {c['takt_wartung']} Takte")
     zeilen.append(f"[INFO] Schreibende Befehle: "
                   f"{'zugelassen' if c.get('steuerung_ein') else 'gesperrt'}, "
                   f"Zieltemperatur erlaubt von {c['temp_min']} bis {c['temp_max']} Grad")
 
+    # Die MQTT-Zeilen nur beurteilen, wenn MQTT ueberhaupt eingeschaltet ist.
+    # Bis 0.9.9 stand hier ein rotes Kreuz samt dem Satz "Ohne das kommt am
+    # Miniserver nichts an" - auch bei ausgeschaltetem MQTT, wo der Satz
+    # schlicht falsch ist: ueber den Endpunkt kommt sehr wohl etwas an.
     m = mqtt_zustand()
-    if not m["gefunden"]:
+    if not c.get("mqtt_ein"):
+        zeilen.append("[INFO] MQTT ist in den Einstellungen ausgeschaltet - der Miniserver "
+                      "wird ueber den Endpunkt bedient. Das Gateway geht dieses Plugin "
+                      "dann nichts an.")
+    elif not m["gefunden"]:
         zeilen.append("[FEHL] Im general.json des LoxBerry ist kein MQTT-Abschnitt zu finden")
         fehler += 1
     elif m["autostart"]:
         zeilen.append(f"[OK]   MQTT-Gateway auf Autostart, Broker {m['broker']}:{m['brokerport']}, "
-                      f"UDP-Eingang {m['udpport']}")
+                      f"UDP-Eingang {m['udpport']}, "
+                      f"{'Werte werden behalten (retain)' if c.get('mqtt_retain') else 'ohne retain'}")
     else:
         zeilen.append("[FEHL] Das MQTT-Gateway ist nicht auf Autostart gestellt "
                       "(System -> MQTT Gateway). Ohne das kommt am Miniserver nichts an.")
         fehler += 1
+
+    # Die Themenliste: sendet der Dienst genau das, was die Oberflaeche
+    # verspricht? Gezaehlt wird hier nur die eigene Seite; den Abgleich gegen
+    # vw_mqtt_themen() macht der Reiter Test, der beide Dateien lesen kann.
+    zeilen.append(f"[INFO] Themen je Fahrzeug: {len(MQTT_FELDER)} Zahlen, "
+                  f"{len(MQTT_TEXTFELDER)} Texte, dazu {len(MQTT_OBEN)} oberhalb")
+
+    # Der Horcher - nur wenn er gebraucht wird.
+    if c.get("empf_thema") or (c.get("abfahrt_ein") and c.get("abfahrt_thema")):
+        moeglich, grund = _HORCHER.moeglich()
+        if moeglich:
+            zeilen.append("[OK]   paho-mqtt ist vorhanden - Ladeempfehlung und "
+                          "Vorklimatisierung sind moeglich")
+        else:
+            fehler += 1
+            zeilen.append(f"[FEHL] {grund}")
+    else:
+        zeilen.append("[INFO] Weder Ladeempfehlung noch Vorklimatisierung eingerichtet - "
+                      "es wird auf kein fremdes Thema gehorcht")
+
+    # Die Entfernungsrechnung gegen einen bekannten Wert halten. Dieselbe
+    # Formel steht in PHP; laufen sie auseinander, zeigt die Oberflaeche eine
+    # andere Entfernung als Loxone. Muenchen -> Berlin sind rund 504 km.
+    _e = entfernung_m(48.1372, 11.5756, 52.5200, 13.4050)
+    if _e is not None and 500000 <= _e <= 508000:
+        zeilen.append(f"[OK]   Entfernungsrechnung geeicht (Muenchen-Berlin: {_e} m)")
+    else:
+        fehler += 1
+        zeilen.append(f"[FEHL] Die Entfernungsrechnung liefert {_e} m statt rund 504000 m")
+
+    if NICHT_INSTALLIERT:
+        zeilen.append(f"[INFO] Dieses Plugin ist NICHT installiert - es laeuft aus einem "
+                      f"entpackten Archiv. Die Pfade unten zeigen deshalb neben den Ordner "
+                      f"({LBHOME}); das ist kein Fehler, aber auch keine Pruefung der Anlage.")
 
     lox = json_lesen(DATEI_LOXONE)
     if lox:

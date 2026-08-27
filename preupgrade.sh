@@ -52,6 +52,10 @@ for f in vw.json zugang.json; do
         cp -p "$CFGDIR/$f" "$BASE/config/plugins/$PFOLDER.backup.$f" || true
     fi
 done
+# BEIDE Zweitschriften auf 0600. cp -p uebernimmt zwar den Quellmodus, aber
+# in vw.json steht das Aktionstoken des unangemeldeten Endpunkts, und aus
+# einer aelteren Fassung kann die Datei noch mit 0644 dastehen.
 chmod 600 "$BASE/config/plugins/$PFOLDER.backup.zugang.json" 2>/dev/null || true
+chmod 600 "$BASE/config/plugins/$PFOLDER.backup.vw.json" 2>/dev/null || true
 echo "<OK> preupgrade abgeschlossen."
 exit 0

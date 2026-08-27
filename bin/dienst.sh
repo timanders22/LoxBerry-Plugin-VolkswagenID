@@ -60,8 +60,22 @@ starten() {
         echo "FEHLER: virtuelle Python-Umgebung fehlt ($PY). Plugin neu installieren."
         return 1
     fi
+    # Auf INHALT pruefen, nicht nur auf Vorhandensein.
+    #
+    # Bis 0.9.9 stand hier nur -f. Eine Datei mit leerem Passwort - und die
+    # entsteht beim ersten Speichern der E-Mail-Adresse - liess den Start zu;
+    # vw.py stellte dann fest, dass die Zugangsdaten fehlen, gab 1 zurueck und
+    # war weg. Der Sollmerker blieb liegen, der Waechter startete jede Minute
+    # neu: rund 1440 Zyklen am Tag, jeder mit drei Zeilen im Protokoll.
     if [ ! -f "$PCONFIG/zugang.json" ]; then
         echo "FEHLER: Zugangsdaten fehlen ($PCONFIG/zugang.json). Erst in der Oberflaeche eintragen."
+        return 1
+    fi
+    if ! grep -q '"passwort"[[:space:]]*:[[:space:]]*"[^"]\{1,\}"' "$PCONFIG/zugang.json" 2>/dev/null \
+       || ! grep -q '"email"[[:space:]]*:[[:space:]]*"[^"]\{1,\}"' "$PCONFIG/zugang.json" 2>/dev/null; then
+        echo "FEHLER: In $PCONFIG/zugang.json fehlt der Benutzername oder das Passwort."
+        echo "        Reiter Einstellungen der Plugin-Oberflaeche. Der Dienst wird nicht"
+        echo "        gestartet - sonst liefe er in eine Neustartschleife."
         return 1
     fi
     touch "$SOLL"

@@ -122,9 +122,34 @@ for f in vw.json zugang.json; do
         rm -f "$BK" && echo "<OK> Sicherung entfernt: $PFOLDER.backup.$f"
     fi
 done
-echo "<INFO> Die Zugangsdaten des Volkswagen-Kontos sind damit vom LoxBerry"
-echo "<INFO> entfernt. Die Anmeldemarken (token.json) liegen im Datenordner"
-echo "<INFO> und gehen mit diesem weg."
+
+# ---------------------------------------------------------------
+# 2b. Die LEBENDEN Geheimnisse, mit derselben Sorgfalt
+# ---------------------------------------------------------------
+#
+# Bis 0.9.9 wurden nur die Zweitschriften ueberschrieben; zugang.json und
+# token.json ueberliess das Skript dem purge_installation des LoxBerry, also
+# einem einfachen rm. Das ist inkonsequent gegen die eigene Begruendung zwei
+# Absaetze weiter oben - und die Meldung darunter behauptete mehr, als getan
+# wurde. In token.json steht ein gueltiger Zugang zum Konto, auch ohne Passwort.
+GELOESCHT=0
+# vw.json.kaputt gehoert dazu: es ist eine Kopie der Konfiguration und traegt
+# damit das Aktionstoken. Eine Datei, die nur "kaputt" heisst, ist deshalb
+# nicht harmlos.
+for f in "$PCONFIG/$PFOLDER/zugang.json" "$PDATA/token.json" \
+         "$PDATA/bibliothek_cache.json" "$PCONFIG/$PFOLDER/vw.json" \
+         "$PCONFIG/$PFOLDER/vw.json.kaputt"; do
+    if [ -f "$f" ]; then
+        LAENGE=$(stat -c %s "$f" 2>/dev/null || echo 0)
+        [ "$LAENGE" -gt 0 ] && dd if=/dev/zero of="$f" bs=1 count="$LAENGE" \
+            conv=notrunc >/dev/null 2>&1
+        rm -f "$f" && GELOESCHT=$((GELOESCHT + 1))
+    fi
+done
+echo "<OK> $GELOESCHT Datei(en) mit Zugangsdaten oder Anmeldemarken ueberschrieben"
+echo "<OK> und entfernt."
+echo "<INFO> Die Zugangsdaten des Volkswagen-Kontos und die Anmeldemarken sind"
+echo "<INFO> damit vom LoxBerry entfernt - ueberschrieben, nicht nur ausgetragen."
 
 # ---------------------------------------------------------------
 # 3. Hinweis auf das, was LoxBerry selbst wegraeumt
