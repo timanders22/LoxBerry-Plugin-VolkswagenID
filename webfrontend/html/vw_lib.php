@@ -225,6 +225,23 @@ function vw_regeln()
          *
          * Zugelassen ist deshalb alles, was ohne Kodierung in eine Adresse
          * passt. Abgewiesen wird, was dort Schaden anrichtet. */
+        /* {0,64} - die Laenge 0 bleibt ZULAESSIG, und das ist Absicht.
+         *
+         * Beim Bau von 0.9.12 stand hier zuerst {16,64}, dann {1,64}. Beides
+         * war falsch, und der Pruefstand hat es gefunden: sicherung_wirkung.py
+         * baut seine gueltige Probe aus vw_vorgaben(), und dort ist das Token
+         * leer - die Probe wurde abgelehnt, "gueltig:ROT" an einer Funktion,
+         * die richtig arbeitet. Ein leeres Token in einer SICHERUNGSDATEI
+         * heisst "kein Token gesichert" und ist kein unzulaessiger Wert.
+         *
+         * Ein zu enges Muster waere ausserdem der Vorfall vom 27.08.2026 noch
+         * einmal: es verwirft ein gueltiges, von Hand gesetztes Token, und
+         * der Schaden ist derselbe wie bei einem verlorenen.
+         *
+         * Die Frage "fehlt hier ein Token, obwohl schon eine Konfiguration
+         * besteht?" gehoert nicht in die Wertepruefung, sondern in vw_token()
+         * - dort wird sie seit 0.9.12 gestellt und protokolliert. Und wie
+         * stark das Token ist, meldet der Reiter Test. */
         'aktionstoken'       => array('text', '#^[A-Za-z0-9_.\-]{0,64}$#', 64),
         'wartezeit'          => array('ganz', 0, 30),
         'wartezeit_endpunkt' => array('ganz', 0, 15),
@@ -621,6 +638,10 @@ function vw_zugang_loeschen()
         }
         // Ueberschreiben, dann entfernen: nur unlink liesse den Inhalt auf
         // der Karte stehen, bis der Platz neu vergeben wird.
+        // filesize() liest aus dem stat-Zwischenspeicher. In der
+        // Weboberflaeche ist er je Aufruf frisch, der Fehler waere hier also
+        // latent - die Klasse wird trotzdem geschlossen, sie kostet nichts.
+        clearstatcache(true, $f);
         $laenge = (int) @filesize($f);
         if ($laenge > 0) {
             @file_put_contents($f, str_repeat('0', $laenge));
@@ -693,10 +714,29 @@ function vw_token()
          * ungueltig. Wenn hier eines entsteht, weil das alte gegen vw_regeln()
          * durchgefallen ist, muss das im Protokoll stehen - sonst sucht der
          * Anwender einen Fehler in Loxone, den es dort nicht gibt. */
+        /* Zwei Faelle, und nur der zweite ist harmlos:
+         *
+         *   - Es GAB ein Token, und es ist weg. Dann muss das ins Protokoll,
+         *     sonst sucht der Betreiber den Fehler in Loxone, wo keiner ist.
+         *   - Es gab noch nie eines (Neuinstallation). Dann ist das Entstehen
+         *     der Normalfall und keine Meldung wert.
+         *
+         * Unterschieden wird an der Zweitschrift und an der Lage: eine
+         * bestehende Anlage hat eine Konfiguration, eine frische nicht.
+         * Bis 0.9.11 haing die Meldung allein an $lage['abgewiesen'] - ein
+         * LEERES Token kam dort nie an, weil die Regel die Laenge 0 zuliess
+         * (behoben, siehe vw_regeln). Damit blieb genau der Fall stumm, fuer
+         * den diese Zeilen geschrieben wurden. */
         if (isset($lage['abgewiesen']['aktionstoken'])) {
             vw_log_zeile('Das hinterlegte Aktionstoken war unzulaessig und wurde durch '
                        . 'ein neues ersetzt. ALLE im Miniserver eingetragenen Adressen '
                        . 'muessen nachgezogen werden - Reiter Einbindung in Loxone.');
+        } elseif ($lage['lage'] !== 'leer') {
+            vw_log_zeile('Es war kein Aktionstoken hinterlegt, obwohl bereits eine '
+                       . 'Konfiguration bestand - es wurde ein neues erzeugt. ALLE im '
+                       . 'Miniserver eingetragenen Adressen muessen nachgezogen werden '
+                       . '- Reiter Einbindung in Loxone. Haeufigste Ursache: eine '
+                       . 'zurueckgespielte Sicherung ohne Token.');
         }
         $cfg['aktionstoken'] = vw_token_erzeugen();
         vw_config_speichern($cfg);
@@ -959,8 +999,20 @@ function vw_selbsttest()
 function vw_befehl_absetzen($befehl, $wartezeit = null)
 {
     $p = vw_paths();
-    $cfg = vw_config();
+    /* vw_config(FALSE) - diese Funktion wird auch vom unangemeldeten
+     * Endpunkt gerufen.
+     *
+     * Gemessen am 03.09.2026 unter PHP 7.4 und 8.4: html/index.php liest die
+     * Konfiguration ausdruecklich mit vw_config(false) ("NICHTS ANLEGEN"),
+     * rief dann aber diese Funktion, und die holte sie mit der Vorgabe
+     * $erzeugen = true noch einmal. Der Zwischenspeicher unterscheidet nach
+     * 'j'/'n', der false-Aufruf schuetzte also nicht: bei fehlender oder
+     * beschaedigter Datei schrieb der Endpunkt sie neu.
+     *
+     * Gebraucht wird die Konfiguration hier ohnehin nur, wenn der Aufrufer
+     * keine Wartezeit nennt - der Endpunkt nennt immer eine. */
     if ($wartezeit === null) {
+        $cfg = vw_config(false);
         $wartezeit = (int) $cfg['wartezeit'];
     }
     $wartezeit = max(0, min(30, (int) $wartezeit));
@@ -1061,6 +1113,39 @@ function vw_verlauf_tage($nummer, $hoechstens = 14)
  *
  * Spalten: fahrzeug;start;ende;soc_vor;soc_nach;kwh;km;quelle
  */
+/**
+ * Wie viele Ladevorgaenge stehen fuer dieses Fahrzeug im Protokoll?
+ *
+ * Gezaehlt wird die DATEI, nicht die gelesene Liste. Bis 0.9.11 gab der
+ * Endpunkt 'count($vw_l)' aus, und $vw_l war mit 400 gedeckelt: ab der
+ * 401. Ladung meldete LADUNGEN dauerhaft 400, waehrend das MQTT-Thema
+ * fahrzeugN/ladungen_gesamt weiterzaehlte. Beide Felder tragen dieselbe
+ * Beschriftung und denselben Wertebereich - zwei Zahlen fuer dieselbe Sache,
+ * die ab einem gewissen Punkt auseinanderlaufen.
+ */
+function vw_ladungen_zahl($nummer = 0)
+{
+    $f = vw_paths()['ladungen'];
+    if (!is_file($f)) {
+        return 0;
+    }
+    $n = 0;
+    foreach (file($f, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: array() as $zeile) {
+        if ($zeile === '' || $zeile[0] === '#') {
+            continue;
+        }
+        $c = explode(';', $zeile);
+        if (count($c) < 6) {
+            continue;
+        }
+        if ($nummer > 0 && (int) $c[0] !== (int) $nummer) {
+            continue;
+        }
+        $n++;
+    }
+    return $n;
+}
+
 function vw_ladungen_lesen($nummer = 0, $hoechstens = 200)
 {
     $f = vw_paths()['ladungen'];
@@ -1689,6 +1774,31 @@ function vw_felder_zu_art($art)
     return array();
 }
 
+/**
+ * Das Namenskuerzel einer Eingangsvorlage.
+ *
+ * Die STATUSVORLAGE traegt die blanken Namen (VW_1_SOC) - sie ist die, die
+ * fast jeder zuerst einliest, und ihre Namen bleiben unveraendert. Jede
+ * WEITERE Vorlage bekommt ihr eigenes Kuerzel (VW_1_LD_SOC).
+ *
+ * Der Grund, gemessen am 03.09.2026: die fuenf Vorlagen erzeugten zusammen
+ * 73 Eingaenge unter nur 59 verschiedenen Namen. VW_1_OK und VW_1_ALTER
+ * standen fuenfmal da, VW_1_SOC, VW_1_KM, VW_1_BATTTEMP, VW_1_ENTFERNUNG,
+ * VW_1_ZUHAUSE und VW_1_VERBRAUCH je zweimal. Wer zwei Vorlagen einliest,
+ * bekommt gleichnamige Befehlserkennungen, und die Baustein-Liste dieses
+ * Plugins nennt Namen wie VW_1_ALTER, ohne sagen zu koennen, welcher
+ * gemeint ist.
+ *
+ * Ein Kuerzel je Vorlage loest das ein fuer alle Mal - auch fuer Felder,
+ * die erst spaeter dazukommen.
+ */
+function vw_vorlagenkuerzel($art)
+{
+    $k = array('status' => '', 'laden' => 'LD_', 'wartung' => 'WA_',
+               'position' => 'PO_', 'verbrauch' => 'VB_');
+    return isset($k[$art]) ? $k[$art] : '';
+}
+
 /** Die Arten, fuer die es eine Eingangsvorlage gibt. */
 function vw_vorlagenarten()
 {
@@ -1717,6 +1827,7 @@ function vw_vorlage($nummer = 1, $art = 'status')
     }
     $host = vw_host();
     $token = vw_token();
+    $kuerzel = vw_vorlagenkuerzel($art);
     $cmds = array();
     foreach ($felder as $feld => $info) {
         // Der Text laeuft gleich durch vw_x() und wuerde dort ein zweites Mal
@@ -1726,7 +1837,7 @@ function vw_vorlage($nummer = 1, $art = 'status')
         $bedeutung = trim(strip_tags(html_entity_decode(vw_t($info[1]), ENT_QUOTES, 'UTF-8')));
         $einheit = trim(strip_tags(html_entity_decode($info[0], ENT_QUOTES, 'UTF-8')));
         $cmds[] = array(
-            'title'   => 'VW_' . (int) $nummer . '_' . $feld,
+            'title'   => 'VW_' . (int) $nummer . '_' . $kuerzel . $feld,
             'comment' => $bedeutung . ($einheit !== '' ? ' [' . $einheit . ']' : ''),
             'check'   => vw_check($feld),
             'unit'    => $einheit,
@@ -1742,7 +1853,14 @@ function vw_vorlage($nummer = 1, $art = 'status')
         vw_xml_virtual_in_http(array(
             'title'   => 'Volkswagen ' . (int) $nummer . ' ' . vw_t('LOX.ART_' . strtoupper($art)),
             'address' => $adresse,
-            'polling' => (string) max(60, (int) $cfg['intervall']),
+            /* Die Wartungsdaten holt der Dienst nur jeden N-ten Takt
+             * (takt_wartung, ab Werk 12). Ein Miniserver, der sie im
+             * Abruftakt abfragt, bekommt zwoelfmal denselben Wert - genau
+             * das, was der Doc-Block oben ausschliessen will. Bis 0.9.11
+             * trugen alle fuenf Vorlagen denselben Zyklus. */
+            'polling' => (string) ($art === 'wartung'
+                ? max(60, (int) $cfg['intervall'] * max(1, (int) $cfg['takt_wartung']))
+                : max(60, (int) $cfg['intervall'])),
             'comment' => 'Erzeugt vom LoxBerry-Plugin Volkswagen ID (' . date('d.m.Y') . ')',
         ), $cmds),
     );
@@ -1792,6 +1910,30 @@ function vw_vorlage_vo($nummer = 1)
                 $verbraucht[$b['gegen']] = true;
                 $titel = vw_t($b['s']) . ' / ' . vw_t($g['s']);
             }
+        }
+        /* Die Ja/Nein-Einstellung ist KEIN einzelner Ausgang.
+         *
+         * Bis 0.9.11 stand der Name 'sitzheizung' fest im Parameter
+         * (vw_befehle, 'einstellung'), und die Vorlage enthielt genau einen
+         * Ausgang mit dem allgemeinen Titel "Ja/Nein-Einstellung setzen" -
+         * er konnte aber nur eines der vier Dinge. vw_schalter() kennt vier;
+         * die Oberflaeche zeigte alle vier Adressen zum Abschreiben, die
+         * Vorlage nur eine. Jetzt bekommt jeder Schalter seinen eigenen
+         * Ausgang mit sprechendem Titel. */
+        if ($name === 'einstellung') {
+            foreach (vw_schalter() as $vw_sn => $vw_ss) {
+                $cmds[] = array(
+                    'title'   => 'VW ' . (int) $nummer . ' ' . trim(strip_tags(
+                                     html_entity_decode(vw_t($vw_ss), ENT_QUOTES, 'UTF-8'))),
+                    'comment' => trim(strip_tags(html_entity_decode(
+                                     vw_t($b['s'] . '_H'), ENT_QUOTES, 'UTF-8'))),
+                    'on'      => $basis . '&aktion=einstellung&fahrzeug=' . (int) $nummer
+                               . '&name=' . $vw_sn . '&wert=<v>',
+                    'off'     => '',
+                    'analog'  => true,
+                );
+            }
+            continue;
         }
         $cmds[] = array(
             'title'   => 'VW ' . (int) $nummer . ' ' . trim(strip_tags(
@@ -2003,6 +2145,29 @@ function vw_sicherung_lesen($roh)
     }
     if ($anzahl === 0) {
         $mangel[] = vw_t('EINST.SICH_LEER');
+    }
+    /* FEHLENDE Schluessel sind eine Beanstandung, kein stiller Rueckfall.
+     *
+     * Bis 0.9.11 war 'vw_vorgaben()' der Ausgangspunkt und nur was in der
+     * Datei stand wurde ueberschrieben. Gemessen am 03.09.2026 unter PHP 7.4
+     * und 8.4: eine Datei mit dem einen Schluessel {"intervall":300} lief
+     * ohne Beanstandung durch, wurde geschrieben, und 26 Einstellungen
+     * fielen auf Werk zurueck - darunter das Aktionstoken auf ''. Quittiert
+     * wurde das mit "1 Wert uebernommen". Beim naechsten Oeffnen der
+     * Oberflaeche entstand ein neues Token, und JEDE im Miniserver
+     * eingetragene Adresse war stumm ungueltig.
+     *
+     * Der Hausstandard sagt: eine halb gueltige Datei aendert gar nichts.
+     * Eine Datei, der die Haelfte fehlt, ist halb gueltig. */
+    $fehlend = array();
+    foreach ($bekannt as $k) {
+        if (!array_key_exists($k, $daten)) {
+            $fehlend[] = $k;
+        }
+    }
+    if ($fehlend) {
+        $mangel[] = sprintf(vw_t('EINST.SICH_FEHLEND'), count($fehlend),
+            htmlspecialchars(implode(', ', $fehlend), ENT_QUOTES, 'UTF-8'));
     }
     if (!$mangel && $neu['temp_min'] > $neu['temp_max']) {
         $mangel[] = vw_t('EINST.FEHLER_TEMP_TAUSCH');

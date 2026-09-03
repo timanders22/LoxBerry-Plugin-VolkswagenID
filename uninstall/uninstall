@@ -107,6 +107,10 @@ done
 
 [ "$GEFUNDEN" -eq 0 ] && echo "<INFO> Es lief kein Abrufdienst."
 rm -f "$PIDDATEI" "$PDATA/soll_laufen" 2>/dev/null
+# Die Zuordnung Fahrgestellnummer -> Fahrzeugnummer liegt NEBEN dem
+# Datenordner und wird vom Loeschblock des Installers nicht erfasst.
+# Jede Zweitschrift, die entsteht, steht hier - sonst bleibt sie liegen.
+rm -f "$BASE/data/plugins/$PFOLDER.nummern.json" 2>/dev/null
 
 # ---------------------------------------------------------------
 # 2. Sicherungsdateien ausserhalb der Plugin-Ordner

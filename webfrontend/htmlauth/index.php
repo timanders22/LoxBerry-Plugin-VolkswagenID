@@ -643,7 +643,19 @@ if ($vw_lage['fremd']) { ?>
 
 <!-- Reiterleiste: echte Links, JavaScript faengt den Klick ab. So bleibt jeder
      Reiter verlinkbar, Eingaben in anderen Reitern gehen nicht verloren, und
-     faellt das Skript aus, ist die Seite weiterhin bedienbar. -->
+     faellt das Skript aus, ist die Seite weiterhin bedienbar.
+
+     AUSGESCHRIEBEN, nicht als Schleife (seit 0.9.12). Eine Schleife ueber
+     die Liste kann zwar nicht davon abweichen - aber sie macht die Leiste
+     fuer jedes Werkzeug unsichtbar, das woertliche Namen sucht:
+     hausstandard_pruefen.py meldete in der Spalte tab einen Strich, und ein
+     Strich liest sich wie ein Haken. vw_pruefen.py verglich drei leere
+     Mengen miteinander und schrieb "0 Reiter, 0 Bereiche, Positivliste
+     deckungsgleich" als bestandene Pruefung.
+
+     Ausgeschrieben sind es drei Stellen - Liste, Beschriftungstabelle,
+     Leiste -, und der Reiter Test haelt sie in beide Richtungen
+     gegeneinander. Die Beschriftungstabelle bleibt die Quelle der Texte. -->
 <?php
 $vw_beschriftung = array(
     'settings' => 'REITER.EINSTELLUNGEN', 'mqtt'    => '', 'loxone' => 'REITER.LOXONE',
@@ -652,10 +664,12 @@ $vw_beschriftung = array(
 );
 ?>
 <div class="sm-tabs">
-<?php foreach ($vw_reiter_ids as $vw_r) {
-    $vw_bez = $vw_beschriftung[$vw_r] !== '' ? vw_t($vw_beschriftung[$vw_r]) : 'MQTT'; ?>
-	<a class="sm-tab<?= $vw_tab === 'tab-' . $vw_r ? ' sm-active' : '' ?>" data-ziel="tab-<?= $vw_r ?>" href="index.php?form=<?= $vw_r ?>"><?= vw_e($vw_bez) ?></a>
-<?php } ?>
+	<a class="sm-tab<?= $vw_tab === 'tab-settings' ? ' sm-active' : '' ?>" data-ziel="tab-settings" href="index.php?form=settings"><?= vw_e(vw_t('REITER.EINSTELLUNGEN')) ?></a>
+	<a class="sm-tab<?= $vw_tab === 'tab-mqtt' ? ' sm-active' : '' ?>" data-ziel="tab-mqtt" href="index.php?form=mqtt"><?= 'MQTT' ?></a>
+	<a class="sm-tab<?= $vw_tab === 'tab-loxone' ? ' sm-active' : '' ?>" data-ziel="tab-loxone" href="index.php?form=loxone"><?= vw_e(vw_t('REITER.LOXONE')) ?></a>
+	<a class="sm-tab<?= $vw_tab === 'tab-verlauf' ? ' sm-active' : '' ?>" data-ziel="tab-verlauf" href="index.php?form=verlauf"><?= vw_e(vw_t('REITER.VERLAUF')) ?></a>
+	<a class="sm-tab<?= $vw_tab === 'tab-test' ? ' sm-active' : '' ?>" data-ziel="tab-test" href="index.php?form=test"><?= vw_e(vw_t('REITER.TEST')) ?></a>
+	<a class="sm-tab<?= $vw_tab === 'tab-log' ? ' sm-active' : '' ?>" data-ziel="tab-log" href="index.php?form=log"><?= vw_e(vw_t('REITER.LOG')) ?></a>
 </div>
 
 <!-- ================= Reiter: Einstellungen ================= -->
@@ -988,7 +1002,7 @@ $vw_beschriftung = array(
 $vw_gw = (int) $vw_mqtt['fassung'];
 ?>
 <div class="<?= $vw_gw >= 2 ? 'sm-hinweis' : 'sm-warnung' ?>"><?= vw_abo_text() ?></div>
-<?php if ($vw_gw !== 2) { /* V1 oder unbekannt: die Anleitung wird gebraucht */ ?>
+<?php if ($vw_gw < 2) { /* V1 oder unbekannt: die Anleitung wird gebraucht */ ?>
 <div class="sm-step">
 <?= vw_t('MQTT.ABO_SCHRITTE') ?>
 <p><span class="sm-mono"><?= vw_e($vw_cfg['mqtt_topic']) ?>/#</span></p>
@@ -1057,7 +1071,7 @@ $vw_text_t = count($vw_themen) - $vw_zahl_t;
 <tr><th><?= vw_e(vw_t('ALLG.EIGENSCHAFT')) ?></th><th><?= vw_e(vw_t('ALLG.WERT')) ?></th></tr>
 <tr><td><?= vw_e(vw_t('LOX.T_ADRESSE')) ?></td>
     <td><span class="sm-mono"><?= vw_e($vw_basis) ?>?token=<?= vw_e($vw_token) ?>&amp;aktion=status&amp;fahrzeug=1</span></td></tr>
-<tr><td><?= vw_e(vw_t('LOX.T_ZYKLUS')) ?></td><td>300 <?= vw_e(vw_t('ALLG.SEKUNDEN')) ?></td></tr>
+<tr><td><?= vw_e(vw_t('LOX.T_ZYKLUS')) ?></td><td><?= (int) $vw_cfg['intervall'] ?> <?= vw_e(vw_t('ALLG.SEKUNDEN')) ?></td></tr>
 </table>
 <?= vw_t('LOX.S3_BEFEHLE') ?>
 <table class="sm-tbl">
@@ -1140,7 +1154,7 @@ $vw_nummern = $vw_fahrzeuge ? array_keys($vw_fahrzeuge) : array('1');
 <table class="sm-tbl">
 <tr><th><?= vw_e(vw_t('ALLG.EIGENSCHAFT')) ?></th><th><?= vw_e(vw_t('ALLG.WERT')) ?></th></tr>
 <tr><td><?= vw_e(vw_t('LOX.T_ADRESSE')) ?></td><td><span class="sm-mono"><?= vw_e($vw_basis) ?>?token=<?= vw_e($vw_token) ?>&amp;aktion=laden&amp;fahrzeug=1</span></td></tr>
-<tr><td><?= vw_e(vw_t('LOX.T_ZYKLUS')) ?></td><td>300 <?= vw_e(vw_t('ALLG.SEKUNDEN')) ?></td></tr>
+<tr><td><?= vw_e(vw_t('LOX.T_ZYKLUS')) ?></td><td><?= (int) $vw_cfg['intervall'] ?> <?= vw_e(vw_t('ALLG.SEKUNDEN')) ?></td></tr>
 </table>
 <table class="sm-tbl">
 <tr><th><?= vw_e(vw_t('LOX.T_BEFEHL')) ?></th><th><?= vw_e(vw_t('LOX.T_EINHEIT')) ?></th><th><?= vw_e(vw_t('LOX.T_BEDEUTUNG')) ?></th></tr>
@@ -1337,7 +1351,7 @@ function vw_bausteine()
 <?php } ?>
 </p>
 <?php } ?>
-<div><?= vw_soc_svg($vw_punkte) ?></div>
+<div><?= vw_soc_svg($vw_punkte, $vw_tagwahl) ?></div>
 <div class="sm-hilfe"><?= sprintf(vw_t('VERL.MESSPUNKTE'), count($vw_punkte),
     vw_e(substr($vw_tagwahl, 6, 2) . '.' . substr($vw_tagwahl, 4, 2) . '.' . substr($vw_tagwahl, 0, 4))) ?></div>
 

@@ -133,6 +133,13 @@ ORDNER_BEFEHLE = PDATA / "befehle"
 ORDNER_ANTWORTEN = PDATA / "antworten"
 DATEI_LOG = PLOG / "vw.log"
 
+# Die Zuordnung Fahrgestellnummer -> Fahrzeugnummer. Sie liegt NEBEN dem
+# Datenordner, nicht darin: plugininstall.pl raeumt data/plugins/<ordner>/
+# beim Upgrade vollstaendig ab (purge_installation, Aufrufstelle :886 im
+# Upgrade-Zweig), eine Datei daneben ueberlebt. uninstall/uninstall raeumt
+# sie weg.
+DATEI_NUMMERN = LBHOME / "data" / "plugins" / (PNAME + ".nummern.json")
+
 # Muessen zu vw_vorgaben() in webfrontend/html/vw_lib.php passen.
 #
 # Der Takt hat eine harte Untergrenze von 180 Sekunden: der Connector wirft
@@ -407,7 +414,25 @@ def mqtt_zustand() -> dict:
         "udpport": udp,
         "broker": str(m.get("Brokerhost", m.get("brokerhost", ""))),
         "brokerport": str(m.get("Brokerport", m.get("brokerport", ""))),
+        # Der LoxBerry-Broker verlangt ab Werk eine Anmeldung. Bis 0.9.11 las
+        # dieses Plugin die beiden Schluessel nicht und verband sich anonym -
+        # der Horcher bekam dann nie eine Nachricht. Das schwesterliche
+        # Audi-Plugin liest sie seit jeher (bin/audi.py, 'Brokeruser').
+        # Nur der HORCHER braucht sie; der Sendeweg geht ueber den
+        # UDP-Eingang des Gateways und kennt keine Anmeldung.
+        "benutzer": str(m.get("Brokeruser", m.get("brokeruser", ""))),
+        "passwort": str(m.get("Brokerpass", m.get("brokerpass", ""))),
     }
+
+
+def mqtt_ohne_retain(schluessel: str) -> bool:
+    """Gehoert dieses Thema zu denen, die NICHT behalten werden?
+
+    Der Schluessel ist entweder 'ts' (oberhalb der Fahrzeugebene) oder
+    'fahrzeug1/ladeleistung_kw'. Entschieden wird ueber den Teil hinter dem
+    letzten Schraegstrich, damit dieselbe Liste fuer beide Ebenen gilt.
+    """
+    return schluessel.rsplit("/", 1)[-1] in MQTT_OHNE_RETAIN
 
 
 def mqtt_senden(paare: dict, praefix: str, retain: int = 1) -> tuple[int, int]:
@@ -424,6 +449,9 @@ def mqtt_senden(paare: dict, praefix: str, retain: int = 1) -> tuple[int, int]:
     Das Befehlswort 'retain' des UDP-Eingangs ist im Bestand dreifach belegt
     (Gardena, Intercom, WOLF ISM NG); an einem Gateway NACHGEMESSEN wurde es
     hier nicht.
+
+    Seit 0.9.12 entscheidet es JE THEMA (siehe MQTT_OHNE_RETAIN): Zustaende
+    werden behalten, Messwerte mit Zeitbezug und das Lebenszeichen nicht.
     """
     z = mqtt_zustand()
     if not z["udpport"]:
@@ -441,7 +469,6 @@ def mqtt_senden(paare: dict, praefix: str, retain: int = 1) -> tuple[int, int]:
     except OSError as err:
         melde_gebremst("mqtt_socket", f"MQTT: Socket nicht moeglich ({err}).")
         return (0, 0)
-    befehl = "retain" if retain else "publish"
     versucht = 0
     schlecht = 0
     try:
@@ -455,6 +482,9 @@ def mqtt_senden(paare: dict, praefix: str, retain: int = 1) -> tuple[int, int]:
             if text == "":
                 continue
             versucht += 1
+            # Je Thema entschieden, nicht je Durchgang. Steht der Haken
+            # "Werte behalten" auf aus, geht ohnehin alles ohne Retain.
+            befehl = "retain" if (retain and not mqtt_ohne_retain(k)) else "publish"
             try:
                 s.sendto(f"{befehl} {praefix}/{k} {text}".encode("utf-8"),
                          ("127.0.0.1", z["udpport"]))
@@ -942,7 +972,13 @@ def verlauf_anhaengen(nummer: int, stand, reichweite, km, tage: int) -> None:
         letzte = int(marke.read_text())
     except (OSError, ValueError):
         pass
-    if time.time() - letzte < 240:
+    # Nach UNTEN und nach OBEN gepruefft (seit 0.9.12). Stand hier nur
+    # "< 240", hielt ein Rueckwaertssprung der Uhr die Aufzeichnung genau so
+    # lange an, wie der Sprung gross war: die Differenz war negativ und damit
+    # immer kleiner als 240. Eine Marke, die in der Zukunft liegt, ist keine
+    # Wartezeit, sondern ein Grund, neu anzusetzen.
+    abstand = time.time() - letzte
+    if 0 <= abstand < 240:
         return
     try:
         with datei.open("a", encoding="utf-8") as f:
@@ -1007,7 +1043,14 @@ def ladung_anhaengen(nummer: int, start: int, ende: int, soc_vor, soc_nach,
         if len(zeilen) > 2000:
             kopf = [z for z in zeilen[:1] if z.startswith("#")]
             rest = [z for z in zeilen if not z.startswith("#")][-1500:]
-            DATEI_LADUNGEN.write_text("\n".join(kopf + rest) + "\n", encoding="utf-8")
+            # Erst in eine Nebendatei, dann umbenennen - wie json_schreiben()
+            # weiter oben. Bis 0.9.11 stand hier write_text(): das kuerzt die
+            # Datei zuerst auf null und schreibt dann rund 110 kB. Ein
+            # Stromausfall in diesem Fenster kostete das ganze Ladeprotokoll,
+            # ein Seitenaufruf las ein Bruchstueck.
+            tmp = DATEI_LADUNGEN.with_suffix(DATEI_LADUNGEN.suffix + ".tmp")
+            tmp.write_text("\n".join(kopf + rest) + "\n", encoding="utf-8")
+            os.replace(tmp, DATEI_LADUNGEN)
     except OSError:
         pass
 
@@ -1029,6 +1072,29 @@ def fortschreiben(nummer: int, f: dict, cfg: dict) -> dict:
 
     # ---- Ladevorgang ----
     war = v.get("laedt")
+    if laedt is None:
+        # Der Ladezustandsname steht nicht in LADEN_AN. Bis 0.9.11 fiel None
+        # durch alle drei Zweige: v["laedt"] wurde auf None gesetzt, und der
+        # naechste Wechsel auf 0 fand kein "war == 1" mehr vor - die ganze
+        # Ladung fehlte danach im Protokoll, ohne eine Meldung. Beim Verbrauch
+        # blieb die Fahrmarke stehen, waehrend zwischendurch geladen wurde;
+        # aus 18 kWh/100 km konnte so 1 kWh/100 km werden.
+        #
+        # Jetzt: der zuletzt BEKANNTE Zustand bleibt stehen, es wird nichts
+        # gerechnet, und der unbekannte Name wird einmal am Tag gemeldet -
+        # damit er in LADEN_AN nachgetragen werden kann, statt still zu
+        # schaden. Fail closed: lieber kein Wert als ein falscher.
+        melde_gebremst(
+            "ladezustand_unbekannt",
+            "Unbekannter Ladezustand '%s' - er steht nicht in LADEN_AN. "
+            "Ladeerkennung und Verbrauchsrechnung setzen so lange aus. "
+            "Bitte den Namen melden, damit er nachgetragen wird."
+            % (f.get("ladezustand_text") or "?"), 86400)
+        alle[str(nummer)] = v
+        json_schreiben(DATEI_FORTSCHREIBUNG, alle)
+        if v.get("verbrauch") is not None:
+            aus["verbrauch"] = v["verbrauch"]
+        return aus
     if laedt == 1 and war != 1:
         v["lade_start"] = jetzt
         v["lade_soc"] = soc
@@ -1087,7 +1153,17 @@ def fortschreiben(nummer: int, f: dict, cfg: dict) -> dict:
 # und legt die Antwort daneben. Der Endpunkt selbst spricht NIE mit Volkswagen.
 # ---------------------------------------------------------------------------
 def antwort_schreiben(kennung: str, ok: int, meldung: str, zusatz: dict | None = None) -> None:
-    ORDNER_ANTWORTEN.mkdir(parents=True, exist_ok=True)
+    # mkdir mit Wache: ein OSError (Datentraeger voll, Ordner
+    # schreibgeschuetzt) flog bis 0.9.11 aus dieser Funktion heraus und riss
+    # die ganze Runde mit - samt der Antworten, auf die der Endpunkt wartet.
+    # Dasselbe Muster ist an zwei anderen Stellen dieser Datei bereits als
+    # Fehler von 0.9.9 beschrieben und behoben.
+    try:
+        ORDNER_ANTWORTEN.mkdir(parents=True, exist_ok=True)
+    except OSError as err:
+        melde_gebremst("antwort_ordner",
+                       f"Antwortordner nicht anlegbar ({err}).")
+        return
     d = {"ok": ok, "meldung": meldung, "ts": int(time.time())}
     if zusatz:
         d.update(zusatz)
@@ -1152,12 +1228,43 @@ def befehl_holen(objekt, name: str):
 # die Suche nach einem Fehler, den es nicht gibt.
 # ---------------------------------------------------------------------------
 class Bremse:
-    """Fuehrt Buch ueber abgesetzte Befehle. Lebt im Dienstprozess."""
+    """Fuehrt Buch ueber abgesetzte Befehle. Lebt im Dienstprozess.
+
+    FRAGEN UND BUCHEN SIND ZWEI SCHRITTE (seit 0.9.12).
+
+    Bis 0.9.11 buchte befehl_erlaubt() sofort beim Fragen - also auch fuer
+    Befehle, die unmittelbar danach an einer Wertpruefung scheiterten und
+    Volkswagen nie erreichten. Gemessen am 03.09.2026 mit den Vorgabewerten
+    (befehle_stunde 30, entprellung 20): sechs inhaltlich falsche Befehle
+    ergaben "gebucht=6, gesendet=0"; nach dreissig solchen Versuchen wurde ein
+    GUELTIGER Befehl abgewiesen mit "In der letzten Stunde sind bereits 30
+    Befehle abgesetzt worden", obwohl kein einziger hinausgegangen war.
+    Gegenprobe am Hauswerkzeug vw_befehlstest.py: mit der alten Bremse sechs
+    Fehlschlaege und ein Absturz, mit abgeschalteter Bremse 67 bestanden.
+
+    Die Bremse soll das Konto vor Volkswagen schuetzen. Gezaehlt wird deshalb,
+    was wirklich hinausgeht: darf() fragt, gebucht() schreibt, und gebucht()
+    ruft nur die Huelle befehl_ausfuehren(), wenn der Befehl abgesetzt wurde.
+
+    GERECHNET WIRD MIT time.monotonic(), NICHT MIT time.time() (seit 0.9.12).
+    Ein Raspberry ohne Echtzeituhr springt beim ersten Zeitabgleich - die
+    Datei nennt den Fall an anderer Stelle selbst. Sprang die Uhr rueckwaerts,
+    standen Zeitmarken in der Zukunft: _aufraeumen() raeumte sie nicht ab, das
+    Stundenkontingent blieb gesperrt, und abruf_erlaubt() meldete eine
+    Restzeit von Stunden. monotonic() kennt keinen Sprung; ein Neustart setzt
+    sie zurueck, und das ist genau richtig, weil die Bremse ohnehin nur im
+    Dienstprozess lebt.
+
+    'letzter_abruf' ist None, nicht 0.0: unter monotonic() waere 0.0 ein
+    Zeitpunkt kurz vor dem Prozessstart, und der erste Sofortabruf nach dem
+    Start wuerde mit "Noch 115 s" abgewiesen.
+    """
 
     def __init__(self):
         self.letzte: dict[str, tuple[float, str]] = {}
         self.stunde: list[float] = []
-        self.letzter_abruf = 0.0
+        self.letzter_abruf: float | None = None
+        self._vorgemerkt: tuple[str, str] | None = None
 
     def _aufraeumen(self, jetzt: float) -> None:
         grenze = jetzt - 3600
@@ -1167,17 +1274,24 @@ class Bremse:
         abstand = int(cfg.get("abstand_abruf") or 0)
         if abstand <= 0:
             return (True, "")
-        jetzt = time.time()
-        rest = int(self.letzter_abruf + abstand - jetzt)
-        if rest > 0:
-            return (False, f"Der letzte Sofortabruf ist keine {abstand} s her. "
-                           f"Noch {rest} s. Die Wartezeit steht im Reiter Einstellungen; "
-                           f"zu haeufige Anfragen weist Volkswagen mit HTTP 429 ab.")
+        jetzt = time.monotonic()
+        if self.letzter_abruf is not None:
+            rest = int(self.letzter_abruf + abstand - jetzt)
+            if rest > 0:
+                return (False, f"Der letzte Sofortabruf ist keine {abstand} s her. "
+                               f"Noch {rest} s. Die Wartezeit steht im Reiter Einstellungen; "
+                               f"zu haeufige Anfragen weist Volkswagen mit HTTP 429 ab.")
         self.letzter_abruf = jetzt
         return (True, "")
 
-    def befehl_erlaubt(self, cfg: dict, schluessel: str, wert_text: str) -> tuple[bool, str]:
-        jetzt = time.time()
+    def darf(self, cfg: dict, schluessel: str, wert_text: str) -> tuple[bool, str]:
+        """Fragt, ob der Befehl hinausgehen darf. BUCHT NICHTS.
+
+        Gebucht wird erst in gebucht(), und zwar nur, wenn der Befehl
+        wirklich abgesetzt wurde.
+        """
+        self._vorgemerkt = None
+        jetzt = time.monotonic()
         self._aufraeumen(jetzt)
         entprellung = int(cfg.get("entprellung") or 0)
         if entprellung > 0 and schluessel in self.letzte:
@@ -1190,9 +1304,27 @@ class Bremse:
             return (False, f"In der letzten Stunde sind bereits {len(self.stunde)} Befehle "
                            f"abgesetzt worden - das ist die eingestellte Obergrenze. "
                            f"Volkswagen sperrt ein Konto, das zu oft schreibt.")
+        self._vorgemerkt = (schluessel, wert_text)
+        return (True, "")
+
+    def gebucht(self) -> None:
+        """Bucht den zuletzt mit darf() freigegebenen Befehl.
+
+        Wird von der Huelle befehl_ausfuehren() gerufen, nachdem der Befehl
+        abgesetzt wurde. Ohne Vormerkung geschieht nichts - der Sofortabruf
+        etwa laeuft ueber abruf_erlaubt() und hat nie eine.
+        """
+        if self._vorgemerkt is None:
+            return
+        schluessel, wert_text = self._vorgemerkt
+        self._vorgemerkt = None
+        jetzt = time.monotonic()
         self.stunde.append(jetzt)
         self.letzte[schluessel] = (jetzt, wert_text)
-        return (True, "")
+
+    def verwerfen(self) -> None:
+        """Vormerkung fallen lassen - der Befehl ging nicht hinaus."""
+        self._vorgemerkt = None
 
 
 _BREMSE = Bremse()
@@ -1211,7 +1343,7 @@ SCHALTER = {
 }
 
 
-def befehl_ausfuehren(fahrzeuge: list, cfg: dict, b: dict) -> tuple[int, str, dict]:
+def _befehl_absetzen(fahrzeuge: list, cfg: dict, b: dict) -> tuple[int, str, dict]:
     """Rueckgabe: (ok, Meldung, Zusatzfelder). ok = 1 angenommen, 0 abgelehnt.
 
     Was "angenommen" heisst: die Bibliothek setzt den Befehl als HTTP-Anfrage
@@ -1252,7 +1384,7 @@ def befehl_ausfuehren(fahrzeuge: list, cfg: dict, b: dict) -> tuple[int, str, di
     # Drosselung. Der Schluessel enthaelt das Fahrzeug, damit zwei Autos
     # einander nicht bremsen.
     _dro_wert = ";".join(str(b.get(k, "")) for k in ("temp", "prozent", "ampere", "name", "wert"))
-    ok, meldung = _BREMSE.befehl_erlaubt(cfg, f"{vin or '1'}:{aktion}", _dro_wert)
+    ok, meldung = _BREMSE.darf(cfg, f"{vin or '1'}:{aktion}", _dro_wert)
     if not ok:
         return (0, meldung, {"vin": vin})
 
@@ -1427,10 +1559,61 @@ def wert_zahl(v):
     return int(f) if f == int(f) else round(f, 1)
 
 
+def befehl_ausfuehren(fahrzeuge: list, cfg: dict, b: dict) -> tuple[int, str, dict]:
+    """Fuehrt einen Befehl aus, mit Wecker, und bucht ihn ERST DANACH.
+
+    HIER liegt seit 0.9.12 die Zeitgrenze - um den EINZELNEN Befehl.
+
+    Bis 0.9.11 lag sie in der Warteschleife um den Aufruf von
+    warteschlange(), also um einen ganzen Durchgang durch ALLE vorliegenden
+    Befehlsdateien. Das hatte zwei Wirkungen, beide am Quelltext gemessen:
+    liegen drei Befehle zu je 50 s an, schlug der Wecker beim dritten zu,
+    obwohl keiner hing - und weil TimeoutError eine Exception ist, fing die
+    Schleife in warteschlange() sie je Befehl ab, ohne den Wecker neu zu
+    stellen: alle folgenden Befehle derselben Runde liefen danach voellig
+    ungeschuetzt, mit den vollen rund 540 s der Bibliothek.
+    Ausserdem stand abfahrt_pruefen() auf der Einrueckungsebene des
+    with-Blocks, lief also NACH dessen __exit__ und damit ohne jeden Wecker -
+    obwohl gerade die Vorklimatisierung ein Schreibbefehl ist.
+
+    An dieser Stelle ist jeder Befehl geschuetzt, gleich von wo er kommt:
+    aus der Warteschlange, aus abfahrt_pruefen() oder aus einem spaeteren
+    Aufrufer.
+
+    Die Reihenfolge ist der zweite Zweck dieser Huelle: _befehl_absetzen()
+    fragt die Bremse mit darf() (die nichts bucht), prueft danach Fahrzeug,
+    Faehigkeit, Wertebereich und S-PIN, und erst wenn der Befehl wirklich an
+    Volkswagen gegangen ist, wird er gezaehlt.
+
+    ok == 1 heisst "abgesetzt". ok == 0 heisst abgewiesen - dann wird die
+    Vormerkung verworfen, damit sie nicht bei einem spaeteren Befehl
+    faelschlich gebucht wird.
+    """
+    try:
+        with Zeitgrenze(GRENZE_BEFEHL, "Ein Schreibbefehl an Volkswagen"):
+            ok, meldung, zusatz = _befehl_absetzen(fahrzeuge, cfg, b)
+    except TimeoutError as err:
+        # Der Wecker hat zugeschlagen. Gebucht wird nichts: ob der Befehl
+        # bei Volkswagen angekommen ist, weiss hier niemand, und eine
+        # Buchung wuerde das Kontingent fuer etwas verbrauchen, das
+        # vielleicht nie hinausging.
+        _BREMSE.verwerfen()
+        return (0, fehlertext(err), {})
+    if ok == 1:
+        _BREMSE.gebucht()
+    else:
+        _BREMSE.verwerfen()
+    return (ok, meldung, zusatz)
+
 def warteschlange(fahrzeuge: list, cfg: dict) -> bool:
     """Arbeitet alle vorliegenden Befehle ab. True, wenn ein Sofortabruf
     angefordert wurde."""
-    ORDNER_BEFEHLE.mkdir(parents=True, exist_ok=True)
+    try:
+        ORDNER_BEFEHLE.mkdir(parents=True, exist_ok=True)
+    except OSError as err:
+        melde_gebremst("befehlsordner",
+                       f"Warteschlangenordner nicht anlegbar ({err}).")
+        return False
     sofort = False
     for datei in sorted(ORDNER_BEFEHLE.glob("*.json")):
         b = json_lesen(datei)
@@ -1500,6 +1683,78 @@ MQTT_OBEN = (
 )
 
 
+# Themen, die NICHT behalten werden - Hausstandard seit 03.09.2026:
+# Zustaende retained, Messwerte mit Zeitbezug nicht, das Lebenszeichen nie.
+#
+# Ein behaltener Messwert sieht nach einem Ausfall frisch aus, obwohl er alt
+# ist; ein behaltenes Lebenszeichen meldet "lebt", auch wenn der Dienst tot
+# ist. Beides ist eine Falschaussage, und beide standen bis 0.9.11 unter
+# demselben einen Schalter wie alles uebrige.
+#
+# Zustaende bleiben behalten: Ladestand, Kilometerstand, Verriegelung,
+# Position. Nach einem Neustart des Brokers hat Loxone damit sofort den
+# zuletzt gueltigen Stand, statt bis zum naechsten Abruf leer zu bleiben.
+MQTT_OHNE_RETAIN = frozenset((
+    # Lebenszeichen - nie behalten
+    "ts", "zaehler",
+    # Leistung und Tempo
+    "ladeleistung_kw", "ladetempo_kmh", "ladesaeule_kw",
+    # Zeitpunkte und Restzeiten
+    "laden_fertig_um", "klima_fertig_um", "standzeit_min", "ladung_vor_stunden",
+    # Temperaturen
+    "aussentemperatur", "batterie_temp",
+))
+
+
+def fahrzeugnummern(vins: list) -> dict:
+    """Ordnet jeder Fahrgestellnummer ihre DAUERHAFTE Fahrzeugnummer zu.
+
+    Warum das sein muss: bis 0.9.11 war die Fahrzeugnummer der Rang in einer
+    nach Fahrgestellnummer sortierten Liste. Die Stammdaten wurden schon
+    damals ueber die VIN gefuehrt (zwei Zeilen daneben), das Ladeprotokoll,
+    die Fortschreibung und die Verlaufsdateien aber ueber diesen Rang. Kommt
+    ein Fahrzeug hinzu oder faellt eines weg, verschiebt sich der Rang - und
+    das neue Fahrzeug 1 erbt Kilometerstand, Ladezustandsmarke und einen
+    offenen Ladevorgang des alten. Der Fall "Kilometerstand kleiner als
+    zuvor" war abgefangen, der umgekehrte nicht: aus 78 000 geerbten
+    Kilometern und fuenf Prozentpunkten wurde ein Verbrauch, den niemand
+    gefahren ist. Ausserdem zeigen alle in Loxone eingetragenen Adressen
+    (VW_1_SOC, fahrzeug1/...) danach auf ein anderes Auto.
+
+    Eine Nummer ist eine Adresse (Hausregel): einmal vergeben, wandert sie
+    nicht mehr, und nach dem Entfernen eines Fahrzeugs wird sie nicht neu
+    vergeben. Es entstehen also Luecken, und das ist richtig.
+
+    AKTUALISIERUNGSFALL: gibt es die Datei noch nicht, gilt die bisherige
+    Zaehlung - der Rang in der sortierten Liste. Damit zeigen bestehende
+    Adressen nach dem Update weiterhin auf dasselbe Fahrzeug.
+    """
+    alt = json_lesen(DATEI_NUMMERN)
+    zuordnung: dict[str, int] = {}
+    for v, n in alt.items():
+        try:
+            zuordnung[str(v)] = int(n)
+        except (TypeError, ValueError):
+            pass
+    erstlauf = not zuordnung
+    vergeben = set(zuordnung.values())
+    geaendert = False
+    for i, vin in enumerate(vins, start=1):
+        if not vin or vin in zuordnung:
+            continue
+        n = i if erstlauf else 0
+        if n <= 0 or n in vergeben:
+            n = 1
+            while n in vergeben:
+                n += 1
+        zuordnung[vin] = n
+        vergeben.add(n)
+        geaendert = True
+    if geaendert:
+        json_schreiben(DATEI_NUMMERN, zuordnung)
+    return zuordnung
+
+
 def ladebilanz(nummer: int) -> dict:
     """Die Kennzahlen des Ladeprotokolls fuer ein Fahrzeug.
 
@@ -1537,10 +1792,18 @@ def ladebilanz(nummer: int) -> dict:
         aus["ladung_dauer_min"] = int(round((ende - start) / 60))
         aus["ladung_vor_stunden"] = int(round((time.time() - ende) / 3600))
     tag0 = int(time.mktime(time.strptime(time.strftime("%Y-%m-%d"), "%Y-%m-%d")))
+    # Auch nach OBEN begrenzt (seit 0.9.12). Bis 0.9.11 stand hier nur
+    # ">= tag0". Eine Zeile, deren Endzeitpunkt durch einen Uhrensprung in
+    # der Zukunft liegt - ein Raspberry ohne Echtzeituhr springt beim ersten
+    # Zeitabgleich -, uebersprang damit JEDE kuenftige Tagesschwelle und
+    # zaehlte an jedem Tag mit, bis sie nach 2000 Zeilen aus der Datei fiel.
+    # Die Dauerspalte war gegen denselben Fall abgesichert, die Tagesbilanz
+    # nicht. Die Luft von 300 s faengt eine normal nachlaufende Uhr ab.
+    obergrenze = int(time.time()) + 300
     summe = 0.0
     hat = False
     for t in meine:
-        if ganz(t[2], 0) >= tag0 and t[5] != "":
+        if tag0 <= ganz(t[2], 0) <= obergrenze and t[5] != "":
             try:
                 summe += float(t[5])
                 hat = True
@@ -1651,6 +1914,21 @@ def abbild_schreiben(stand: dict, cfg: dict, ok: int, fehler: str = "",
 # uebrige weiter und der Selbsttest SAGT es - ein Bedienelement, dessen Wert
 # nirgends ankommt, ist schlimmer als ein fehlendes.
 # ---------------------------------------------------------------------------
+# Die Rueckgabecodes des MQTT-CONNACK im Klartext. Code 5 ist der Fall,
+# den diese Anlage schon einmal hatte: der Broker lief, der Miniserver
+# meldete "Authentifizierung fehlgeschlagen", und niemand sah den Grund.
+_CONNACK = {
+    1: "Der Broker lehnt die Protokollfassung ab.",
+    2: "Der Broker lehnt die Kennung des Clients ab.",
+    3: "Der Broker ist nicht verfuegbar.",
+    4: "Benutzername oder Passwort des Brokers sind falsch. Sie stehen unter "
+       "System -> MQTT Gateway (Brokeruser, Brokerpass).",
+    5: "Der Broker hat die Anmeldung abgewiesen (nicht autorisiert). Traegt "
+       "System -> MQTT Gateway einen Benutzer und ein Passwort? Ohne sie "
+       "kommt der Horcher nicht hinein.",
+}
+
+
 class Horcher:
     """Haelt eine MQTT-Verbindung und merkt sich die letzten Werte."""
 
@@ -1711,8 +1989,34 @@ class Horcher:
                 except Exception:  # noqa: BLE001 - eine unlesbare Nutzlast ist kein Wert
                     pass
 
-            def bei_verbindung(klient, _daten, _flags, *_rest):
+            def bei_verbindung(klient, _daten, _flags, *rest):
+                # Der Rueckgabecode ENTSCHEIDET. Bis 0.9.11 verschwand er in
+                # *_rest und self.verbunden wurde bedingungslos wahr gesetzt:
+                # paho ruft on_connect auch bei einem CONNACK mit rc != 0
+                # (falsches Kennwort, "not authorised"), subscribe() lieferte
+                # dann stillschweigend MQTT_ERR_NO_CONN, und die Oberflaeche
+                # meldete dauerhaft "Horcher verbunden", waehrend kein
+                # einziger Wert ankam. Das ist die Lage aus den Hausregeln:
+                # "erreichbar" ist nicht "angemeldet".
+                #
+                # rc kommt als erstes Element von rest. Unter paho 2.x ist es
+                # ein ReasonCode-Objekt, unter 1.x eine Zahl; beide lassen
+                # sich auf eine Zahl bringen, und beide melden 0 fuer Erfolg.
+                code = 0
+                if rest:
+                    try:
+                        code = int(getattr(rest[0], "value", rest[0]) or 0)
+                    except (TypeError, ValueError):
+                        code = 0
+                if code != 0:
+                    self.verbunden = False
+                    self.grund = _CONNACK.get(
+                        code, f"Der Broker hat die Anmeldung mit Code {code} abgewiesen.")
+                    melde_gebremst("horcher_connack",
+                                   f"MQTT-Horcher: {self.grund}", 3600)
+                    return
                 self.verbunden = True
+                self.grund = ""
                 for th in soll:
                     try:
                         klient.subscribe(th)
@@ -1731,6 +2035,8 @@ class Horcher:
             k.on_message = bei_nachricht
             k.on_connect = bei_verbindung
             k.on_disconnect = bei_trennung
+            if z.get("benutzer"):
+                k.username_pw_set(z["benutzer"], z.get("passwort") or None)
             k.connect_async(broker, port, 60)
             k.loop_start()
             self.klient = k
@@ -1926,15 +2232,39 @@ GRENZE_BEFEHL = 120
 
 
 class Zeitgrenze:
-    """Bricht einen haengenden Aufruf nach $sekunden ab."""
+    """Bricht einen haengenden Aufruf nach $sekunden ab - wo das geht.
+
+    Drei Voraussetzungen, und alle drei werden geprueft statt angenommen:
+
+      1. Eine Zeit groesser null.
+      2. Der Hauptstrang. signal.alarm wirkt nur dort; der Netzstrang des
+         MQTT-Horchers laeuft nie hier hindurch.
+      3. SIGALRM muss es geben. Auf dem LoxBerry (Linux) gibt es das Signal,
+         auf dem Windows-Arbeitsplatz nicht - dort stirbt
+         signal.signal(signal.SIGALRM, ...) mit AttributeError. Bis 0.9.11
+         fiel das nicht auf, weil die Zeitgrenze nur in dienst() stand und
+         dienst() nur auf dem Geraet laeuft. Seit 0.9.12 liegt sie in
+         befehl_ausfuehren() und damit im Weg jedes Aufrufers, auch der
+         Hauswerkzeuge. Ein Wecker, den es auf dieser Plattform nicht gibt,
+         entfaellt - er reisst nicht den Aufrufer mit.
+
+    Wo der Wecker entfaellt, ist der Aufruf UNGESCHUETZT. Das ist auf dem
+    Arbeitsplatz richtig (dort haengt keine echte Gegenstelle) und auf dem
+    Geraet gaebe es den Fall nicht.
+    """
 
     def __init__(self, sekunden: int, was: str = "Abruf"):
         self.sekunden = int(sekunden)
         self.was = was
         self.alt = None
 
+    def moeglich(self) -> bool:
+        return (self.sekunden > 0
+                and hasattr(signal, "SIGALRM")
+                and threading.current_thread() is threading.main_thread())
+
     def __enter__(self):
-        if self.sekunden > 0 and threading.current_thread() is threading.main_thread():
+        if self.moeglich():
             self.alt = signal.signal(signal.SIGALRM, self._schlagen)
             signal.alarm(self.sekunden)
         return self
@@ -2021,8 +2351,15 @@ def dienst(einmal: bool = False) -> int:
                 neu.sort(key=lambda f: str(wert(getattr(f, "vin", None)) or ""))
                 if neu:
                     liste = neu
+                # Die Nummer ist eine Adresse und bleibt bei ihrem
+                # Fahrzeug - siehe fahrzeugnummern(). Bis 0.9.11 war sie der
+                # Rang in dieser Liste und wanderte, sobald sich die
+                # Fahrzeugmenge aenderte.
+                vins = [str(wert(getattr(x, "vin", None)) or "") for x in neu]
+                zuordnung = fahrzeugnummern(vins)
                 for i, f in enumerate(neu, start=1):
-                    vin = str(wert(getattr(f, "vin", None)) or str(i))
+                    vin = vins[i - 1] or str(i)
+                    nr = zuordnung.get(vins[i - 1]) or i
                     stammdaten.setdefault(vin, {})
                     abbild = fahrzeug_abbilden(f, cfg, zyklus, stammdaten[vin])
                     for k, v in abbild.items():
@@ -2032,13 +2369,13 @@ def dienst(einmal: bool = False) -> int:
                     # Fahrverbrauch. Der Takt ist die einzige Stelle, die den
                     # Zustand fortschreibt.
                     try:
-                        abbild.update(fortschreiben(i, abbild, cfg))
-                        abbild.update(ladebilanz(i))
+                        abbild.update(fortschreiben(nr, abbild, cfg))
+                        abbild.update(ladebilanz(nr))
                     except Exception as err:  # noqa: BLE001
                         melde_gebremst("fortschreibung",
                                        f"Ladeprotokoll: {fehlertext(err)}", 3600)
                     abbild["ladeempfehlung"] = ladeempfehlung(cfg)
-                    fahrzeuge[str(i)] = abbild
+                    fahrzeuge[str(nr)] = abbild
                 ok = 1 if fahrzeuge and any(x.get("ok") for x in fahrzeuge.values()) else 0
                 if not neu:
                     fehler = "Das Konto fuehrt kein Fahrzeug."
@@ -2078,16 +2415,14 @@ def dienst(einmal: bool = False) -> int:
                                1800)
             while rest > 0 and _LAUF:
                 try:
-                    # Auch die Warteschlange bekommt einen Wecker. Ein
-                    # Schreibbefehl ist keine Zuweisung, sondern eine
-                    # blockierende HTTP-Anfrage: der Connector setzt timeout
-                    # 180 mit drei Wiederholungen, also bis zu neun Minuten je
-                    # Befehl. Bis 0.9.9 stand der Wecker nur um den Abruf -
-                    # obwohl der Kommentar darueber ihn genau damit begruendet,
-                    # dass sonst die Befehlswarteschlange mit anhaelt.
-                    with Zeitgrenze(GRENZE_BEFEHL, "Ein Schreibbefehl an Volkswagen"):
-                        if warteschlange(liste, cfg):
-                            break  # Sofortabruf angefordert
+                    # Der Wecker liegt seit 0.9.12 in befehl_ausfuehren(),
+                    # also um den EINZELNEN Befehl. Bis 0.9.11 stand er hier
+                    # und umfasste einen ganzen Durchgang durch alle
+                    # Befehlsdateien; nach dem ersten Zuschlagen war er
+                    # verbraucht, und abfahrt_pruefen() lag ohnehin
+                    # ausserhalb. Beides ist dort beschrieben.
+                    if warteschlange(liste, cfg):
+                        break  # Sofortabruf angefordert
                     abfahrt_pruefen(cfg, liste)
                 except Exception as err:  # noqa: BLE001
                     _LOG.error("Warteschlange: %s", fehlertext(err))

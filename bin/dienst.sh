@@ -106,13 +106,21 @@ starten() {
         echo "        gestartet - sonst liefe er in eine Neustartschleife."
         return 1
     fi
-    touch "$SOLL"
     # Ausgabe geht in die Logdatei. Das Python-Skript protokolliert deshalb
     # NICHT zusaetzlich nach stdout - sonst stuende jede Zeile doppelt darin.
     nohup "$PY" "$SKRIPT" >> "$LOGDATEI" 2>&1 &
     echo $! > "$PID"
     sleep 1
     if laeuft; then
+        # Der Sollmerker entsteht ERST, wenn der Dienst wirklich laeuft
+        # (seit 0.9.12). Bis 0.9.11 stand das touch davor. Scheiterte der
+        # Start aus einem anderen Grund als den beiden oben geprueften -
+        # eine unvollstaendige venv, ein Importfehler, ein nicht
+        # beschreibbares Protokoll -, blieb der Merker liegen, und der
+        # minuetliche Waechter startete endlos weiter: dieselbe
+        # Neustartschleife, die 0.9.10 fuer den Fall der leeren
+        # Zugangsdaten geschlossen hat.
+        touch "$SOLL"
         echo "gestartet (PID $(cat "$PID"))"
         return 0
     fi

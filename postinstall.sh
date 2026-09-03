@@ -184,11 +184,13 @@ chmod 600 "$PDATA/token.json" 2>/dev/null
 # laufender Vorgang angehalten wurde. Bei einer Erstinstallation gibt es
 # ihn nicht, und dann passiert hier nichts.
 #
-# Er behebt keinen Stillstand: der Sollmerker unter data/ ueberlebt das
-# Upgrade (gemessen an sbin/plugininstall.pl), und der Cron-Waechter holt
-# den Dienst binnen einer Minute zurueck. Dieser Start hier ist sofort und
-# unabhaengig vom Waechter - das ist der ganze Gewinn, und mehr wird nicht
-# behauptet.
+# Er behebt sehr wohl einen Stillstand. Berichtigt am 03.09.2026: hier
+# stand, der Sollmerker unter data/ ueberlebe das Upgrade und der
+# Cron-Waechter hole den Dienst binnen einer Minute zurueck. An
+# sbin/plugininstall.pl nachgemessen ist das falsch - purge_installation
+# wird auch im Upgrade-Zweig gerufen (:886) und loescht
+# data/plugins/<ordner>/ vollstaendig. Ohne diesen Merker bliebe das
+# Plugin nach jedem Update still, bis jemand von Hand startet.
 #
 # Er wird IN JEDEM FALL entfernt, auch wenn der Start scheitert. Ein
 # liegengebliebener Merker startete den Dienst bei einer spaeteren

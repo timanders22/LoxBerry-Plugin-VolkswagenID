@@ -327,10 +327,15 @@ if ($vw_aktion === 'verbrauch') {
     // der ueber Mitternacht laeuft, zaehlt zum Tag seines Endes - sonst
     // zaehlte er zweimal oder gar nicht.
     $vw_tag0 = strtotime('today 00:00');
+    // Auch nach OBEN begrenzt. Eine Zeile, deren Endzeitpunkt durch einen
+    // Uhrensprung in der Zukunft liegt, uebersprang bis 0.9.11 jede kuenftige
+    // Tagesschwelle und zaehlte an jedem Tag mit. Die Dauerspalte war gegen
+    // denselben Fall abgesichert, die Tagesbilanz nicht.
+    $vw_bis = time() + 300;
     $vw_tagkwh = 0.0;
     $vw_hat = false;
     foreach ($vw_l as $vw_e) {
-        if ($vw_e['ende'] >= $vw_tag0 && $vw_e['kwh'] !== null) {
+        if ($vw_e['ende'] >= $vw_tag0 && $vw_e['ende'] <= $vw_bis && $vw_e['kwh'] !== null) {
             $vw_tagkwh += $vw_e['kwh'];
             $vw_hat = true;
         }
@@ -342,7 +347,8 @@ if ($vw_aktion === 'verbrauch') {
         vw_w($vw_letzt ? $vw_letzt['kwh'] : null), vw_w($vw_min),
         vw_w($vw_letzt ? $vw_letzt['soc_vor'] : null),
         vw_w($vw_letzt ? $vw_letzt['soc_nach'] : null), vw_w($vw_vorstd),
-        vw_w($vw_hat ? round($vw_tagkwh, 2) : null), count($vw_l), $vw_alter);
+        vw_w($vw_hat ? round($vw_tagkwh, 2) : null),
+        vw_ladungen_zahl(vw_nummer_von($vw_alle, $vw_fahrzeug)), $vw_alter);
     exit;
 }
 

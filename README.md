@@ -86,8 +86,12 @@ zu behaupten und den Anwender in ein rohes `ValueError` laufen zu lassen.
 ### Neu
 
 * **Vorlagen für alles**: fünf Eingangsvorlagen (Status, Laden, Wartung,
-  Position, Verbrauch), eine **Ausgangsvorlage** mit allen schaltenden Befehlen
+  Position, Verbrauch), eine **Ausgangsvorlage** mit den schaltenden Befehlen
   und eine MQTT-Vorlage — je Fahrzeug. Bisher gab es genau eine.
+  Die Ausgangsvorlage führt ab Werk **zwölf** der sechzehn Befehle; Ver- und
+  Entriegeln, Hupe und Lichthupe kommen erst dazu, wenn der zweite Haken
+  gesetzt ist. Seit 0.9.12 hat jeder der vier Ja/Nein-Schalter einen eigenen
+  Ausgang — vorher war nur die Sitzheizung verdrahtet.
 * **Lebenszeichen**: ein umlaufender Zähler 0…999 in jeder Statuszeile und über
   MQTT, dazu `ts` und `FEHLFOLGE`. Anders als `ALTER` übersteht ein Zähler den
   Zeitsprung, den ein Raspberry ohne Echtzeituhr beim ersten Zeitabgleich macht.
@@ -97,7 +101,8 @@ zu behaupten und den Anwender in ein rohes `ValueError` laufen zu lassen.
   über MQTT.
 * **Entfernung und *zuhause*** aus einem hinterlegten Heimatort.
 * **Ladeprotokoll und Verbrauch** in einem eigenen Reiter *Verlauf*, mit
-  Tagwahl für die letzten vierzehn Tage.
+  Tagwahl. Aufbewahrt werden ab Werk **acht** Tage (Reiter *Einstellungen*,
+  einstellbar von 1 bis 90); die Tagwahl zeigt höchstens vierzehn davon an.
 * **Drosselung**: Mindestabstand für Sofortabrufe, Befehle je Stunde und eine
   Entprellung. Beim Überschussladen liefert Loxone denselben Sollwert im
   Sekundentakt — ohne Entprellung wären das dreitausend Schreibbefehle je Stunde.
@@ -137,6 +142,22 @@ die Regel auseinanderlaufen lassen.
 > wirkt sich das Semikolon nicht aus — es schadet aber auch dort nicht, und der
 > Reiter *Einbindung in Loxone* zeigt jetzt überall die Fassung mit Semikolon.
 
+### Jede Eingangsvorlage hat ihren eigenen Namensraum
+
+Bis 0.9.11 erzeugten die fünf Eingangsvorlagen zusammen 73 Eingänge unter nur
+59 verschiedenen Namen: `VW_1_OK` und `VW_1_ALTER` standen in allen fünf,
+`VW_1_SOC`, `VW_1_KM`, `VW_1_BATTTEMP`, `VW_1_ENTFERNUNG`, `VW_1_ZUHAUSE` und
+`VW_1_VERBRAUCH` in je zweien. Wer zwei Vorlagen einlas, bekam gleichnamige
+Befehlserkennungen, und die Baustein-Liste dieses Plugins konnte nicht sagen,
+welche gemeint war.
+
+Seit 0.9.12 trägt jede Vorlage außer der Statusvorlage ein Kürzel:
+`VW_1_LD_SOC` (Laden), `VW_1_WA_KM` (Wartung), `VW_1_PO_ZUHAUSE` (Position),
+`VW_1_VB_VERBRAUCH` (Verbrauch). **Die Statusvorlage behält alle bisherigen
+Namen unverändert** — wer nur sie eingelesen hat, muss nichts nachziehen.
+Wer eine der vier anderen Vorlagen neu einliest, bekommt die neuen Namen und
+zieht die Verwendung in der Programmierung einmal nach.
+
 ### Nach einer Aktualisierung läuft der Dienst wieder
 
 `preupgrade.sh` hält den Dienst an. Ein Merker **neben** dem
@@ -144,17 +165,23 @@ Konfigurationsordner sagt dem `postinstall.sh`, dass er lief, und der startet
 ihn wieder — sofort und ohne Umweg. Der Merker wird nur gesetzt, wenn der
 Vorgang wirklich lief, und in jedem Fall wieder entfernt.
 
-> **Was diese Korrektur NICHT ist, und das gehört hierher.** Ursprünglich stand
-> hier, das Plugin habe nach jeder Aktualisierung stillgestanden, weil der
-> Installateur `data/` ausräume. **Das war falsch und nie gemessen.** Nachgelesen
-> in `sbin/plugininstall.pl`: beim Upgrade werden `config/` und `data/` des
-> Plugins angelegt, falls sie fehlen, und der Archivinhalt wird darüber kopiert
-> (`:891`, `:895`, `:996`, `:1000`); gelöscht werden sie nur in
-> `purge_installation` (`:1604`, `:1606`), und die läuft ausschließlich beim
-> **Deinstallieren** (`:233`). Der Sollmerker `soll_laufen` überlebt das Upgrade
-> also, und der Cron-Wächter holt den Dienst binnen einer Minute von selbst
-> zurück. Diese Korrektur verkürzt ein Fenster von bis zu 60 Sekunden und macht
-> den Start unabhängig vom Wächter — sie behebt keinen Stillstand.
+> **Berichtigung vom 03.09.2026.** An dieser Stelle stand seit dem 20.08.2026,
+> `purge_installation` laufe „ausschließlich beim Deinstallieren (`:233`)", der
+> Sollmerker `soll_laufen` überlebe das Upgrade und der Cron-Wächter hole den
+> Dienst von selbst zurück. **Das war falsch.** Nachgemessen an der Quelle
+> selbst — `sbin/plugininstall.pl`, Zweig `master`, 2054 Zeilen:
+>
+> ```
+> 233:	&purge_installation("all");     <- Deinstallation
+> 886:		&purge_installation;        <- IM UPGRADE-ZWEIG
+> ```
+>
+> Zeile 886 steht innerhalb von `if ($isupgrade) {` (`:858`), direkt nach den
+> `preupgrade`-Skripten. Im Rumpf, unter `if ($pfolder)` und **ohne** Prüfung
+> auf `"all"`, steht `rm -rf` auf `config/plugins/<ordner>/` **und**
+> `data/plugins/<ordner>/`. Der Sollmerker überlebt das Upgrade also **nicht**,
+> und der Wächter holt nichts zurück: der Merker neben dem Konfigurationsordner
+> ist der einzige Weg, und er behebt sehr wohl einen Stillstand.
 
 `preupgrade.sh` legt jetzt einen Merker **neben** dem Konfigurationsordner ab —
 denn auch der wird ausgeräumt — und zwar nur dann, wenn der Vorgang wirklich

@@ -24,6 +24,27 @@ function vw_pruefungen()
     $zeilen[] = vw_pruefzeile(is_file($venv) ? 1 : 0, vw_t('TEST.F_VENV'),
         is_file($venv) ? $venv : vw_t('TEST.A_VENV_FEHLT'));
 
+    /* Wie lang ist das Aktionstoken?
+     *
+     * Die Regel in vw_regeln() laesst seit 0.9.12 jede Laenge ab 1 zu -
+     * bewusst: ein zu enges Muster verwirft ein gueltiges, von Hand
+     * gesetztes Token, und der Schaden ist derselbe wie bei einem
+     * verlorenen (Vorfall vom 27.08.2026). Ein kurzes Token ist trotzdem
+     * schwach: es steht in jeder Loxone-Adresse und schuetzt das Schalten.
+     * Deshalb wird es GEMELDET, nicht abgewiesen. Selbst erzeugte Token
+     * haben 24 Zeichen. */
+    $vw_tk = trim((string) $cfg['aktionstoken']);
+    if ($vw_tk === '') {
+        $zeilen[] = vw_pruefzeile(0, vw_t('TEST.F_TOKENLAENGE'),
+            vw_t('TEST.A_TOKEN_FEHLT'));
+    } elseif (strlen($vw_tk) < 16) {
+        $zeilen[] = vw_pruefzeile(0, vw_t('TEST.F_TOKENLAENGE'),
+            sprintf(vw_t('TEST.A_TOKEN_KURZ'), strlen($vw_tk)));
+    } else {
+        $zeilen[] = vw_pruefzeile(1, vw_t('TEST.F_TOKENLAENGE'),
+            sprintf(vw_t('TEST.A_TOKEN_OK'), strlen($vw_tk)));
+    }
+
     // carconnectivity verlangt Python 3.9 oder neuer. Das ist auf jedem
     // LoxBerry erfuellt, den es heute gibt (Debian 12 liefert 3.11) - die
     // Zeile bleibt trotzdem stehen, damit man es schwarz auf weiss hat.
@@ -146,6 +167,12 @@ function vw_pruefungen()
         if ($ohne_text) {
             $abw[] = sprintf(vw_t('TEST.A_REITER_OHNE_TEXT'),
                 vw_e(implode(', ', $ohne_text)));
+        }
+        // Ein Reiter, den die Leiste nicht zeigt: er ist unerreichbar.
+        $ohne_leiste = array_values(array_diff($r['liste'], $r['leiste_fest']));
+        if ($ohne_leiste) {
+            $abw[] = sprintf(vw_t('TEST.A_REITER_OHNE_LEISTE'),
+                vw_e(implode(', ', $ohne_leiste)));
         }
         // Ein woertlicher Eintrag in der Leiste, den die Liste nicht kennt.
         // Heute gibt es keinen - aber wer die Schleife spaeter aufloest,
@@ -538,10 +565,14 @@ function vw_vorlagen_zeile()
  * Nur so faellt ein Bereich auf, den es in der Datei gibt und den zur Laufzeit
  * niemand oeffnet.
  *
- * Die Reiterleiste wird NICHT verglichen, und das ist keine Luecke: sie
- * entsteht in einer Schleife ueber dieselbe Liste und kann deshalb nicht
- * abweichen. Woertliche Eintraege in der Leiste - die es hier nicht gibt -
- * wuerden trotzdem auffallen; sie werden mitgelesen.
+ * Die Reiterleiste WIRD verglichen, seit sie ausgeschrieben ist (0.9.12).
+ * Vorher entstand sie in einer Schleife ueber dieselbe Liste und konnte
+ * nicht abweichen - dafuer war sie fuer jedes Werkzeug unsichtbar, das
+ * woertliche Namen sucht, und diese Pruefung mass nur eine Richtung.
+ * Jetzt sind es beide: ein Eintrag in der Leiste, den die Liste nicht kennt,
+ * UND ein Reiter der Liste, den die Leiste nicht zeigt - der waere
+ * unerreichbar, und genau dieser Fall ist im Haus schon einmal gruen
+ * durchgelaufen.
  */
 function vw_reiter_lesen()
 {
@@ -650,11 +681,26 @@ function vw_test_aktion($aktion)
     }
 }
 
-/** Mini-SVG: Fuellstand ueber den heutigen Tag (0 bis 24 h, 0 bis 100 %). */
-function vw_soc_svg($punkte)
+/**
+ * Mini-SVG: Fuellstand ueber EINEN Tag (0 bis 24 h, 0 bis 100 %).
+ *
+ * $tag ist 'YYYYMMDD'; ohne Angabe gilt heute.
+ *
+ * Bis 0.9.11 kannte die Funktion nur 'today 00:00'. Die Tagwahl kam in
+ * 0.9.10 dazu, die Zeitachse wurde nicht mitgezogen: fuer jeden
+ * zurueckliegenden Tag lagen alle Zeitstempel vor dem Nullpunkt, jeder Punkt
+ * fiel durch die Bereichspruefung, und die Grafik zeigte "noch keine
+ * Messpunkte fuer heute" - direkt ueber der Zeile "288 Messpunkte am
+ * 01.09.2026". Zwei einander widersprechende Aussagen auf einem Bildschirm.
+ */
+function vw_soc_svg($punkte, $tag = null)
 {
     $w = 720; $h = 120; $x0 = 34; $y0 = 8; $pw = $w - $x0 - 8; $ph = $h - $y0 - 20;
-    $tag0 = strtotime('today 00:00');
+    $tag0 = ($tag !== null && preg_match('/^[0-9]{8}$/', (string) $tag))
+          ? (int) mktime(0, 0, 0, (int) substr($tag, 4, 2), (int) substr($tag, 6, 2),
+                         (int) substr($tag, 0, 4))
+          : strtotime('today 00:00');
+    $heute = ($tag === null || (string) $tag === date('Ymd'));
     $svg = '<svg viewBox="0 0 ' . $w . ' ' . $h . '" style="width:100%;max-width:' . $w
          . 'px;height:auto;background:#fafafa;border:1px solid #e0e0e0;border-radius:8px;"'
          . ' xmlns="http://www.w3.org/2000/svg">';
@@ -691,7 +737,8 @@ function vw_soc_svg($punkte)
     } else {
         $svg .= '<text x="' . ($x0 + $pw / 2) . '" y="' . ($y0 + $ph / 2)
               . '" font-size="11" fill="#aaa" text-anchor="middle">'
-              . vw_e(vw_t('TEST.KEINE_MESSPUNKTE')) . '</text>';
+              . vw_e(vw_t($heute ? 'TEST.KEINE_MESSPUNKTE'
+                                 : 'TEST.KEINE_MESSPUNKTE_TAG')) . '</text>';
     }
     return $svg . '</svg>';
 }

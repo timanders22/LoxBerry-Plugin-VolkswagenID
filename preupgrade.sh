@@ -12,21 +12,29 @@ BASE="${ARGV5:-$LBHOMEDIR}"
 
 # Der Merker sagt dem postinstall, dass der Dienst LIEF.
 #
-# BERICHTIGT am 20.08.2026. Hier stand, der Installateur raeume beim
-# Upgrade data/ und config/ des Plugins aus. Das ist FALSCH und war nie
-# gemessen. Nachgelesen in sbin/plugininstall.pl: beide Ordner werden
-# angelegt, falls sie fehlen, und der Archivinhalt wird darueber kopiert
-# (:891, :895, :996, :1000). Geloescht werden sie nur in
-# purge_installation (:1604, :1606), und die laeuft ausschliesslich im
-# Deinstallations-Zweig (:233).
+# BERICHTIGT am 03.09.2026, und diesmal an der Primaerquelle gemessen.
 #
-# Was daraus folgt, und es ist wichtiger als der Merker: der Sollmerker
-# data/plugins/<ordner>/soll_laufen UEBERLEBT das Upgrade, und dieses
-# preupgrade loescht ihn nicht. Der Cron-Waechter holt den Dienst also von
-# selbst zurueck - binnen einer Minute. Der Merker hier macht daraus einen
-# SOFORTIGEN Start und macht ihn unabhaengig vom Waechter; er behebt keinen
-# Stillstand, er verkuerzt ein Fenster von bis zu 60 Sekunden, in dem
-# Loxone auf alten Werten sitzt.
+# Hier stand seit dem 20.08.2026, purge_installation laufe "ausschliesslich
+# im Deinstallations-Zweig (:233)" und der Sollmerker ueberlebe das Upgrade.
+# Das war falsch. Nachgemessen an sbin/plugininstall.pl (Zweig master, 2054
+# Zeilen, selbst geholt am 03.09.2026):
+#
+#   233:	&purge_installation("all");   <- Deinstallation
+#   886:		&purge_installation;      <- IM UPGRADE-ZWEIG
+#
+# Zeile 886 steht innerhalb von "if ($isupgrade) {" (:858), unmittelbar nach
+# den preupgrade-Skripten, unter dem Kommentar "# Purge old installation".
+# Im Rumpf der Subroutine, unter "if ($pfolder)" und OHNE jede Pruefung auf
+# "all", steht rm -rf auf config/plugins/<ordner>/ UND
+# data/plugins/<ordner>/. Das "all" an :233 schaltet nur zusaetzlich die
+# Crontab-Datei und das uninstall-Skript frei.
+#
+# Was daraus folgt: der Sollmerker data/plugins/<ordner>/soll_laufen
+# UEBERLEBT DAS UPGRADE NICHT. Der Cron-Waechter holt den Dienst also
+# NICHT von selbst zurueck - dieser Merker hier ist der einzige Weg, und
+# er behebt sehr wohl einen Stillstand. Er liegt deshalb neben dem
+# Konfigordner (Dateiname mit Punkt), wo der Loeschblock ihn nicht
+# erwischt.
 MERKER="$BASE/config/plugins/$PFOLDER.lief_vorher"
 rm -f "$MERKER"
 
@@ -44,6 +52,16 @@ if [ -f "$PID" ]; then
     kill -9 "$(cat "$PID")" 2>/dev/null || true
     rm -f "$PID"
     echo "<INFO> Laufender Dienst angehalten."
+fi
+
+# Die Zuordnung Fahrgestellnummer -> Fahrzeugnummer liegt bereits NEBEN dem
+# Datenordner und ueberlebt damit den Loeschblock. Hier wird sie nur
+# gesichert, falls eine aeltere Fassung sie noch DARIN abgelegt hat.
+ALTNR="$BASE/data/plugins/$PFOLDER/nummern.json"
+NEUNR="$BASE/data/plugins/$PFOLDER.nummern.json"
+if [ -f "$ALTNR" ] && [ ! -f "$NEUNR" ]; then
+    cp -p "$ALTNR" "$NEUNR" 2>/dev/null || true
+    echo "<INFO> Fahrzeugnummern gesichert."
 fi
 
 CFGDIR="$BASE/config/plugins/$PFOLDER"
