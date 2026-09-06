@@ -245,6 +245,62 @@ _LOG = logging.getLogger("volkswagen")
 _LETZTE_MELDUNG: dict[str, float] = {}
 
 
+class WachsameRotation(RotatingFileHandler):
+    """Umlaufender Protokollhandler, der eine geloeschte Datei neu oeffnet.
+
+    `log/plugins` liegt auf einer Ramdisk (zram). Wird sie geleert, raeumt
+    LoxBerrys `log_maint` auf, oder loescht jemand die Datei von Hand, dann
+    schreibt ein einmal geoeffneter Handler bis zum Prozessende in einen
+    Inode, den es nicht mehr gibt - ohne Fehlermeldung, ohne Datei, ohne
+    Hinweis. Am Geraet gemessen (06.09.2026, Python 3.13.5): FileHandler und
+    RotatingFileHandler verlieren die Zeile, WatchedFileHandler nicht.
+
+    Die Standardbibliothek hat den WatchedFileHandler, aber nicht zusammen
+    mit dem Umlauf. Deshalb hier beides: vor jeder Zeile Geraetenummer und
+    Inode vergleichen, bei Abweichung neu oeffnen, nach jedem Umlauf die
+    Kennung nachfuehren.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._kennung = self._kennung_lesen()
+
+    def _kennung_lesen(self):
+        """(Geraetenummer, Inode) der Datei - None, wenn es sie nicht gibt."""
+        try:
+            s = os.stat(self.baseFilename)
+        except OSError:
+            return None
+        return (s.st_dev, s.st_ino)
+
+    def _nachfassen(self):
+        """Neu oeffnen, wenn unter dem offenen Deskriptor eine andere (oder
+        gar keine) Datei mehr liegt."""
+        if self._kennung_lesen() == self._kennung:
+            return
+        if self.stream is not None:
+            try:
+                self.stream.flush()
+            finally:
+                self.stream.close()
+                self.stream = None
+        self.stream = self._open()
+        self._kennung = self._kennung_lesen()
+
+    def emit(self, record):
+        try:
+            self._nachfassen()
+        except Exception:
+            # Ein Fehlschlag beim Nachfassen darf die Zeile nicht kosten:
+            # lieber in den alten Deskriptor schreiben als gar nicht.
+            pass
+        super().emit(record)
+
+    def doRollover(self):
+        super().doRollover()
+        self._kennung = self._kennung_lesen()
+
+
 # ---------------------------------------------------------------------------
 # Protokollierung
 #
@@ -264,7 +320,7 @@ def log_einrichten() -> None:
         pass
     _LOG.setLevel(logging.INFO)
     try:
-        h = RotatingFileHandler(DATEI_LOG, maxBytes=512000, backupCount=1, encoding="utf-8")
+        h = WachsameRotation(DATEI_LOG, maxBytes=512000, backupCount=1, encoding="utf-8")
     except OSError as err:
         h = logging.StreamHandler(sys.stderr)
         print(f"Logdatei nicht beschreibbar ({err}) - schreibe nach stderr.", file=sys.stderr)
@@ -2072,10 +2128,16 @@ class Horcher:
 
             # Der Aufruf unterscheidet sich zwischen paho 1.x und 2.x. Die
             # Fassung wird nicht geraten, sondern abgefragt.
+            # Die Fassung wird abgetastet, nicht angenommen: paho-mqtt 2.x schreibt
+            # bei VERSION1 eine DeprecationWarning in JEDES Protokoll (am Geraet an
+            # 2.1.0 gemessen, 06.09.2026), paho 1.x kennt die Aufzaehlung gar nicht.
             try:
-                k = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1)   # paho 2.x
+                k = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)   # paho 2.x
             except (AttributeError, TypeError):
-                k = mqtt.Client()                                    # paho 1.x
+                try:
+                    k = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1)
+                except (AttributeError, TypeError):
+                    k = mqtt.Client()                                # paho 1.x
             k.on_message = bei_nachricht
             k.on_connect = bei_verbindung
             k.on_disconnect = bei_trennung

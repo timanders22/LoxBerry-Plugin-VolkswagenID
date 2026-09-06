@@ -20,6 +20,52 @@ Plug-in-Hybrid führt das Plugin beide.
 > gegen Attrappen, sondern gegen **echte Objekte der Bibliothek**. Deshalb
 > 0.9.x und nicht 1.0.0, und deshalb sind schreibende Befehle ab Werk gesperrt.
 
+## Neu in 0.9.15
+
+### Der Dienst konnte sein Protokoll verlieren, ohne dass es auffiel
+
+`log/plugins` liegt auf einer Ramdisk (`/dev/zram0`). Wird sie geleert — beim
+Neustart, durch LoxBerrys `log_maint`, oder von Hand —, ist die Datei fort. Ein
+`RotatingFileHandler`, der sie beim Start **einmal** geöffnet hat, schreibt
+danach bis zum nächsten Neustart in einen gelöschten Inode: keine
+Fehlermeldung, keine Datei, kein Hinweis. Auch die Rotation greift dann nicht
+mehr.
+
+Diese Fassung benutzt deshalb `WachsameRotation` in `bin/vw.py` — einen
+umlaufenden Handler, der vor jeder Zeile Gerätenummer und Inode vergleicht und
+nötigenfalls neu öffnet. Die Standardbibliothek hat für den einen Fall den
+`WatchedFileHandler` und für den anderen den `RotatingFileHandler`, aber
+nichts, was beides kann; deshalb die eigene Klasse.
+
+Auf dem LoxBerry geeicht, vier Prüfungen und in beide Richtungen: schreiben,
+nach dem Löschen weiterschreiben, Umlauf bei Überlänge, nach dem Umlauf erneut
+löschen. Mit dem alten Handler ist die Zeile nach dem Löschen verloren und
+bleibt es, mit dem neuen steht sie in der wieder angelegten Datei. Auf einem
+Windows-Arbeitsplatz lässt sich das nicht messen — dort kann eine offene Datei
+gar nicht gelöscht werden.
+
+Aufgefallen ist die Bauart am Heimkino-Plugin, dessen Dienst sieben Stunden
+ohne Protokolldatei lief, und am laufenden Gerät belegt: der
+Midea2Lox-Dienst hielt `midea2lox.log (deleted)` offen, während unter
+demselben Namen längst eine neue Datei fortgeschrieben wurde — von außen sah
+das Plugin gesund aus. Elf Linien tragen dieselbe Bauart; alle elf sind am
+06.09.2026 nachgezogen worden.
+
+**Die zweite Hälfte gehört dem Startskript.** `bin/dienst.sh` hängte die
+Ausgabe des Dienstes mit `nohup … >> "$LOGDATEI"` an **dieselbe** Datei, die
+der Handler führt. Damit hält die Shell einen zweiten, anhängenden Deskriptor
+darauf — und der bleibt auf der gelöschten Datei stehen, gleich wie gut das
+Programm nachfasst. Am Gerät gemessen (06.09.2026): sieben laufende Dienste
+hielten so eine gelöschte Protokolldatei offen. Die Ausgabe geht jetzt in
+`vw_start.log`, das bei jedem Start geleert wird; das Protokoll gehört
+allein dem Handler. Übernommen von AnkerSolix, das es seit 0.9.6 so macht.
+
+Im Sandkasten am Gerät geprüft, in beide Richtungen: mit dem alten Skript
+steht die Dienstausgabe im Protokoll und es gibt keine Startdatei, mit dem
+neuen ist es umgekehrt — Start, Startdatei, unberührtes Protokoll und Stopp
+je sechs von sechs.
+
+
 ## Neu in 0.9.14
 
 ### Die Sitzheizung wird nur noch gelesen
