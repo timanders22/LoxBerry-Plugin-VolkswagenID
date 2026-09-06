@@ -1682,6 +1682,13 @@ function vw_verbrauch_felder()
  *   eingreifend  1 = braucht den zweiten Haken (bewegt oder oeffnet das Fahrzeug)
  *   spin         1 = ohne hinterlegte S-PIN nicht moeglich
  */
+/** Der erste schaltbare Name - fuer Beispieladressen. */
+function vw_schalter_erster()
+{
+    $s = array_keys(vw_schalter());
+    return $s ? $s[0] : '';
+}
+
 function vw_befehle()
 {
     return array(
@@ -1706,27 +1713,57 @@ function vw_befehle()
         'verriegeln'     => array('s' => 'VW_BEF.VERRIEGELN',   'eingreifend' => 1, 'spin' => 1),
         'blinken'        => array('s' => 'VW_BEF.BLINKEN',      'eingreifend' => 1),
         'hupen'          => array('s' => 'VW_BEF.HUPEN',        'eingreifend' => 1),
+        /* Der Beispielname wird GERECHNET, nicht getippt: bis 0.9.11 stand
+         * hier fest 'sitzheizung', und als der Name wegfiel, waere die
+         * Tabelle auf einen Namen gelaufen, den der Endpunkt abweist. Die
+         * vollstaendige Liste steht im Reiter Loxone darunter. */
         'einstellung'    => array('s' => 'VW_BEF.EINSTELLUNG',
-                                  'param' => '&name=sitzheizung&wert=<v>', 'analog' => 1),
+                                  'param' => '&name=' . vw_schalter_erster() . '&wert=<v>',
+                                  'analog' => 1),
     );
 }
 
 /**
- * Die Ja/Nein-Einstellungen, die 'einstellung&name=...' setzen kann.
+ * Die Ja/Nein-Einstellungen, die 'einstellung&name=...' SETZEN kann.
  *
- * Alle vier liest der Dienst bereits ab; gesetzt wurden sie bis 0.9.9 nicht.
- * Ob der Volkswagen-Connector fuer jede einen Schreibhaken registriert, ist
- * UNGEMESSEN - hier liegt kein Fahrzeug. Der Dienst weist deshalb sauber ab,
- * statt zu raten.
+ * Muss zu SCHALTER in bin/vw.py passen; der Reiter Test zaehlt beide
+ * gegeneinander.
+ *
+ * Seit 0.9.14 sind es DREI. Am Geraet gemessen (Connector 0.10.6,
+ * 06.09.2026): der Connector macht zwoelf Fahrzeugattribute schreibbar, und
+ * diese drei tragen zusaetzlich einen Schreibhaken. Die Sitzheizung nicht -
+ * siehe vw_nur_lesend().
  */
 function vw_schalter()
 {
     return array(
-        'sitzheizung'      => 'VW_SCHALT.SITZHEIZUNG',
         'klima_entriegeln' => 'VW_SCHALT.KLIMA_ENTRIEGELN',
         'stecker_auto'     => 'VW_SCHALT.STECKER_AUTO',
         'klima_ohne_netz'  => 'VW_SCHALT.KLIMA_OHNE_NETZ',
     );
+}
+
+/**
+ * Namen, die es GIBT, die sich aber nicht setzen lassen - mit dem Grund.
+ *
+ * Muss zu NUR_LESEND in bin/vw.py passen.
+ *
+ * 'sitzheizung' stand bis 0.9.13 in vw_schalter() und war in 0.9.12 sogar
+ * der einzige Schalter der Ausgangsvorlage. Am Geraet gemessen ist
+ * 'seat_heating' im Volkswagen-Connector kein eigener Schalter, sondern ein
+ * abgeleiteter Anzeigewert: er wird wahr, sobald eine der vier Sitzzonen an
+ * ist (connector.py:1191-1199). Er hat weder _is_changeable noch einen
+ * Schreibhaken; ein Schreibversuch wirft
+ * "TypeError: You cannot set this attribute. Attribute is not mutable."
+ *
+ * Der Name verschwindet nicht einfach: wer die Adresse im Miniserver
+ * eingetragen hat, bekaeme sonst nur "unbekannt" und suchte den Fehler bei
+ * sich. Als LESENDER Wert behaelt er seine Bedeutung - Thema
+ * 'fahrzeugN/sitzheizung_ein' und Feld SITZH der Statusantwort.
+ */
+function vw_nur_lesend()
+{
+    return array('sitzheizung' => 'VW_SCHALT.SITZH_NUR_LESEND');
 }
 
 /**
@@ -1916,7 +1953,7 @@ function vw_vorlage_vo($nummer = 1)
          * Bis 0.9.11 stand der Name 'sitzheizung' fest im Parameter
          * (vw_befehle, 'einstellung'), und die Vorlage enthielt genau einen
          * Ausgang mit dem allgemeinen Titel "Ja/Nein-Einstellung setzen" -
-         * er konnte aber nur eines der vier Dinge. vw_schalter() kennt vier;
+         * er konnte aber nur eines der Dinge. vw_schalter() kennt drei;
          * die Oberflaeche zeigte alle vier Adressen zum Abschreiben, die
          * Vorlage nur eine. Jetzt bekommt jeder Schalter seinen eigenen
          * Ausgang mit sprechendem Titel. */

@@ -57,7 +57,7 @@ def lb_wurzel_ermitteln():
     return ""
 
 
-MQTT_MAX = 200
+MQTT_MAX = 1024
 
 
 def mqtt_wert_saeubern(wert, laenge: int = MQTT_MAX):
@@ -69,8 +69,22 @@ def mqtt_wert_saeubern(wert, laenge: int = MQTT_MAX):
     trennt.
 
     Gekappt wird ab 0.9.10, weil seither auch Text hinausgeht: eine Anschrift
-    oder ein Fehlertext hat keine Obergrenze, ein UDP-Datagramm schon. 200
-    Zeichen sind aus MGiSmart uebernommen und NICHT am Gateway nachgemessen.
+    oder ein Fehlertext hat keine Obergrenze, ein UDP-Datagramm schon.
+
+    SEIT 0.9.14 AM GATEWAY GEMESSEN. Bis 0.9.13 standen hier 200 Zeichen, aus
+    MGiSmart uebernommen und im Kommentar selbst als ungemessen gekennzeichnet.
+    Am 06.09.2026 an der Quelle nachgesehen - sbin/mqttgateway.pl des
+    LoxBerry, Zeile 92, 'my $udpMAXLEN = 10240;' - so gross ist der Puffer, mit dem der
+    UDP-Eingang liest. Und in der Wirkung geprueft: Nutzlasten von 50, 200,
+    400, 900, 3000 und 9000 Byte kamen alle vollstaendig und ungekappt im
+    Broker an. Die alte Grenze war also um Faktor 50 zu streng; Anschriften
+    und Ladesaeulennamen wurden abgeschnitten, obwohl sie durchgingen.
+
+    1024 statt 10240, mit Absicht: im selben Datagramm liegen auch Befehlswort
+    und Thema, und ein Zeichen kann in UTF-8 bis zu vier Byte belegen -
+    1024 Zeichen sind damit hoechstens rund 4 kB und bleiben weit unter der
+    Grenze. Was Loxone selbst an einem Textbaustein annimmt, ist hier NICHT
+    gemessen.
     """
     text = str(wert)
     for zeichen in ("\r\n", "\r", "\n", "\t"):
@@ -1332,14 +1346,42 @@ _BREMSE = Bremse()
 # Die Ja/Nein-Einstellungen, die 'einstellung&name=...' setzen kann.
 # Muessen zu vw_schalter() in webfrontend/html/vw_lib.php passen.
 #
-# Ob der Volkswagen-Connector fuer jede einen Schreibhaken registriert, ist
-# UNGEMESSEN - hier liegt kein Fahrzeug und der Connector ist nicht
-# installiert. Fehlt der Haken, wirft die Bibliothek, und die Antwort sagt es.
+# AM GERAET GEMESSEN am 06.09.2026, Connector 0.10.6 (bis 0.9.13 stand hier
+# "UNGEMESSEN"): der Connector macht genau zwoelf Fahrzeugattribute schreibbar
+# (_is_changeable = True, connector.py:1119-1411). Drei der vier bisherigen
+# Schalter sind darunter und tragen zusaetzlich einen Schreibhaken
+# (_add_on_set_hook) - sie wirken.
 SCHALTER = {
-    "sitzheizung":      ("climatization", "seat_heating"),
     "klima_entriegeln": ("climatization", "climatization_at_unlock"),
     "klima_ohne_netz":  ("climatization", "climatization_without_external_power"),
     "stecker_auto":     ("charging", "auto_unlock"),
+}
+
+# Bekannt, aber NICHT schreibbar - mit dem Grund im Klartext.
+#
+# 'sitzheizung' stand bis 0.9.13 in SCHALTER und war in 0.9.12 sogar der
+# einzige Schalter der Ausgangsvorlage. Am Geraet gemessen ist
+# 'seat_heating' im Connector KEIN eigener Schalter, sondern ein abgeleiteter
+# Anzeigewert: er wird wahr, sobald eine der vier Sitzzonen an ist
+# (connector.py:1191-1199), und hat weder _is_changeable noch einen
+# Schreibhaken. Ein Schreibversuch wirft
+# "TypeError: You cannot set this attribute. Attribute is not mutable."
+#
+# Warum die Absage hier steht und der Name nicht einfach verschwindet: wer
+# die Adresse im Miniserver eingetragen hat, bekommt sonst nur "Unbekannte
+# Einstellung" und sucht den Fehler bei sich. Ein Name, der fallen soll,
+# faellt angekuendigt und benannt - er behaelt seine Bedeutung als LESENDER
+# Wert (Thema fahrzeugN/sitzheizung_ein, Endpunktfeld SITZH).
+NUR_LESEND = {
+    "sitzheizung":
+        "Die Sitzheizung laesst sich ueber den Volkswagen-Connector nicht "
+        "setzen. Am Geraet gemessen (Connector 0.10.6, 06.09.2026): "
+        "'seat_heating' ist dort kein eigener Schalter, sondern ein "
+        "abgeleiteter Anzeigewert - er ist wahr, sobald eine der vier "
+        "Sitzzonen an ist. Der Wert wird weiterhin GELESEN: Thema "
+        "'<praefix>/fahrzeugN/sitzheizung_ein' und das Feld SITZH der "
+        "Statusantwort. Schaltbar sind: "
+        + ", ".join(sorted(SCHALTER)) + ".",
 }
 
 
@@ -1530,6 +1572,8 @@ def _befehl_absetzen(fahrzeuge: list, cfg: dict, b: dict) -> tuple[int, str, dic
 
     if aktion == "einstellung":
         name = str(b.get("name") or "")
+        if name in NUR_LESEND:
+            return (0, NUR_LESEND[name], {"name": name})
         if name not in SCHALTER:
             return (0, f"Unbekannte Einstellung '{name}'. Bekannt sind: "
                        f"{', '.join(sorted(SCHALTER))}.", {})

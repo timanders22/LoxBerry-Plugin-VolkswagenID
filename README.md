@@ -20,6 +20,71 @@ Plug-in-Hybrid führt das Plugin beide.
 > gegen Attrappen, sondern gegen **echte Objekte der Bibliothek**. Deshalb
 > 0.9.x und nicht 1.0.0, und deshalb sind schreibende Befehle ab Werk gesperrt.
 
+## Neu in 0.9.14
+
+### Die Sitzheizung wird nur noch gelesen
+
+Bis 0.9.13 bot dieses Plugin vier Ja/Nein-Schalter an, darunter die
+Sitzheizung. **Am Gerät gemessen** (06.09.2026, Volkswagen-Connector 0.10.6):
+der Connector macht zwölf Fahrzeugattribute schreibbar, und `seat_heating` ist
+nicht darunter. Es ist dort kein eigener Schalter, sondern ein *abgeleiteter*
+Anzeigewert — wahr, sobald eine der vier Sitzzonen läuft. Ein Schaltversuch
+lief in eine Fehlermeldung der Bibliothek
+(`TypeError: … Attribute is not mutable`).
+
+Seit 0.9.14 gilt:
+
+* **Schaltbar sind drei**: Klimatisierung beim Entriegeln, Klimatisierung ohne
+  Netz, Stecker automatisch entriegeln.
+* **Die Sitzheizung wird weiterhin gelesen** — Thema
+  `<präfix>/fahrzeugN/sitzheizung_ein` und Feld `SITZH` der Statusantwort
+  bleiben unverändert.
+* Wer die Schaltadresse im Miniserver eingetragen hat, bekommt keine
+  Fehlermeldung „unbekannt", sondern **den Grund im Klartext**
+  (`GRUND=NUR_LESEND`) und die Liste dessen, was schaltbar ist. Der Name
+  verschwindet also nicht stillschweigend.
+
+### Lange Werte werden nicht mehr abgeschnitten
+
+Was das Plugin an den UDP-Eingang des MQTT-Gateways schickt, war auf **200
+Zeichen** gekürzt. Die Zahl stammte aus einem Schwesterplugin und war im
+Quelltext selbst als ungemessen gekennzeichnet. Sie traf Anschriften und
+Ladesäulennamen: Wer eine lange Zieladresse gesetzt hatte, bekam sie in Loxone
+abgeschnitten zu sehen.
+
+Nachgemessen am 06.09.2026, auf beiden Wegen:
+
+* **An der Quelle** — `sbin/mqttgateway.pl` des LoxBerry, Zeile 92:
+  `my $udpMAXLEN = 10240;`. So groß ist der Puffer, mit dem der UDP-Eingang
+  liest.
+* **In der Wirkung** — Nutzlasten von 50, 200, 400, 900, 3 000 und 9 000 Byte
+  kamen alle vollständig und ungekappt im Broker an.
+
+Die neue Grenze ist **1024 Zeichen**, nicht 10 240: im selben Datagramm liegen
+auch Befehlswort und Thema, und ein Zeichen kann in UTF-8 bis zu vier Byte
+belegen — 1024 Zeichen sind damit höchstens rund 4 kB und bleiben deutlich
+unter der Puffergrenze. Was Loxone selbst an einem Textbaustein annimmt, ist
+hier **nicht** gemessen.
+
+## Neu in 0.9.13
+
+- **Der Reiter Test sagt jetzt, ob die MQTT-Veröffentlichung dieses Plugins
+  eingeschaltet ist.** Bis 0.9.12 stand dort nur der Zustand des MQTT-Gateways
+  von LoxBerry — das ist eine Aussage über den LoxBerry, nicht über dieses
+  Plugin. Wer die Veröffentlichung ausgeschaltet hatte, sah trotzdem einen
+  grünen Haken und konnte am Reiter nicht erkennen, dass nichts an den Broker
+  geht. Die neue Zeile steht vor der Gateway-Zeile und ist **grau**, wenn
+  ausgeschaltet — das ist eine Entscheidung, kein Fehler. Anlass: derselbe
+  Befund an BatterieBMS 0.9.17, dort am Gerät gemessen (`Regeln/04`).
+
+- **Das Auswahlfeld zeichnet seinen Pfeil selbst.** Bis 0.9.12 kam er von der
+  Oberfläche des LoxBerry. Am 05.09.2026 am Gerät gemessen (LoxBerry 4.0.0.15,
+  `system/css/components.css`): deren Regel `.lb-content select`
+  gibt es erst seit der neuen Oberfläche, und jede eigene Feldregel mit der
+  Kurzform `background:` löscht sie wieder. Darauf soll sich eine
+  Plugin-Oberfläche nicht verlassen (`Regeln/04`). Sonst ist an dieser
+  Fassung nichts geändert.
+
 ## Was 0.9.10 ändert
 
 Die größte Fassung seit dem ersten Release: zwölf Befunde behoben und rund
@@ -90,8 +155,9 @@ zu behaupten und den Anwender in ein rohes `ValueError` laufen zu lassen.
   und eine MQTT-Vorlage — je Fahrzeug. Bisher gab es genau eine.
   Die Ausgangsvorlage führt ab Werk **zwölf** der sechzehn Befehle; Ver- und
   Entriegeln, Hupe und Lichthupe kommen erst dazu, wenn der zweite Haken
-  gesetzt ist. Seit 0.9.12 hat jeder der vier Ja/Nein-Schalter einen eigenen
-  Ausgang — vorher war nur die Sitzheizung verdrahtet.
+  gesetzt ist. Seit 0.9.12 hat jeder Ja/Nein-Schalter einen eigenen Ausgang —
+  vorher war nur die Sitzheizung verdrahtet. Seit 0.9.14 sind es **drei**
+  Schalter, siehe unten.
 * **Lebenszeichen**: ein umlaufender Zähler 0…999 in jeder Statuszeile und über
   MQTT, dazu `ts` und `FEHLFOLGE`. Anders als `ALTER` übersteht ein Zähler den
   Zeitsprung, den ein Raspberry ohne Echtzeituhr beim ersten Zeitabgleich macht.

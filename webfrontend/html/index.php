@@ -393,6 +393,39 @@ if (!empty($vw_b['spin'])) {
         exit;
     }
 }
+/* Der NAME einer Ja/Nein-Einstellung wird geprueft, BEVOR nach dem Dienst
+ * gefragt wird.
+ *
+ * Ob ein Name schaltbar ist, haengt nicht daran, ob der Abrufdienst laeuft:
+ * ein Parameterfehler ist 400, ein Dienstproblem 503. Gemessen beim Bau von
+ * 0.9.14 stand die Dienstpruefung davor, und ein Aufruf mit einem nicht mehr
+ * schaltbaren Namen bekam "DIENST_LAEUFT_NICHT" - also genau dann keine
+ * Erklaerung, wenn jemand nach einem Update nachsieht, warum seine Adresse
+ * nicht mehr greift. Der Dienst kann dabei stehen.
+ *
+ * Ein Name, den es GIBT, der sich aber nicht setzen laesst, bekommt seine
+ * eigene Antwort mit dem Grund - nicht "unbekannt". Ein Virtueller Ausgang
+ * wertet die Antwort nicht aus, aber ein Mensch im Browser tut es. */
+if ($vw_aktion === 'einstellung') {
+    $vw_schalter = vw_schalter();
+    $vw_nurlesend = vw_nur_lesend();
+    if ($vw_name !== '' && isset($vw_nurlesend[$vw_name])) {
+        http_response_code(400);
+        echo "SET;OK=0;GRUND=NUR_LESEND\n";
+        echo trim(strip_tags(html_entity_decode(vw_t($vw_nurlesend[$vw_name]),
+                                                ENT_QUOTES, 'UTF-8'))) . "\n";
+        echo 'Schaltbar sind: ' . implode(', ', array_keys($vw_schalter)) . "\n";
+        exit;
+    }
+    if ($vw_name === '' || !isset($vw_schalter[$vw_name])) {
+        http_response_code(400);
+        echo "SET;OK=0;GRUND=NAME_UNBEKANNT\n";
+        echo 'Der Parameter name fehlt oder ist unbekannt. Erlaubt sind: '
+           . implode(', ', array_keys($vw_schalter)) . "\n";
+        exit;
+    }
+}
+
 if (vw_dienst_pid() === 0) {
     // Nicht stillschweigend einreihen: ohne laufenden Dienst passiert nichts,
     // und der Befehl laege bis zum naechsten Start in der Warteschlange.
@@ -428,14 +461,6 @@ if ($vw_aktion === 'klima_start' || $vw_aktion === 'zieltemperatur') {
     }
     $vw_befehl['ampere'] = (int) $vw_ampere;
 } elseif ($vw_aktion === 'einstellung') {
-    $vw_schalter = vw_schalter();
-    if ($vw_name === '' || !isset($vw_schalter[$vw_name])) {
-        http_response_code(400);
-        echo "SET;OK=0;GRUND=NAME_UNBEKANNT\n";
-        echo 'Der Parameter name fehlt oder ist unbekannt. Erlaubt sind: '
-           . implode(', ', array_keys($vw_schalter)) . "\n";
-        exit;
-    }
     if ($vw_wert === '') {
         http_response_code(400);
         echo "SET;OK=0;GRUND=WERT_FEHLT\n";
