@@ -2248,6 +2248,26 @@ function vw_sicherung_schreiben()
 /** Die Fassung aus der plugin.cfg, oder ''. */
 function vw_fassung()
 {
+    /* NEU: zuerst LoxBerry selbst fragen.
+     *
+     * Am Geraet gemessen (07.09.2026): plugininstall.pl liest die
+     * plugin.cfg aus dem Auspackordner und loescht sie danach -
+     * installiert wird sie NIRGENDWOHIN. Eine Fassungsfunktion, die nur
+     * Dateien kennt, gibt auf jeder Installation eine leere Zeichenkette
+     * zurueck; im Arbeitsordner faellt das nie auf, weil dort der
+     * Archivfall der Kandidatenliste immer trifft.
+     *
+     * LBSystem::pluginversion() (loxberry_system.php:403) liest die
+     * plugindatabase.json und ist die Auskunft von LoxBerry selbst.
+     * Die Dateikandidaten darunter bleiben stehen - sie tragen den
+     * Auspackordner, und der ist der Pruefstand. */
+    if (class_exists('LBSystem', false)
+        && method_exists('LBSystem', 'pluginversion')) {
+        $aus = @LBSystem::pluginversion();
+        if ($aus !== null && trim((string) $aus) !== '') {
+            return trim((string) $aus);
+        }
+    }
     static $f = null;
     if ($f !== null) {
         return $f;
