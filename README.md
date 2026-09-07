@@ -20,6 +20,17 @@ Plug-in-Hybrid führt das Plugin beide.
 > gegen Attrappen, sondern gegen **echte Objekte der Bibliothek**. Deshalb
 > 0.9.x und nicht 1.0.0, und deshalb sind schreibende Befehle ab Werk gesperrt.
 
+## Neu in 0.9.16
+
+- **Nur Schreibweise.** Die Sprachdateien führten für sichtbare Zeichen
+  noch HTML-Entitäten (`&mdash;`, `&auml;`, `&bdquo;`); jetzt stehen dort die
+  Zeichen selbst — in dieser Fassung **339** Stück. Das ist der Hausbeschluss
+  vom 14.08.2026: mit direkten Zeichen darf `htmlspecialchars` folgenlos
+  zweimal laufen, und die Doppelmaskierung fällt als Fehlerklasse weg.
+  `&nbsp;` und `&shy;` bleiben Entität (unsichtbares Zeichen im Quelltext ist
+  eine Wartungsfalle), ebenso die bedeutungstragenden `&amp;`, `&lt;`, `&gt;`,
+  `&quot;` und `&apos;`. **Am Verhalten ändert sich nichts.**
+
 ## Neu in 0.9.15
 
 ### Der Dienst konnte sein Protokoll verlieren, ohne dass es auffiel
