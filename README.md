@@ -20,6 +20,37 @@ Plug-in-Hybrid führt das Plugin beide.
 > gegen Attrappen, sondern gegen **echte Objekte der Bibliothek**. Deshalb
 > 0.9.x und nicht 1.0.0, und deshalb sind schreibende Befehle ab Werk gesperrt.
 
+## Neu in 0.9.18
+
+**Das Installationsprotokoll behauptete, einen Dienst angehalten zu haben, der
+gar nicht lief.** Die Meldung „Laufender Dienst angehalten." hing allein an der
+Existenz der PID-Datei und widersprach damit dem Kommentar drei Zeilen
+darüber, der genau das ausschließt: eine liegengebliebene PID-Datei ist
+kein laufender Dienst. Sie steht jetzt **innerhalb** der Lebendprüfung, die es
+darüber ohnehin schon gab; lag die Datei nur herum, heißt es „Der Dienst lief
+nicht — es war nichts anzuhalten."
+
+**Am Verhalten ändert sich nichts** — es wird nichts anders beendet, nur anders
+gemeldet.
+
+Geeicht am Gerät (LoxBerry 4.0.0.15), in beide Richtungen, gegen einen
+Wegwerfbaum mit einer nachweislich toten Prozessnummer: 0.9.17 meldete dort
+„Laufender Dienst angehalten.", 0.9.18 meldet „Der Dienst lief nicht". Ohne
+PID-Datei kommt in beiden Fassungen keine Zeile.
+
+### Zeilenenden
+
+`plugin.cfg`, `release.cfg`, `prerelease.cfg`, beide `language_*.ini` und
+`webfrontend/htmlauth/index.php` liegen jetzt als LF statt CRLF — Hausbrauch
+seit 13.09.2026, umgestellt je Linie bei ihrer nächsten Veröffentlichung.
+Diese Linie führt **keine** `.gitattributes`, der Wagenrücklauf lag also bis
+0.9.17 wirklich im Tag-Archiv. Der **Inhalt** dieser Dateien ist unverändert:
+rechnet man die Wagenrückläufe heraus, sind alt und neu byteweise gleich
+(nachgemessen); `index.php` ist danach noch einmal einzeln gegen PHP 7.4.33
+und 8.4.24 geprüft. Für bestehende Installationen ändert das nichts —
+`plugininstall.pl` streift die Wagenrückläufe ohnehin ab, und
+`Config::Simple` liest beide Stile.
+
 ## Neu in 0.9.16
 
 - **Nur Schreibweise.** Die Sprachdateien führten für sichtbare Zeichen

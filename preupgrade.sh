@@ -51,7 +51,15 @@ if [ -f "$PID" ]; then
     sleep 2
     kill -9 "$(cat "$PID")" 2>/dev/null || true
     rm -f "$PID"
-    echo "<INFO> Laufender Dienst angehalten."
+    # Die Meldung haengt am Merker, den der Block darueber setzt - und der
+    # wird nur gesetzt, wenn der Vorgang WIRKLICH lief. Bis 0.9.17 stand sie
+    # unbedingt hier und widersprach damit dem Kommentar drei Zeilen darueber
+    # ("Eine liegengebliebene PID-Datei ist kein laufender Dienst").
+    if [ -f "$MERKER" ]; then
+        echo "<INFO> Laufender Dienst angehalten."
+    else
+        echo "<INFO> Der Dienst lief nicht - es war nichts anzuhalten."
+    fi
 fi
 
 # Die Zuordnung Fahrgestellnummer -> Fahrzeugnummer liegt bereits NEBEN dem
