@@ -848,11 +848,11 @@ $vw_beschriftung = array(
 <div class="sm-hinweis"><?= vw_t('EINST.HEIMAT_ERKLAERUNG') ?></div>
 <div class="sm-feld">
   <label for="heim_breite"><?= vw_e(vw_t('EINST.L_HEIM_BREITE')) ?></label>
-  <input data-role="none" type="text" id="heim_breite" name="heim_breite" value="<?= vw_e($vw_cfg['heim_breite']) ?>" placeholder="48.137200">
+  <input data-role="none" type="text" id="heim_breite" name="heim_breite" value="<?= vw_e($vw_cfg['heim_breite']) ?>" placeholder="51.318339">
 </div>
 <div class="sm-feld">
   <label for="heim_laenge"><?= vw_e(vw_t('EINST.L_HEIM_LAENGE')) ?></label>
-  <input data-role="none" type="text" id="heim_laenge" name="heim_laenge" value="<?= vw_e($vw_cfg['heim_laenge']) ?>" placeholder="11.575600">
+  <input data-role="none" type="text" id="heim_laenge" name="heim_laenge" value="<?= vw_e($vw_cfg['heim_laenge']) ?>" placeholder="9.489601">
   <div class="sm-hilfe"><?= vw_t('EINST.H_HEIM_KOORDINATEN') ?></div>
 </div>
 <div class="sm-feld">

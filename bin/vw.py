@@ -2709,13 +2709,13 @@ def selbsttest() -> int:
 
     # Die Entfernungsrechnung gegen einen bekannten Wert halten. Dieselbe
     # Formel steht in PHP; laufen sie auseinander, zeigt die Oberflaeche eine
-    # andere Entfernung als Loxone. Muenchen -> Berlin sind rund 504 km.
-    _e = entfernung_m(48.1372, 11.5756, 52.5200, 13.4050)
-    if _e is not None and 500000 <= _e <= 508000:
-        zeilen.append(f"[OK]   Entfernungsrechnung geeicht (Muenchen-Berlin: {_e} m)")
+    # andere Entfernung als Loxone. Kassel (Hauptbahnhof) -> Berlin sind rund 300 km.
+    _e = entfernung_m(51.3183, 9.4896, 52.5200, 13.4050)
+    if _e is not None and 295000 <= _e <= 303000:
+        zeilen.append(f"[OK]   Entfernungsrechnung geeicht (Kassel-Berlin: {_e} m)")
     else:
         fehler += 1
-        zeilen.append(f"[FEHL] Die Entfernungsrechnung liefert {_e} m statt rund 504000 m")
+        zeilen.append(f"[FEHL] Die Entfernungsrechnung liefert {_e} m statt rund 300000 m")
 
     if NICHT_INSTALLIERT:
         zeilen.append(f"[INFO] Dieses Plugin ist NICHT installiert - es laeuft aus einem "

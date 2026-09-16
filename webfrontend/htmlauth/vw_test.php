@@ -271,9 +271,9 @@ function vw_pruefungen()
     $zeilen[] = vw_vorlagen_zeile();
 
     // Laufen die beiden Entfernungsrechnungen (PHP und Python) gleich?
-    // Muenchen - Berlin sind rund 504 km.
-    $e = vw_entfernung_m(48.1372, 11.5756, 52.5200, 13.4050);
-    $zeilen[] = vw_pruefzeile(($e !== null && $e >= 500000 && $e <= 508000) ? 1 : 0,
+    // Kassel (Hauptbahnhof) - Berlin sind rund 300 km.
+    $e = vw_entfernung_m(51.3183, 9.4896, 52.5200, 13.4050);
+    $zeilen[] = vw_pruefzeile(($e !== null && $e >= 295000 && $e <= 303000) ? 1 : 0,
         vw_t('TEST.F_ENTFERNUNG'),
         sprintf(vw_t('TEST.A_ENTFERNUNG'), $e === null ? '-' : $e));
 
