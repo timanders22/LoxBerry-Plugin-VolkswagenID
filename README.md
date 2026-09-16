@@ -20,6 +20,63 @@ Plug-in-Hybrid führt das Plugin beide.
 > gegen Attrappen, sondern gegen **echte Objekte der Bibliothek**. Deshalb
 > 0.9.x und nicht 1.0.0, und deshalb sind schreibende Befehle ab Werk gesperrt.
 
+## Neu in 0.9.20
+
+Am 17.09.2026 wurde 0.9.19 auf einem LoxBerry 4.0.0.15 frisch installiert und
+dort durchgemessen. Ein Volkswagen-Konto und ein Fahrzeug gab es dabei nicht;
+alles, was hier steht, ist ohne sie messbar.
+
+**Der Reiter Test meldete auf jeder neu eingerichteten Anlage zwei Kreuze, die
+keine waren.**
+
+* *Sind alle Texte da, die erst zur Laufzeit zusammengesetzt werden?* nannte
+  `VW_BEF.ZIELTEMPERATUR_H` als fehlend. Der Text heißt `VW_BEF.ZIELTEMP_H`
+  und war in beiden Sprachen vorhanden. Die Gegenprobe setzte den Namen aus
+  dem Befehl zusammen statt aus dem Feld, das die Oberfläche benutzt.
+* *Antwortet der eigene Endpunkt?* erwartete eine Zeile mit `VOLKSWAGEN;`.
+  Solange noch kein Fahrzeug erkannt ist, antwortet der Endpunkt richtig mit
+  `STATUS;OK=0;GRUND=FAHRZEUG_UNBEKANNT;N=0`. Das ist jetzt ein Haken. Kennt das
+  Abbild Fahrzeuge, nur das gefragte nicht, bleibt es ein Kreuz.
+
+**Eine abgewiesene Anmeldung am MQTT-Broker kam nur als Zahl an.** In der
+virtuellen Umgebung liegt paho-mqtt 2.1.0, und dort heißt „nicht autorisiert“
+135 statt 5. Die Klartexte gelten jetzt für beide Zählweisen. Betroffen sind
+nur Ladeempfehlung und Vorklimatisierung, denn nur sie horchen am Broker.
+
+**Ein Feld statt eines Werts wird am Endpunkt abgewiesen.** `?aktion[]=…`
+wurde bisher still als `status` gelesen und `?fahrzeug[]=2` als Fahrzeug 1.
+Beides antwortet jetzt mit `FEHLER;OK=0;GRUND=PARAMETER`. Für jede gültige
+Adresse ändert sich nichts.
+
+**Texte, die dem Plugin widersprachen.** Drei Stellen — die Hilfe, das
+S-PIN-Feld und der Abschnitt *Schreibende Befehle* — sagten, Ver- und
+Entriegeln sowie Hupe und Lichthupe gebe es nicht. Es gibt sie hinter dem
+zweiten Haken. Der Volkswagen-Connector bietet diese Befehle an, ebenso einen
+Schreibweg für die drei Ja/Nein-Eigenschaften (am 06.09.2026 an Fassung
+0.10.6 nachgesehen); die Vorbehalte „konnte nicht gemessen werden“ sind
+entsprechend berichtigt. Ungeprüft bleibt die Wirkung am Fahrzeug. Ebenso
+berichtigt: „vier Eigenschaften“ (es sind drei), der Hinweis zu retain (am
+LoxBerry gemessen), zwei Sätze im Reiter Test und die Kachel *MQTT* — sie
+zeigt den Zustand des Gateways und heißt jetzt *MQTT-Gateway*.
+
+**Nach einer Aktualisierung riet das Installationsprotokoll zur Ersteinrichtung.**
+`postinstall.sh` läuft bei jedem Upgrade mit und endete immer mit „Zugangsdaten
+eintragen und den Dienst starten“ — auch direkt unter „vw.json aus Sicherung
+wiederhergestellt“. Hat es Einstellungen übernommen oder den Dienst wieder
+gestartet, lautet das Schlusswort jetzt „Aktualisierung abgeschlossen“.
+
+**Beim Deinstallieren werden die behaltenen MQTT-Themen geleert.** Mit
+eingeschalteter MQTT-Ausgabe sendet der Dienst Zustände mit retain; bisher
+blieben sie nach dem Entfernen im Broker stehen, und ein Miniserver bekam nach
+einem Neustart den letzten Ladestand als frischen Wert. Geleert werden nur die
+Themen, die dieser Dienst selbst sendet, und hinterher wird nachgesehen, ob
+noch etwas behalten ist. Das Ergebnis steht im Deinstallationsprotokoll.
+
+**Zwei Kommentare, die nicht mehr stimmten.** In `cron/cron.01min` stand der
+Platzhalter für den Pfad auch in einem Kommentar, und der Installer ersetzte
+ihn dort mit. In `uninstall` stimmten der beschriebene Ablageort und der
+Rückfallpfad nicht; der Zweig wird im Normalfall nie erreicht.
+
 ## Neu in 0.9.18
 
 **Das Installationsprotokoll behauptete, einen Dienst angehalten zu haben, der
@@ -470,8 +527,9 @@ jedem Schreibvorgang nachgesetzt) und meldet sich damit an, statt jedes Mal
 das Passwort zu senden. Nach einem Passwortwechsel sind sie wertlos — dafür
 gibt es den Knopf *Anmeldung neu erzwingen*.
 
-Ein S-PIN-Feld gibt es, es wird aber **nicht gebraucht**: Ver- und Entriegeln
-sowie Hupe und Lichthupe bietet dieses Plugin bewusst nicht an.
+Das S-PIN-Feld wird nur für Ver- und Entriegeln gebraucht, und das steht
+hinter dem zweiten Haken (siehe oben). Wer diese Befehle nicht nutzt, lässt
+es leer.
 
 ## Endpunkte für Loxone
 

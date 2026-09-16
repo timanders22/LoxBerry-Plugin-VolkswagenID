@@ -516,9 +516,10 @@ def mqtt_senden(paare: dict, praefix: str, retain: int = 1) -> tuple[int, int]:
     'retain' laesst das Gateway die Werte behalten. Ohne das sind nach einem
     Neustart des Brokers alle virtuellen Eingaenge in Loxone ohne Wert, bis der
     naechste Abruf durch ist - bei einem Takt von fuenf Minuten also minutenlang.
-    Das Befehlswort 'retain' des UDP-Eingangs ist im Bestand dreifach belegt
-    (Gardena, Intercom, WOLF ISM NG); an einem Gateway NACHGEMESSEN wurde es
-    hier nicht.
+    Das Befehlswort 'retain' kennt der UDP-Eingang des Gateways: am LoxBerry
+    im Quelltext nachgesehen (sbin/mqttgateway.pl, 06.09.2026) und in der
+    Wirkung gemessen (ein so gesendetes Thema lag danach im Broker,
+    13./14.09.2026).
 
     Seit 0.9.12 entscheidet es JE THEMA (siehe MQTT_OHNE_RETAIN): Zustaende
     werden behalten, Messwerte mit Zeitbezug und das Lebenszeichen nicht.
@@ -2027,6 +2028,15 @@ _CONNACK = {
        "System -> MQTT Gateway einen Benutzer und ein Passwort? Ohne sie "
        "kommt der Horcher nicht hinein.",
 }
+# DIESELBEN Faelle unter paho 2.x. Dort kommen die Ursachencodes aus MQTT 5
+# (132-136) statt der CONNACK-Codes aus MQTT 3.1.1 (1-5). Die paho-Fassung
+# haengt an der virtuellen Umgebung dieses Plugins; am LoxBerry installiert
+# postinstall.sh 2.1.0 (gemessen 17.09.2026: `pip list` im venv). Bis 0.9.19
+# kannte diese Tabelle nur 1-5, und eine abgewiesene Anmeldung erschien als
+# "Der Broker hat die Anmeldung mit Code 135 abgewiesen." - ausgerechnet bei
+# dem Fall, fuer den der Klartext geschrieben ist.
+for _alt, _neu in ((1, 132), (2, 133), (3, 136), (4, 134), (5, 135)):
+    _CONNACK[_neu] = _CONNACK[_alt]
 
 
 class Horcher:
@@ -2744,7 +2754,139 @@ def selbsttest() -> int:
     return 1 if fehler else 0
 
 
+# ---------------------------------------------------------------------------
+# Behaltene Themen leeren - fuer die Deinstallation
+#
+# Entscheidung des Hausherrn vom 17.09.2026: wer das Plugin entfernt, soll
+# keine behaltenen Werte im Broker zuruecklassen. Ein Miniserver, der nach
+# dem Entfernen neu startet, bekaeme sonst den letzten Ladestand und die
+# letzte Position als frische Werte ausgeliefert - und niemand schriebe sie
+# je wieder fort.
+#
+# Geleert wird NUR, was dieser Dienst selbst sendet: das Praefix aus der
+# Konfiguration und darunter genau die Namen aus MQTT_OBEN, MQTT_FELDER und
+# MQTT_TEXTFELDER. Ein fremdes Thema unter demselben Praefix - ein zweites
+# Plugin, das zufaellig "volkswagen/..." benutzt - bleibt stehen.
+#
+# Gesendet wird ueber paho mit der Anmeldung aus general.json, nicht ueber
+# den UDP-Eingang des Gateways: der verwirft Datagramme in Stoessen
+# (Regeln/07), und eine Loeschung, die zur Haelfte ankommt, meldete
+# trotzdem Erfolg. Hinterher wird NACHGEMESSEN, ob noch etwas behalten ist.
+#
+# Rueckgabe: 0 geleert oder nichts zu leeren, 1 Themen blieben stehen,
+# 2 nicht moeglich (keine Bibliothek, kein Broker, Anmeldung abgewiesen).
+# ---------------------------------------------------------------------------
+def mqtt_leeren(warten: float = 3.0) -> int:
+    praefix = str(config().get("mqtt_topic") or "volkswagen").strip("/") or "volkswagen"
+    if "#" in praefix or "+" in praefix:
+        print(f"<WARNING> MQTT: das Themenpraefix '{praefix}' enthaelt einen Platzhalter - "
+              f"es wird nichts geleert.")
+        return 2
+    oben = set(MQTT_OBEN)
+    felder = set(MQTT_FELDER) | set(MQTT_TEXTFELDER)
+
+    def eigenes(thema: str) -> bool:
+        if not thema.startswith(praefix + "/"):
+            return False
+        rest = thema[len(praefix) + 1:].split("/")
+        if len(rest) == 1:
+            return rest[0] in oben
+        return (len(rest) == 2 and rest[0].startswith("fahrzeug")
+                and rest[0][8:].isdigit() and 1 <= len(rest[0][8:]) <= 2
+                and rest[1] in felder)
+
+    try:
+        import paho.mqtt.client as mqtt
+    except ImportError:
+        print("<INFO> MQTT: paho-mqtt fehlt - behaltene Themen wurden nicht geleert.")
+        return 2
+    z = mqtt_zustand()
+    broker = z.get("broker") or "127.0.0.1"
+    try:
+        port = int(z.get("brokerport") or 1883)
+    except (TypeError, ValueError):
+        port = 1883
+
+    gesehen: set = set()
+    angemeldet = threading.Event()
+    code = {"wert": None}
+
+    def bei_verbindung(_k, _d, _f, *rest):
+        try:
+            code["wert"] = int(getattr(rest[0], "value", rest[0]) or 0) if rest else 0
+        except (TypeError, ValueError):
+            code["wert"] = 0
+        angemeldet.set()
+
+    def bei_nachricht(_k, _d, n):
+        if n.retain and n.payload and eigenes(n.topic):
+            gesehen.add(n.topic)
+
+    try:
+        k = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+    except (AttributeError, TypeError):
+        try:
+            k = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1)
+        except (AttributeError, TypeError):
+            k = mqtt.Client()
+    k.on_connect = bei_verbindung
+    k.on_message = bei_nachricht
+    if z.get("benutzer"):
+        k.username_pw_set(z["benutzer"], z.get("passwort") or None)
+    try:
+        k.connect(broker, port, 30)
+    except Exception as err:  # noqa: BLE001
+        print(f"<INFO> MQTT: Broker {broker}:{port} nicht erreichbar ({fehlertext(err)}) - "
+              f"behaltene Themen wurden nicht geleert.")
+        return 2
+    k.loop_start()
+    try:
+        if not angemeldet.wait(10):
+            print(f"<INFO> MQTT: Broker {broker}:{port} hat nicht geantwortet - nichts geleert.")
+            return 2
+        if code["wert"]:
+            print("<INFO> MQTT: " + _CONNACK.get(
+                code["wert"], f"Anmeldung mit Code {code['wert']} abgewiesen.") +
+                " Behaltene Themen wurden nicht geleert.")
+            return 2
+        k.subscribe(praefix + "/#")
+        time.sleep(warten)
+        k.unsubscribe(praefix + "/#")
+        zu_leeren = sorted(gesehen)
+        for thema in zu_leeren:
+            info = k.publish(thema, b"", qos=1, retain=True)
+            try:
+                info.wait_for_publish(5)
+            except TypeError:           # paho 1.x vor 1.6 kennt kein timeout
+                info.wait_for_publish()
+        # NACHMESSEN: ein neues Abonnement bekommt alles, was noch behalten ist.
+        gesehen.clear()
+        k.subscribe(praefix + "/#")
+        time.sleep(warten)
+        rest = sorted(gesehen)
+    finally:
+        k.loop_stop()
+        try:
+            k.disconnect()
+        except Exception:  # noqa: BLE001
+            pass
+    if rest:
+        print(f"<WARNING> MQTT: {len(rest)} von {len(zu_leeren)} behaltenen Themen unter "
+              f"{praefix}/ stehen noch im Broker, zum Beispiel {rest[0]}.")
+        return 1
+    if zu_leeren:
+        print(f"<OK> MQTT: {len(zu_leeren)} behaltene Themen unter {praefix}/ geleert "
+              f"und nachgemessen.")
+    else:
+        print(f"<INFO> MQTT: unter {praefix}/ war nichts behalten - nichts zu leeren.")
+    return 0
+
+
 def main() -> int:
+    # VOR log_einrichten(): --mqtt-leeren laeuft aus der Deinstallation, und
+    # dort soll kein Protokoll mehr entstehen.
+    if "--mqtt-leeren" in sys.argv:
+        return mqtt_leeren()
     log_einrichten()
     if "--selbsttest" in sys.argv:
         return selbsttest()

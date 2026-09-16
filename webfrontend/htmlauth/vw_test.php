@@ -299,7 +299,7 @@ function vw_pruefungen()
         }
     }
     $zeilen[] = vw_pruefzeile(-1, vw_t('TEST.F_BILANZ'),
-        sprintf(vw_t('TEST.A_BILANZ'), count($zeilen), $striche));
+        sprintf(vw_t('TEST.A_BILANZ'), $striche, count($zeilen)));
 
     return $zeilen;
 }
@@ -357,8 +357,15 @@ function vw_dynamische_schluessel_soll()
     foreach (array_merge(vw_vorlagenarten(), array('befehle')) as $a) {
         $soll[] = 'LOX.ART_' . strtoupper($a);
     }
-    foreach (array_keys(vw_befehle()) as $b) {
-        $soll[] = 'VW_BEF.' . strtoupper($b) . '_H';
+    /* Der Hilfetext eines Befehls heisst so wie sein Feld 's' plus '_H' -
+     * genau so setzen ihn vw_lib.php und index.php zusammen. Bis 0.9.19 stand
+     * hier der BEFEHLSNAME in Grossbuchstaben. Fuer 'zieltemperatur' ist 's'
+     * aber VW_BEF.ZIELTEMP; die Zeile meldete deshalb auf jeder Anlage
+     * "VW_BEF.ZIELTEMPERATUR_H fehlt - auf dem Bildschirm steht der
+     * Schluesselname", obwohl ZIELTEMP_H in beiden Sprachen da war und nichts
+     * auf dem Bildschirm fehlte (gemessen am LoxBerry, 17.09.2026). */
+    foreach (vw_befehle() as $b) {
+        $soll[] = $b['s'] . '_H';
     }
     return $soll;
 }
@@ -439,6 +446,15 @@ function vw_endpunkt_zeile($cfg)
     } elseif ($code === 200 && strpos($antwort, 'VOLKSWAGEN;') === 0) {
         $stand = 1;
         $text = sprintf(vw_t('TEST.A_ENDPUNKT_OK'), $code);
+    } elseif ($code === 200
+              && strpos($antwort, 'STATUS;OK=0;GRUND=FAHRZEUG_UNBEKANNT;N=0;') === 0) {
+        /* Noch kein Fahrzeug im Abbild: der Endpunkt hat das Token geprueft
+         * und in der vereinbarten Form geantwortet. Bis 0.9.19 war das ein
+         * Kreuz - auf JEDER frisch eingerichteten Anlage, bis zum ersten
+         * Abruf (gemessen am LoxBerry, 17.09.2026). Eng gefasst: nur N=0.
+         * Kennt das Abbild Fahrzeuge und dieses nicht, bleibt es ein Kreuz. */
+        $stand = 1;
+        $text = sprintf(vw_t('TEST.A_ENDPUNKT_OHNE_FAHRZEUG'), $code);
     } else {
         $stand = 0;
         $text = sprintf(vw_t('TEST.A_ENDPUNKT_FALSCH'), $code,

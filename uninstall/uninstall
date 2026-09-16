@@ -34,8 +34,11 @@
 #   2. Der laufende Dienst. Er wird mit nohup gestartet und haengt an
 #      keinem Elternprozess, den LoxBerry beenden wuerde.
 #
-# Was NICHT aufgeraeumt werden muss: MQTT. Der Dienst sendet mit
-# "publish", nicht mit "retain".
+# MQTT wird aufgeraeumt (ab 0.9.20, Entscheidung des Hausherrn 17.09.2026).
+# Ist die MQTT-Ausgabe eingeschaltet, sendet der Dienst Zustaende mit
+# "retain"; diese Themen blieben sonst nach dem Deinstallieren im Broker
+# stehen. Bis 0.9.19 stand hier, der Dienst sende nur mit "publish" - das
+# war seit Einfuehrung des Hakens "Werte im Broker behalten" falsch.
 
 ARGV3=$3
 ARGV5=$5
@@ -44,9 +47,16 @@ BASE="${ARGV5:-$LBHOMEDIR}"
 # Dritter Rueckfall: der eigene Ablageort. Bewusst kein fest verdrahteter
 # Systempfad - LoxBerry laesst sich anderswohin installieren, und der
 # Plugin-Pruefer sucht die Zeichenkette, ohne den Zusammenhang zu sehen.
-# Dieses Skript liegt unter <home>/data/plugins/<ordner>/uninstall/
+# Der Installer legt dieses Skript als <home>/data/system/uninstall/<ordner>
+# ab und ruft es mit dem LoxBerry-Wurzelordner als fuenftem Argument auf
+# (sbin/plugininstall.pl:1158 und :1577, am Geraet nachgesehen 17.09.2026).
+# Bis 0.9.19 nannte dieser Kommentar data/plugins/<ordner>/uninstall/, und
+# der Rueckfall ging vier Ebenen hinauf - vom wirklichen Ablageort aus ergab
+# das den Ordner UEBER dem LoxBerry statt des LoxBerry selbst. Erreicht wird
+# der Zweig nur ohne $5 und
+# ohne $LBHOMEDIR.
 if [ -z "$BASE" ] || [ ! -d "$BASE" ]; then
-    BASE=$(cd "$(dirname "$(readlink -f "$0")")/../../../.." 2>/dev/null && pwd)
+    BASE=$(cd "$(dirname "$(readlink -f "$0")")/../../.." 2>/dev/null && pwd)
 fi
 
 PDATA="$BASE/data/plugins/$PFOLDER"
@@ -111,6 +121,26 @@ rm -f "$PIDDATEI" "$PDATA/soll_laufen" 2>/dev/null
 # Datenordner und wird vom Loeschblock des Installers nicht erfasst.
 # Jede Zweitschrift, die entsteht, steht hier - sonst bleibt sie liegen.
 rm -f "$BASE/data/plugins/$PFOLDER.nummern.json" 2>/dev/null
+
+# ---------------------------------------------------------------
+# 1b. Behaltene MQTT-Themen leeren
+# ---------------------------------------------------------------
+# NACH dem Anhalten des Dienstes - sonst schriebe er die Werte gleich
+# wieder hinein - und VOR Schritt 2b, der vw.json ueberschreibt: darin steht
+# das Themenpraefix. Die virtuelle Umgebung ist hier noch da; der Installer
+# loescht bin/plugins/<ordner> erst nach diesem Skript (plugininstall.pl,
+# purge_installation Schritt 7; am Geraet nachgesehen 17.09.2026).
+# Als loxberry, nicht als root: gebraucht wird nur Lesezugriff auf die
+# Konfiguration und auf general.json.
+if [ -x "$PBIN/venv/bin/python3" ] && [ -f "$PBIN/vw.py" ]; then
+    if [ "$(id -u)" = "0" ] && id loxberry >/dev/null 2>&1; then
+        su -s /bin/bash loxberry -c "PYTHONDONTWRITEBYTECODE=1 timeout 60 $(printf '%q ' "$PBIN/venv/bin/python3" "$PBIN/vw.py") --mqtt-leeren" 2>&1 || true
+    else
+        PYTHONDONTWRITEBYTECODE=1 timeout 60 "$PBIN/venv/bin/python3" "$PBIN/vw.py" --mqtt-leeren 2>&1 || true
+    fi
+else
+    echo "<INFO> Die Python-Umgebung fehlt - behaltene MQTT-Themen wurden nicht geleert."
+fi
 
 # ---------------------------------------------------------------
 # 2. Sicherungsdateien ausserhalb der Plugin-Ordner

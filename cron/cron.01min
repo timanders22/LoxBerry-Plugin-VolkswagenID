@@ -1,5 +1,7 @@
 #!/bin/sh
 # Volkswagen ID - Waechter, minuetlich.
 # Startet den Dienst neu, wenn er laufen soll, aber nicht laeuft.
-# REPLACELBPBINDIR wird bei der Installation durch den bin-Pfad des Plugins ersetzt.
+# Den bin-Pfad des Plugins setzt der Installer in der Befehlszeile unten ein.
+# Der Platzhalter steht bewusst NUR dort: der Installer ersetzt ihn in der
+# ganzen Datei, auch in einem Kommentar (am Geraet gesehen 17.09.2026).
 "REPLACELBPBINDIR/dienst.sh" waechter >/dev/null 2>&1

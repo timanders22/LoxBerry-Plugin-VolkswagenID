@@ -57,13 +57,19 @@ fi
 chmod 600 "$PCONFIG/zugang.json"
 
 # Sicherung zurueckspielen (uebersteht Update UND Neuinstallation)
+#
+# UEBERNOMMEN merkt sich, ob hier etwas aus einem frueheren Einbau
+# weiterlebt. Davon haengt das Schlusswort ab: nach einer Aktualisierung
+# ist "Zugangsdaten eintragen und den Dienst starten" falsch (Regeln/06).
+UEBERNOMMEN=0
 for f in vw.json zugang.json; do
     BK="$BASE/config/plugins/$PFOLDER.backup.$f"
     CF="$PCONFIG/$f"
     if [ -f "$BK" ]; then
         INHALT=$(cat "$CF" 2>/dev/null)
         if [ ! -s "$CF" ] || [ "$INHALT" = "{}" ]; then
-            cp -p "$BK" "$CF" && echo "<OK> $f aus Sicherung wiederhergestellt."
+            cp -p "$BK" "$CF" && echo "<OK> $f aus Sicherung wiederhergestellt." \
+                && UEBERNOMMEN=1
         fi
     fi
 done
@@ -212,7 +218,8 @@ if [ -f "$MERKER" ]; then
         fi
         case "$AUSGABE" in
             *gestartet*|*laeuft*)
-                echo "<OK> Dienst wieder gestartet: $AUSGABE" ;;
+                echo "<OK> Dienst wieder gestartet: $AUSGABE"
+                UEBERNOMMEN=1 ;;
             *)
                 echo "<INFO> Der Dienst liess sich nicht wieder starten: $AUSGABE"
                 echo "<INFO> Reiter Einstellungen, Knopf 'Dienst starten'." ;;
@@ -220,9 +227,14 @@ if [ -f "$MERKER" ]; then
     fi
 fi
 
-echo "<OK> Installation abgeschlossen."
-echo "<INFO> Bitte die Plugin-Oberflaeche oeffnen, die Zugangsdaten des Volkswagen-Kontos"
-echo "<INFO> eintragen und den Dienst im Reiter Einstellungen starten."
-echo "<INFO> Hinweis: Der Connector arbeitet mit europaeischen Fahrzeugen. Fuer"
-echo "<INFO> Nordamerika gibt es einen eigenen, hier nicht eingebauten Connector."
+if [ "$UEBERNOMMEN" -eq 1 ]; then
+    echo "<OK> Aktualisierung abgeschlossen."
+    echo "<INFO> Die bisherigen Einstellungen wurden uebernommen - es ist nichts weiter zu tun."
+else
+    echo "<OK> Installation abgeschlossen."
+    echo "<INFO> Bitte die Plugin-Oberflaeche oeffnen, die Zugangsdaten des Volkswagen-Kontos"
+    echo "<INFO> eintragen und den Dienst im Reiter Einstellungen starten."
+    echo "<INFO> Hinweis: Der Connector arbeitet mit europaeischen Fahrzeugen. Fuer"
+    echo "<INFO> Nordamerika gibt es einen eigenen, hier nicht eingebauten Connector."
+fi
 exit 0

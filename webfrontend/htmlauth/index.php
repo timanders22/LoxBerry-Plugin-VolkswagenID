@@ -592,7 +592,7 @@ if ($vw_rahmen) {
     <b><?= count($vw_fahrzeuge) ?></b>
     <span class="sm-hilfe"><?= $vw_libv !== '' ? vw_e($vw_libv) : vw_e(vw_t('ALLG.LIB_FEHLT')) ?></span>
   </div>
-  <div class="sm-kachel">MQTT
+  <div class="sm-kachel">MQTT-Gateway
     <b class="<?= $vw_mqtt['autostart'] ? 'sm-an' : 'sm-aus' ?>"><?= $vw_mqtt['autostart'] ? vw_e(vw_t('ALLG.EIN')) : vw_e(vw_t('ALLG.AUS')) ?></b>
     <span class="sm-hilfe"><?= vw_e(vw_t('ALLG.GATEWAY')) ?><?= (int) $vw_mqtt['fassung'] > 0 ? ' V' . (int) $vw_mqtt['fassung'] : '' ?></span>
   </div>

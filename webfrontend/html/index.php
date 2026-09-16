@@ -86,7 +86,16 @@ $vw_lesend = array('status', 'laden', 'wartung', 'position', 'verbrauch', 'teile
                    'fahrzeuge', 'roh');
 $vw_alle_befehle = vw_befehle();
 $vw_schaltend = array_keys($vw_alle_befehle);
-$vw_aktion = isset($_GET['aktion']) && is_string($_GET['aktion']) ? (string) $_GET['aktion'] : 'status';
+/* Ein FELD ist kein Wert. ?aktion[]=... wurde bis 0.9.19 still zur Vorgabe
+ * 'status' umgebogen (gemessen am LoxBerry, 17.09.2026: HTTP 200). Die
+ * Hausregel sagt: abweisen und melden, nie zurechtbiegen. */
+if (isset($_GET['aktion']) && !is_string($_GET['aktion'])) {
+    http_response_code(400);
+    echo "FEHLER;OK=0;GRUND=PARAMETER\n";
+    echo "Der Wert von aktion passt nicht ins erlaubte Muster.\n";
+    exit;
+}
+$vw_aktion = isset($_GET['aktion']) ? (string) $_GET['aktion'] : 'status';
 if (!in_array($vw_aktion, array_merge($vw_lesend, $vw_schaltend), true)) {
     http_response_code(400);
     echo "FEHLER;OK=0;GRUND=UNBEKANNTE_AKTION\n";
@@ -104,11 +113,13 @@ if (!in_array($vw_aktion, array_merge($vw_lesend, $vw_schaltend), true)) {
  */
 function vw_param($name, $muster, $vorgabe = '')
 {
-    if (!isset($_GET[$name]) || !is_string($_GET[$name]) || $_GET[$name] === '') {
+    if (!isset($_GET[$name]) || $_GET[$name] === '') {
         return $vorgabe;
     }
-    $w = (string) $_GET[$name];
-    if (!preg_match($muster, $w)) {
+    /* Ein Feld wird abgewiesen, nicht durch die Vorgabe ersetzt: aus
+     * ?fahrzeug[]=2 wurde bis 0.9.19 still Fahrzeug 1. */
+    $w = is_string($_GET[$name]) ? $_GET[$name] : null;
+    if ($w === null || !preg_match($muster, $w)) {
         http_response_code(400);
         echo "FEHLER;OK=0;GRUND=PARAMETER\n";
         echo 'Der Wert von ' . $name . " passt nicht ins erlaubte Muster.\n";
