@@ -20,6 +20,67 @@ Plug-in-Hybrid führt das Plugin beide.
 > gegen Attrappen, sondern gegen **echte Objekte der Bibliothek**. Deshalb
 > 0.9.x und nicht 1.0.0, und deshalb sind schreibende Befehle ab Werk gesperrt.
 
+## Neu in 0.9.22
+
+**Das Upgrade konnte einen fremden Prozess erschlagen.** `preupgrade.sh` las
+die Nummer aus `data/plugins/<ordner>/dienst.pid` und schickte ihr zwei
+Signale — erst `kill`, zwei Sekunden später `kill -9` —, **ohne zu prüfen, ob
+die Nummer überhaupt zu diesem Plugin gehört**. Prozessnummern werden
+wiederverwendet: eine PID-Datei, die einen Neustart überlebt hat, zeigt danach
+auf irgendetwas. Die Lebendprüfung eine Zeile darüber setzte nur den Merker,
+sie schützte nichts.
+
+In WSL Ubuntu gemessen (18.09.2026, Prüfstand `Pruefung-VolkswagenID-0.9.22/`):
+ein Köder `sleep 600`, dessen Nummer in der PID-Datei stand, war nach
+`preupgrade.sh` tot — und das Installationsprotokoll sagte dazu „Laufender
+Dienst angehalten."
+
+Beim Nachsehen fanden sich fünf weitere Stellen derselben Bauart:
+
+* **Ein Einmallauf ist kein Dienst.** `bin/dienst.sh`, `uninstall/uninstall`
+  und `webfrontend/html/vw_lib.php` verglichen nur das erste und das zweite
+  Argument der Befehlszeile. `vw.py --selbsttest`, `--einmal` und
+  `--mqtt-leeren` führen dieselben zwei Argumente und ein drittes dazu; sie
+  galten damit als laufender Dienst. Gemessen: `dienst.sh status` meldete
+  „laeuft", `dienst.sh stop` beendete den Selbsttest, und die Deinstallation
+  ebenfalls. Ein Treffer hat jetzt **genau zwei** Argumente.
+* **Ein Dienst ohne PID-Datei blieb stehen.** `purge_installation` löscht
+  `data/plugins/<ordner>/` bei jedem Upgrade; der minütliche Wächter kann in
+  dieser Lücke einen zweiten Dienst starten, dessen PID-Datei gleich darauf
+  verschwindet. `preupgrade.sh` und `dienst.sh stop` suchten nur über die
+  PID-Datei und ließen ihn laufen — gemessen: nach `stop` lief noch einer.
+  Gesucht wird jetzt zusätzlich argumentweise über `/proc`, und nur unter dem
+  Benutzer, dem der Dienst gehört.
+* **Vor jedem Signal wird geprüft, auch vor dem harten.** `uninstall` prüfte
+  die Nummer einmal und schickte das `kill -9` bis zu zehn Sekunden später an
+  dieselbe Zahl; in dieser Zeit kann der Prozess enden und die Nummer neu
+  vergeben werden. Gesucht wird jetzt vor jedem Signal neu.
+* **`dienst.sh start` legte einen zweiten Dienst an.** Fehlte die PID-Datei,
+  erkannte `starten()` den laufenden Dienst nicht und startete einen weiteren
+  — gemessen: „start: gestartet (PID …)", danach **zwei** Dienste. Erkannt
+  wird jetzt argumentweise, und die PID-Datei wird mit der geprüften Nummer
+  nachgezogen: „laeuft bereits (PID …)", danach einer.
+* **`vw_dienst_pid()` entscheidet über zwei Wege, die Signale schicken:** nach
+  dem Speichern im Reiter Einstellungen wird der Dienst neu gestartet, wenn
+  die Funktion eine Nummer liefert, und der unangemeldete Endpunkt antwortet
+  ohne sie mit HTTP 503. Sie zählt jetzt ebenfalls die Argumente.
+
+Alle vier Dateien — `preupgrade.sh`, `bin/dienst.sh`, `uninstall/uninstall`
+und `webfrontend/html/vw_lib.php` — tragen dieselbe Prüfung: argv[0] ist ein
+Python, argv[1] ist genau der eigene Dienstpfad (bei relativem Start über
+`/proc/<pid>/cwd` aufgelöst — ist der nicht lesbar, gilt der Prozess als
+fremd), ein drittes Argument gibt es nicht, und der Prozess gehört dem
+Dienstbenutzer.
+
+**Am gewollten Verhalten ändert sich nichts:** ein echter Dienst wird
+weiterhin beendet, mit und ohne PID-Datei; das Leeren der behaltenen
+MQTT-Themen beim Deinstallieren läuft unverändert; eine Neuinstallation fängt
+weiterhin bei null an. Gemessen wurden dreizehn Fälle, sechs davon als
+Gegenprobe: der Stand vor der Korrektur siebenmal abweichend, danach
+dreizehnmal wie erwartet. Jede
+Korrektur wurde einzeln in einer Kopie zurückgebaut; der Prüfstand wird dann
+an genau ihrem Fall rot.
+
 ## Neu in 0.9.20
 
 Am 17.09.2026 wurde 0.9.19 auf einem LoxBerry 4.0.0.15 frisch installiert und

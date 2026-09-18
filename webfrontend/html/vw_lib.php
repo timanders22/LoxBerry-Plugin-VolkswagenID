@@ -877,15 +877,31 @@ function vw_dienst_pid()
      * auch den Fall zweier Exemplare des Plugins: LoxBerry haengt bei
      * Namenskonflikt 01, 02 ... an den Ordnernamen an. */
     $cmd = (string) @file_get_contents('/proc/' . $pid . '/cmdline');
+    /* cmdline endet mit einem Nullbyte; explode() haengt dafuer einen leeren
+     * Eintrag an. Er wird abgeschnitten, sonst zaehlt jedes Argument um eins
+     * zu hoch. */
     $argv = explode("\0", $cmd);
+    while ($argv !== array() && end($argv) === '') {
+        array_pop($argv);
+    }
     $skript = vw_paths()['bindir'] . '/vw.py';
-    /* Zwei Bedingungen, nicht eine:
+    /* Drei Bedingungen, nicht eine:
      *   argv[1] ist genau unser Skript UND
-     *   argv[0] ist ein Python.
+     *   argv[0] ist ein Python UND
+     *   es gibt kein drittes Argument.
      * Die zweite braucht es, weil "nano /pfad/vw.py" ebenfalls den vollen
      * Pfad als zweites Argument fuehrt - nachgestellt und bestaetigt. Der
-     * Dienst wird immer als "<venv>/bin/python3 <pfad>/vw.py" gestartet. */
-    if (isset($argv[0], $argv[1])
+     * Dienst wird immer als "<venv>/bin/python3 <pfad>/vw.py" gestartet.
+     * Die dritte schliesst die Einmallaeufe aus (--selbsttest, --einmal,
+     * --mqtt-leeren; bin/vw.py:2888-2896). Bis 0.9.22 fehlte sie hier, und
+     * das ist nicht nur eine Anzeige: steht die Nummer eines Einmallaufs in
+     * der PID-Datei, meldete der Reiter Test "Dienst laeuft", der
+     * unangemeldete Endpunkt reihte Schaltbefehle ein, die niemand ausfuehrt,
+     * und ein Speichern im Reiter Einstellungen loeste
+     * vw_dienst('restart') aus - also ein kill auf den Einmallauf
+     * (htmlauth/index.php:220). Gleichlautend mit bin/dienst.sh,
+     * preupgrade.sh und uninstall/uninstall dieser Fassung. */
+    if (count($argv) === 2
         && $argv[1] === $skript
         && preg_match('#(^|/)python[0-9.]*$#', $argv[0])) {
         return $pid;

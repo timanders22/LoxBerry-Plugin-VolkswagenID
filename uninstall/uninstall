@@ -73,49 +73,102 @@ PCONFIG="$BASE/config/plugins"
 # Dateinamens, damit die Deinstallation des einen Exemplars nicht den
 # Dienst eines zweiten abschiesst (LoxBerry haengt bei Namenskonflikt
 # 01, 02 ... an den Ordnernamen an).
+#
+# Gleichlautend mit preupgrade.sh und bin/dienst.sh dieser Fassung. Bis
+# 0.9.22 fehlten hier drei Dinge, alle in WSL gemessen
+# (Pruefung-VolkswagenID-0.9.22):
+#   1. das DRITTE Argument. Ohne diese Bedingung gilt jeder Einmallauf als
+#      Dienst - und dieses Skript ruft weiter unten selbst einen auf
+#      (vw.py --mqtt-leeren). FALL 9: ein --selbsttest, dessen Nummer in der
+#      PID-Datei stand, war nach der Deinstallation tot.
+#   2. der BENUTZER. Der zweite Durchgang ueber /proc lief ungefiltert.
+#   3. die Pruefung vor dem HARTEN Signal. beenden() schickte kill -9 auf
+#      eine Nummer, die es zehn Sekunden zuvor geprueft hatte; in dieser
+#      Zeit kann der Prozess enden und die Nummer neu vergeben werden.
+#
+# Wurde der Dienst mit einem relativen Pfad gestartet, wird er ueber das
+# Arbeitsverzeichnis des PROZESSES aufgeloest, nicht ueber das eigene. Ist
+# /proc/<pid>/cwd nicht lesbar, faellt die Pruefung geschlossen aus.
+PIDDATEI="$PDATA/dienst.pid"
+VW_SKRIPT="$PBIN/vw.py"
+VW_SKRIPT_R=$(readlink -f "$VW_SKRIPT" 2>/dev/null)
+[ -n "$VW_SKRIPT_R" ] || VW_SKRIPT_R="$VW_SKRIPT"
+VW_UID=$(id -u loxberry 2>/dev/null || id -u)
+
 ist_unser_dienst() {
     [ -r "/proc/$1/cmdline" ] || return 1
-    ARGS=$(tr '\0' '\n' < "/proc/$1/cmdline" 2>/dev/null)
-    [ "$(echo "$ARGS" | sed -n '2p')" = "$PBIN/vw.py" ] || return 1
-    echo "$ARGS" | sed -n '1p' | grep -qE '(^|/)python[0-9.]*$' || return 1
-    return 0
+    {
+        IFS= read -r -d '' vw_a0 || return 1
+        IFS= read -r -d '' vw_a1 || return 1
+        case "${vw_a0##*/}" in python|python3|python3.*) ;; *) return 1 ;; esac
+        if [ "$vw_a1" != "$VW_SKRIPT" ]; then
+            case "$vw_a1" in
+                /*) vw_voll="$vw_a1" ;;
+                *)  vw_cwd=$(readlink -f "/proc/$1/cwd" 2>/dev/null)
+                    [ -n "$vw_cwd" ] || return 1
+                    vw_voll="$vw_cwd/$vw_a1" ;;
+            esac
+            [ "$(readlink -f "$vw_voll" 2>/dev/null)" = "$VW_SKRIPT_R" ] || return 1
+        fi
+        IFS= read -r -d '' vw_a2 && return 1
+        return 0
+    } < "/proc/$1/cmdline"
 }
 
-beenden() {
-    P="$1"
-    kill "$P" 2>/dev/null
-    for i in 1 2 3 4 5 6 7 8 9 10; do
-        kill -0 "$P" 2>/dev/null || return 0
+# Alle eigenen Dienste, aufsteigend und ohne Dubletten. Zwei Quellen: die
+# Suche ueber /proc findet auch einen Dienst OHNE PID-Datei (sie kann fehlen,
+# wenn der Dienst von Hand gestartet oder die Datei geloescht wurde), die
+# PID-Datei findet auch einen, der einem anderen Benutzer gehoert und deshalb
+# durch den Benutzerfilter faellt.
+vw_dienste() {
+    {
+        for vw_d in /proc/[0-9]*; do
+            ist_unser_dienst "${vw_d#/proc/}" || continue
+            [ "$(stat -c %u "$vw_d" 2>/dev/null)" = "$VW_UID" ] || continue
+            echo "${vw_d#/proc/}"
+        done
+        vw_p=""
+        [ -f "$PIDDATEI" ] && IFS= read -r vw_p < "$PIDDATEI" 2>/dev/null
+        case "$vw_p" in
+            ''|*[!0-9]*) ;;
+            *) ist_unser_dienst "$vw_p" && echo "$vw_p" ;;
+        esac
+    } | sort -un
+}
+
+# Freundlich beenden, bis zu zehn Sekunden Zeit, dann hart - und vor JEDEM
+# Signal wird neu gesucht, auch vor dem kill -9.
+vw_dienste_beenden() {
+    vw_ziel=$(vw_dienste)
+    [ -n "$vw_ziel" ] || return 0
+    kill $vw_ziel 2>/dev/null
+    vw_i=0
+    while [ $vw_i -lt 10 ] && [ -n "$(vw_dienste)" ]; do
         sleep 1
+        vw_i=$((vw_i + 1))
     done
-    kill -9 "$P" 2>/dev/null
-    sleep 1
-    return 0
+    vw_rest=$(vw_dienste)
+    [ -n "$vw_rest" ] && kill -9 $vw_rest 2>/dev/null
+    echo $vw_ziel
 }
 
-GEFUNDEN=0
-PIDDATEI="$PDATA/dienst.pid"
+# Eine Nummer, die NICHT dem Abrufdienst gehoert, wird GENANNT, nicht beendet
+# - ein fremder Vorgang mit wiederverwendeter Nummer ebenso wie ein
+# Einmallauf dieses Plugins.
 if [ -f "$PIDDATEI" ]; then
-    P=$(cat "$PIDDATEI" 2>/dev/null)
-    if [ -n "$P" ] && kill -0 "$P" 2>/dev/null && ist_unser_dienst "$P"; then
-        beenden "$P"
-        GEFUNDEN=1
-        echo "<OK> Laufender Abrufdienst beendet (PID $P)."
+    VW_P=$(cat "$PIDDATEI" 2>/dev/null)
+    if [ -n "$VW_P" ] && kill -0 "$VW_P" 2>/dev/null && ! ist_unser_dienst "$VW_P"; then
+        echo "<INFO> Die Nummer $VW_P aus der PID-Datei gehoert nicht dem"
+        echo "<INFO> Abrufdienst - es wurde nichts beendet."
     fi
 fi
 
-# Zweiter Durchgang ohne PID-Datei: sie kann fehlen, wenn der Dienst von
-# Hand gestartet oder die Datei geloescht wurde.
-for D in /proc/[0-9]*; do
-    P=$(basename "$D")
-    if ist_unser_dienst "$P" && kill -0 "$P" 2>/dev/null; then
-        beenden "$P"
-        GEFUNDEN=1
-        echo "<OK> Weiterer Abrufdienst beendet (PID $P)."
-    fi
-done
-
-[ "$GEFUNDEN" -eq 0 ] && echo "<INFO> Es lief kein Abrufdienst."
+VW_BEENDET=$(vw_dienste_beenden)
+if [ -n "$VW_BEENDET" ]; then
+    echo "<OK> Laufenden Abrufdienst beendet (PID $VW_BEENDET)."
+else
+    echo "<INFO> Es lief kein Abrufdienst."
+fi
 rm -f "$PIDDATEI" "$PDATA/soll_laufen" 2>/dev/null
 # Die Zuordnung Fahrgestellnummer -> Fahrzeugnummer liegt NEBEN dem
 # Datenordner und wird vom Loeschblock des Installers nicht erfasst.

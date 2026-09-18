@@ -66,35 +66,102 @@ LOGDATEI="$PLOG/vw.log"
 STARTLOG="$PLOG/vw_start.log"
 PY="$SELF/venv/bin/python3"
 SKRIPT="$SELF/vw.py"
+# Zweite Schreibweise desselben Skripts fuer den Vergleich weiter unten: wurde
+# der Dienst ueber einen anderen Weg auf dieselbe Datei gestartet (Symlink im
+# Pfad, LBHOMEDIR gegen den aufgeloesten Ablageort), steht in seiner
+# Befehlszeile eine andere Zeichenkette fuer dieselbe Datei.
+SKRIPT_R=$(readlink -f "$SKRIPT" 2>/dev/null)
+[ -n "$SKRIPT_R" ] || SKRIPT_R="$SKRIPT"
+# Der Dienst laeuft als loxberry; wo es den Benutzer nicht gibt, als der
+# eigene. Die Suche ueber /proc sieht nur dessen Prozesse an.
+DIENST_UID=$(id -u loxberry 2>/dev/null || id -u)
 
 mkdir -p "$PDATA" "$PLOG" 2>/dev/null
 
+# ---------- Die eigenen Prozesse erkennen ----------
+#
+# Nummernrecycling ausschliessen: der Prozess muss unser Skript sein.
+#
+# Bis 0.9.0 ein grep ueber die ganze Befehlszeile. Die enthaelt alle
+# Argumente; hat die wiederverwendete Nummer einen Editor mit geoeffneter
+# vw.py erwischt, galt der als laufender Dienst. Verglichen wird seit 0.9.1
+# argumentweise gegen den vollen Pfad.
+#
+# Ein Treffer hat GENAU zwei Argumente: argv[0] ist ein Python, argv[1] ist
+# genau unser Skript. Die zweite Bedingung braucht es, weil "nano /pfad/vw.py"
+# ebenfalls den vollen Pfad als zweites Argument fuehrt. Das DRITTE Argument
+# schliesst die Einmallaeufe aus (--selbsttest, --einmal, --mqtt-leeren;
+# bin/vw.py:2888-2896): sie laufen als eigener Prozess, sind aber nicht der
+# Dauerlaeufer. Bis 0.9.22 fehlte diese Bedingung. In WSL gemessen
+# (Pruefung-VolkswagenID-0.9.22, FALL 6): ein "python3 <pfad>/vw.py
+# --selbsttest", dessen Nummer in der PID-Datei stand, galt als Dienst -
+# "status" meldete "laeuft <pid>", und nach "stop" war er tot.
+# Der Dauerlaeufer wird an genau einer Stelle gestartet, in starten(), als
+# "$PY" "$SKRIPT".
+#
+# Gelesen wird ohne Hilfsprogramm: "read -d ''" zerlegt die Befehlszeile am
+# Nullbyte. Das spart je Prozess einen Aufruf von tr - der Waechter laeuft
+# minuetlich.
+ist_dienst() {
+    [ -r "/proc/$1/cmdline" ] || return 1
+    {
+        IFS= read -r -d '' vw_a0 || return 1
+        IFS= read -r -d '' vw_a1 || return 1
+        case "${vw_a0##*/}" in python|python3|python3.*) ;; *) return 1 ;; esac
+        if [ "$vw_a1" != "$SKRIPT" ]; then
+            case "$vw_a1" in
+                /*) vw_voll="$vw_a1" ;;
+                *)  vw_cwd=$(readlink -f "/proc/$1/cwd" 2>/dev/null)
+                    [ -n "$vw_cwd" ] || return 1
+                    vw_voll="$vw_cwd/$vw_a1" ;;
+            esac
+            [ "$(readlink -f "$vw_voll" 2>/dev/null)" = "$SKRIPT_R" ] || return 1
+        fi
+        IFS= read -r -d '' vw_a2 && return 1
+        return 0
+    } < "/proc/$1/cmdline"
+}
+
+# Alle eigenen Dienste, aufsteigend und ohne Dubletten.
+#
+# Zwei Quellen, weil keine allein reicht:
+#   - die Suche ueber /proc findet auch einen Dienst OHNE PID-Datei.
+#     purge_installation raeumt data/plugins/<ordner>/ bei jedem Upgrade ab
+#     (Regeln/06); der Minutentakt kann in der Luecke einen zweiten starten.
+#     In WSL gemessen (FALL 8): "stop" meldete "angehalten", und danach lief
+#     noch ein eigener Dienst.
+#   - die PID-Datei findet auch einen Dienst, der einem anderen Benutzer
+#     gehoert (von Hand als root gestartet) und deshalb durch den
+#     Benutzerfilter faellt.
+dienste() {
+    {
+        for vw_d in /proc/[0-9]*; do
+            ist_dienst "${vw_d#/proc/}" || continue
+            [ "$(stat -c %u "$vw_d" 2>/dev/null)" = "$DIENST_UID" ] || continue
+            echo "${vw_d#/proc/}"
+        done
+        vw_p=""
+        [ -f "$PID" ] && IFS= read -r vw_p < "$PID" 2>/dev/null
+        case "$vw_p" in
+            ''|*[!0-9]*) ;;
+            *) ist_dienst "$vw_p" && echo "$vw_p" ;;
+        esac
+    } | sort -un
+}
+
 laeuft() {
-    [ -f "$PID" ] || return 1
-    P=$(cat "$PID" 2>/dev/null)
-    [ -n "$P" ] || return 1
-    kill -0 "$P" 2>/dev/null || return 1
-    # Nummernrecycling ausschliessen: der Prozess muss unser Skript sein.
-    #
-    # Bis 0.9.0 ein grep ueber die ganze Befehlszeile. Die enthaelt alle
-    # Argumente; hat die wiederverwendete Nummer einen Editor mit geoeffneter
-    # vw.py erwischt, galt der als laufender Dienst. Verglichen wird jetzt
-    # argumentweise gegen den vollen Pfad - cmdline trennt die Argumente mit
-    # Nullbytes, die tr in Zeilen verwandelt.
-    # Zwei Bedingungen: das zweite Argument ist genau unser Skript, und das
-    # erste ist ein Python. Die zweite braucht es, weil "nano /pfad/vw.py"
-    # ebenfalls den vollen Pfad als zweites Argument fuehrt - nachgestellt
-    # und bestaetigt. Der Dienst laeuft immer als
-    # "<venv>/bin/python3 <pfad>/vw.py".
-    ARGS=$(tr '\0' '\n' < "/proc/$P/cmdline" 2>/dev/null)
-    [ "$(echo "$ARGS" | sed -n '2p')" = "$SKRIPT" ] || return 1
-    echo "$ARGS" | sed -n '1p' | grep -qE '(^|/)python[0-9.]*$' || return 1
-    return 0
+    [ -n "$(dienste)" ]
 }
 
 starten() {
-    if laeuft; then
-        echo "laeuft bereits (PID $(cat "$PID"))"
+    LAUFEND=$(dienste)
+    if [ -n "$LAUFEND" ]; then
+        ERSTE=$(printf '%s\n' "$LAUFEND" | head -n 1)
+        # Die PID-Datei nachziehen, wenn sie fehlt oder veraltet ist. Die
+        # Nummer ist argumentweise geprueft - eine ungepruefte Nummer darf
+        # hier nie hinein.
+        echo "$ERSTE" > "$PID" 2>/dev/null
+        echo "laeuft bereits (PID $ERSTE)"
         return 0
     fi
     if [ ! -x "$PY" ]; then
@@ -146,22 +213,35 @@ starten() {
 
 anhalten() {
     rm -f "$SOLL"
-    if ! laeuft; then
+    # ALLE eigenen Dienste, nicht nur den aus der PID-Datei.
+    ZIEL=$(dienste)
+    if [ -z "$ZIEL" ]; then
         rm -f "$PID"
         echo "laeuft nicht"
         return 0
     fi
-    P=$(cat "$PID")
-    kill "$P" 2>/dev/null
+    kill $ZIEL 2>/dev/null
     for i in 1 2 3 4 5 6 7 8 9 10; do
-        laeuft || break
+        [ -n "$(dienste)" ] || break
         sleep 1
     done
-    if laeuft; then
-        kill -9 "$P" 2>/dev/null
+    # Vor dem harten Signal wird NEU gesucht, nicht die Liste von vorhin
+    # wiederverwendet: zwischen den beiden Signalen kann ein Prozess enden und
+    # seine Nummer neu vergeben werden. Bis 0.9.22 ging das kill -9 an die
+    # Nummer, die zehn Sekunden zuvor aus der PID-Datei gelesen worden war.
+    REST=$(dienste)
+    if [ -n "$REST" ]; then
+        kill -9 $REST 2>/dev/null
         sleep 1
     fi
     rm -f "$PID"
+    # "angehalten" ist eine Zusicherung, kein Rueckgabewert: es wird
+    # nachgesehen (CLAUDE.md, "Wirkung pruefen, nicht Rueckgabewert").
+    UEBRIG=$(dienste)
+    if [ -n "$UEBRIG" ]; then
+        echo "FEHLER: Dienst laeuft weiter (PID $(printf '%s' "$UEBRIG" | tr '\n' ' '))"
+        return 1
+    fi
     echo "angehalten"
     return 0
 }
@@ -171,8 +251,9 @@ case "$1" in
     stop)    anhalten ;;
     restart) anhalten; sleep 1; starten ;;
     status)
-        if laeuft; then
-            echo "laeuft $(cat "$PID")"
+        LAUFEND=$(dienste)
+        if [ -n "$LAUFEND" ]; then
+            echo "laeuft $(printf '%s' "$LAUFEND" | tr '\n' ' ' | sed 's/ $//')"
             exit 0
         fi
         echo "gestoppt"
