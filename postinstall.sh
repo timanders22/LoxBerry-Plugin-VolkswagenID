@@ -36,6 +36,17 @@ PLOG="$BASE/log/plugins/$PFOLDER"
 PCONFIG="$BASE/config/plugins/$PFOLDER"
 VENV="$PBIN/venv"
 
+# Die Upgrade-Marke aus preupgrade.sh. Sie faellt regulaer in
+# postupgrade.sh, NACH dem Dienststart unten (Begruendung dort und in
+# Pruefung-VolkswagenID-0.9.23/README.md). Steigt dieses Skript aber mit
+# einem Fehler aus (Ordner, Python, venv, pip, Ladeversuch), faellt sie
+# hier: sonst bliebe die Plugin-Oberflaeche nach einer gescheiterten
+# Installation eine Stunde lang gesperrt, ohne dass irgendwo stuende, warum.
+# Eine Kommandoersetzung und eine Unterschale loesen den EXIT-Trap nicht aus
+# (Regeln/06); der Rueckgabewert des Skripts bleibt unveraendert.
+MARKE="$BASE/data/plugins/$PFOLDER.upgrade_laeuft"
+trap 'vw_rc=$?; [ "$vw_rc" -ne 0 ] && rm -f "$MARKE" 2>/dev/null' EXIT
+
 # Fassungen, gegen die dieses Plugin gebaut wurde. Auf einen Stand
 # festgenagelt, damit eine Installation von heute morgen und eine von heute
 # abend dasselbe ergeben. Die Feldnamen im Dienst stammen aus genau diesen
@@ -211,10 +222,17 @@ if [ -f "$MERKER" ]; then
         # Als loxberry und nicht als root: der Dienst schreibt in data/
         # und log/. Was root dort anlegt, kann die Oberflaeche danach
         # nicht mehr ueberschreiben.
+        #
+        # VW_START_TROTZ_MARKE=1: HIER soll der Dienst anlaufen, auch wenn
+        # die Upgrade-Marke aus preupgrade.sh noch liegt. Sie faellt erst in
+        # postupgrade.sh. Fiele sie vor diesem Start, waere fuer diesen
+        # Augenblick auch der Knopf der Oberflaeche offen - und zwei
+        # gleichzeitige "dienst.sh start" legen zwei Dienste an (in WSL
+        # gemessen, Pruefung-VolkswagenID-0.9.23/Pruefstaende/messe_rennen.sh).
         if [ "$(id -u)" = "0" ]; then
-            AUSGABE=$(su -s /bin/bash -c "$PBIN/dienst.sh start" loxberry 2>&1)
+            AUSGABE=$(su -s /bin/bash -c "VW_START_TROTZ_MARKE=1 $PBIN/dienst.sh start" loxberry 2>&1)
         else
-            AUSGABE=$("$PBIN/dienst.sh" start 2>&1)
+            AUSGABE=$(VW_START_TROTZ_MARKE=1 "$PBIN/dienst.sh" start 2>&1)
         fi
         case "$AUSGABE" in
             *gestartet*|*laeuft*)

@@ -248,4 +248,11 @@ echo "<INFO> bin-Ordner des Plugins entfernt - dafuer ist nichts zu tun."
 # einer spaeteren Installation ungefragt wieder.
 rm -f "$BASE/config/plugins/$PFOLDER.lief_vorher"
 
+# Ebenso die Upgrade-Marke, die NEBEN dem Datenordner liegt. Bliebe sie
+# liegen, faende eine Neuinstallation innerhalb einer Stunde eine fremde
+# Marke vor: kein Dienststart, und die Oberflaeche zeigte nur den Hinweis auf
+# eine Aktualisierung, die es nicht gibt. Steht bewusst am Ende, NACH dem
+# Leeren der MQTT-Themen (Schritt 1b) - daran aendert die Marke nichts.
+rm -f "$BASE/data/plugins/$PFOLDER.upgrade_laeuft"
+
 exit 0

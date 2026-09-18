@@ -76,6 +76,54 @@ SKRIPT_R=$(readlink -f "$SKRIPT" 2>/dev/null)
 # eigene. Die Suche ueber /proc sieht nur dessen Prozesse an.
 DIENST_UID=$(id -u loxberry 2>/dev/null || id -u)
 
+# ---------- Laeuft gerade eine Aktualisierung dieses Plugins? ----------
+#
+# preupgrade.sh legt data/plugins/<ordner>.upgrade_laeuft als Erstes an,
+# postupgrade.sh raeumt die Marke weg, uninstall ebenfalls. Sie liegt NEBEN
+# dem Datenordner, weil purge_installation den Ordner selbst loescht.
+#
+# Warum: postinstall.sh legt die Zugangsdaten frueh zurueck und laedt danach
+# minutenlang die Bibliothek mit pip. Der Knopf "Dienst starten" startete den
+# Dienst in dieser Zeit gegen die halb eingerichtete Umgebung - am 18.09.2026
+# in WSL gemessen (Pruefung-VolkswagenID-0.9.23/Pruefstaende/messe_luecke.sh,
+# Fall pip_fenster: ein Dienst, erwartet keiner).
+#
+# Aelter als 3600 s, aus der Zukunft oder unlesbar: die Marke gilt NICHT -
+# eine abgebrochene Installation darf den Dienst nicht fuer immer
+# stilllegen. OHNE LESBARE UHR faellt die Pruefung GESCHLOSSEN aus: wer die
+# Zeit nicht messen kann, kann das Alter nicht beurteilen und startet
+# deshalb nicht (Fall marke, M10h).
+#
+# VW_START_TROTZ_MARKE=1 ist die Ausnahme fuer postinstall.sh: dort SOLL der
+# Dienst wieder anlaufen, obwohl die Marke noch liegt - postupgrade.sh
+# raeumt sie erst danach weg.
+MARKE="$LBHOMEDIR/data/plugins/$PNAME.upgrade_laeuft"
+
+upgrade_laeuft() {
+    [ -f "$MARKE" ] || return 1
+    [ -n "${VW_START_TROTZ_MARKE:-}" ] && return 1
+    vw_dann=$(cat "$MARKE" 2>/dev/null)
+    case "$vw_dann" in ''|*[!0-9]*) return 1 ;; esac
+    # Aufbau wortgleich mit Chromecast4lox 1.3.11 (daemon/daemon) - dort ist
+    # er gemessen, und das Werkzeug der Bestandsaufnahme erkennt genau diese
+    # Form wieder.
+    vw_jetzt=$(date +%s 2>/dev/null)
+    case "$vw_jetzt" in ''|*[!0-9]*) vw_jetzt="" ;; esac
+    if [ -z "$vw_jetzt" ]; then
+        return 0
+    fi
+    # Bis 300 s "aus der Zukunft" gilt die Marke noch: die Uhr kann ein
+    # Stueck zurueckspringen, nachdem preupgrade.sh sie gesetzt hat. In WSL
+    # gemessen (Pruefung-VolkswagenID-0.9.23/messprotokoll_uhr.txt): die
+    # Wanduhr sprang rund alle 30 s um 0,6 s zurueck. Mit der strengen Regel
+    # "jede Sekunde Zukunft gilt nicht" fiel die Marke deshalb in zwei von 26
+    # Eichlaeufen fuer einen Augenblick aus - einmal nahm die Oberflaeche das
+    # Formular an, und das Passwort war weg. Weiter voraus: sie gilt nicht.
+    # Dieselbe Grenze steht in vw_upgrade_lage() (webfrontend/html/vw_lib.php).
+    [ "$vw_dann" -gt $((vw_jetzt + 300)) ] && return 1
+    [ $((vw_jetzt - vw_dann)) -lt 3600 ]
+}
+
 mkdir -p "$PDATA" "$PLOG" 2>/dev/null
 
 # ---------- Die eigenen Prozesse erkennen ----------
@@ -154,6 +202,16 @@ laeuft() {
 }
 
 starten() {
+    # Die Marke steht VOR allem anderen - auch vor dem touch des Sollmerkers
+    # weiter unten: solange sie gilt, wird nichts gestartet und nichts
+    # angelegt. Kein Fehler (Rueckgabewert 0) - der Minutentakt soll sich
+    # nicht beschweren, und postinstall.sh startet gleich selbst. Die Pruefung
+    # sitzt hier und nicht im case-Verteiler, damit sie fuer 'start',
+    # 'restart' UND den Zweig 'waechter' gilt - alle drei fuehren hierher.
+    if upgrade_laeuft; then
+        echo "Eine Aktualisierung dieses Plugins laeuft - es wird nichts gestartet."
+        return 0
+    fi
     LAUFEND=$(dienste)
     if [ -n "$LAUFEND" ]; then
         ERSTE=$(printf '%s\n' "$LAUFEND" | head -n 1)
@@ -262,7 +320,11 @@ case "$1" in
     waechter)
         # Nur neu starten, wenn der Dienst laufen SOLL. Ein bewusst
         # angehaltener Dienst bleibt angehalten.
-        if [ -f "$SOLL" ] && ! laeuft; then
+        # Die Marke wird HIER schon gefragt und nicht erst in starten():
+        # sonst kappte der Waechter die Startdatei nicht, schriebe aber jede
+        # Minute "Dienst lief nicht, wird neu gestartet" ins Protokoll,
+        # obwohl gleich darauf nichts gestartet wird (Fall marke, M10j).
+        if [ -f "$SOLL" ] && ! laeuft && ! upgrade_laeuft; then
             echo "[$(date '+%Y-%m-%d %H:%M:%S')] Waechter: Dienst lief nicht, wird neu gestartet." >> "$LOGDATEI"
             starten >> "$STARTLOG" 2>&1
         fi

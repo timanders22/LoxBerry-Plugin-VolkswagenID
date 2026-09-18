@@ -852,6 +852,67 @@ function vw_alter()
     return isset($l['ts']) ? max(0, time() - (int) $l['ts']) : -1;
 }
 
+/* ==================================================================
+ * Die Marke "Aktualisierung laeuft"
+ *
+ * preupgrade.sh legt data/plugins/<ordner>.upgrade_laeuft als Erstes an,
+ * postupgrade.sh raeumt sie weg, uninstall ebenfalls. Sie liegt NEBEN dem
+ * Datenordner, weil purge_installation den Ordner selbst loescht.
+ *
+ * WARUM DIE OBERFLAECHE SIE BEACHTET - gemessen, nicht angenommen. Am
+ * 18.09.2026 in WSL (Pruefung-VolkswagenID-0.9.23/Pruefstaende/
+ * messe_luecke.sh) den Ablauf des Installers nachgestellt und in der Luecke
+ * das Formular des Reiters Einstellungen unveraendert abgesendet (Fall
+ * ui_post). zugang.json entstand neu mit {"email":"","passwort":"",
+ * "spin":""}; postinstall.sh spielt die Zweitschrift nur zurueck, wenn die
+ * Datei leer oder "{}" ist. Konto und Passwort waren nach der
+ * Aktualisierung weg, und der Dienst lief nicht mehr an. Mit einer Seite,
+ * die schon VOR dem Upgrade offen war, ging das Passwort ebenso verloren
+ * (Fall ui_post_alt).
+ *
+ * Deshalb sperrt diese Linie, solange die Marke gilt (wie Intercom 2.2.11
+ * und Skoda-Connect-NG 0.9.23; Sprachsteuerung 0.11.7 und AudiConnect
+ * 0.9.19 sperren nicht, weil dort nichts verlorenging - es ist je Linie
+ * eine Messung, keine Regel).
+ *
+ * Aelter als 3600 s, mehr als 300 s aus der Zukunft oder unlesbar: die
+ * Marke gilt nicht - dieselbe Rechnung wie upgrade_laeuft() in
+ * bin/dienst.sh. Zwei Regeln fuer dieselbe Marke waeren ein Befund: die
+ * Seite spraeche von einer Aktualisierung, waehrend der Dienst anlaeuft.
+ * Die 300 s Vorlauf sind gemessen, nicht geschaetzt: die Wanduhr sprang in
+ * WSL rund alle 30 s um 0,6 s zurueck, und mit "keine Sekunde Zukunft" nahm
+ * die Seite in einem von 26 Eichlaeufen das Formular doch an (Fall ui_post,
+ * Passwort weg). Intercom 2.2.11 duldet dieselben 300 s.
+ * ================================================================== */
+
+function vw_upgrade_marke()
+{
+    $p = vw_paths();
+    return dirname($p['datadir']) . '/' . basename($p['datadir']) . '.upgrade_laeuft';
+}
+
+/** Rueckgabe: array(zustand, zeitpunkt) - 'keine', 'gilt', 'ungueltig', 'unlesbar'. */
+function vw_upgrade_lage()
+{
+    $f = vw_upgrade_marke();
+    clearstatcache(true, $f);
+    if (!is_file($f)) {
+        return array('keine', 0);
+    }
+    $roh = trim((string) @file_get_contents($f));
+    if (!preg_match('/^[0-9]{1,12}$/', $roh)) {
+        return array('unlesbar', 0);
+    }
+    $alter = time() - (int) $roh;
+    return array(($alter >= -300 && $alter < 3600) ? 'gilt' : 'ungueltig', (int) $roh);
+}
+
+function vw_upgrade_laeuft()
+{
+    $lage = vw_upgrade_lage();
+    return $lage[0] === 'gilt';
+}
+
 /* ---------------- Dienst ---------------- */
 
 function vw_dienst_pid()

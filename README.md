@@ -20,6 +20,47 @@ Plug-in-Hybrid führt das Plugin beide.
 > gegen Attrappen, sondern gegen **echte Objekte der Bibliothek**. Deshalb
 > 0.9.x und nicht 1.0.0, und deshalb sind schreibende Befehle ab Werk gesperrt.
 
+## Neu in 0.9.23
+
+**Während einer Aktualisierung konnten Konto und Passwort verlorengehen.**
+Zwischen dem Auspacken der neuen Fassung und dem Ende von `postinstall.sh`
+ist die Konfiguration des Plugins gelöscht oder erst halb zurückgelegt, die
+Oberfläche aber erreichbar. Wurde in dieser Zeit im Reiter *Einstellungen*
+auf *Speichern* gedrückt — auch auf einer Seite, die schon vor der
+Aktualisierung offen war —, entstand `zugang.json` mit leerem Passwort neu.
+`postinstall.sh` hielt diese Datei für gewollt und spielte die Sicherung
+nicht zurück: nach der Aktualisierung waren Passwort (und bei einer in der
+Lücke geöffneten Seite auch das Konto) weg, und der Dienst lief nicht mehr
+an. Außerdem startete der Knopf *Dienst starten* den Dienst, während
+`postinstall.sh` noch die Bibliothek lud.
+
+Beides ist in WSL Ubuntu mit dem nachgestellten Ablauf des Installers
+gemessen (18.09.2026, Prüfstand `Pruefung-VolkswagenID-0.9.23/`). Der
+minütliche Wächter allein startet in der Lücke nichts.
+
+Jetzt legt `preupgrade.sh` als Erstes eine Marke
+`data/plugins/<ordner>.upgrade_laeuft` mit der Uhrzeit an. Solange sie
+jünger als eine Stunde ist,
+
+* startet `bin/dienst.sh` keinen Dienst — weder über den Knopf noch über den
+  Wächter; nur `postinstall.sh` darf den Dienst wieder anwerfen, der vor der
+  Aktualisierung lief;
+* zeigt die Oberfläche nur einen Hinweis auf die laufende Aktualisierung und
+  nimmt kein Formular an.
+
+Die Marke fällt in `postupgrade.sh`, **nach** dem Dienststart: zwei
+gleichzeitige Starts legten in der Messung in 117 von 120 Durchgängen zwei
+Dienste an; solange die Marke liegt, ist nur der eine Start aus
+`postinstall.sh` offen (80 von 80 Durchgängen ein Dienst). Scheitert
+`postinstall.sh`, fällt sie dort. Eine Marke, die älter als eine Stunde,
+unlesbar oder mehr als fünf Minuten „voraus" ist, gilt nicht; ohne lesbare
+Uhr gilt sie. Die fünf Minuten sind gemessen: springt die Uhr nach dem Setzen
+ein Stück zurück (in der Messumgebung rund alle 30 s um 0,6 s), fiel die Marke
+mit der strengeren Regel für einen Augenblick aus, und genau dann ging das
+Passwort wieder verloren. Die Deinstallation
+räumt sie weg; das Leeren der behaltenen MQTT-Themen bleibt unverändert. Der
+Reiter *Test* nennt eine liegengebliebene Marke.
+
 ## Neu in 0.9.22
 
 **Das Upgrade konnte einen fremden Prozess erschlagen.** `preupgrade.sh` las

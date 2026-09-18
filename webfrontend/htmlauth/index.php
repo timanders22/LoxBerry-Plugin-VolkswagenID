@@ -47,6 +47,42 @@ if ($vw_p['home'] !== '' && is_file($vw_p['home'] . '/libs/phplib/loxberry_syste
     require_once $vw_p['home'] . '/libs/phplib/loxberry_web.php';
 }
 
+/* ZUERST ABER: laeuft gerade eine Aktualisierung dieses Plugins?
+ *
+ * Zwischen dem Kopieren der neuen Dateien und dem Ende von postinstall.sh
+ * ist config/plugins/<ordner>/ geloescht oder erst halb zurueckgelegt, die
+ * Seite aber erreichbar. Am 18.09.2026 in WSL gemessen
+ * (Pruefung-VolkswagenID-0.9.23/Pruefstaende/messe_luecke.sh): das
+ * Formular des Reiters Einstellungen, in der Luecke unveraendert abgesendet,
+ * schrieb zugang.json mit leerem Konto und leerem Passwort neu, und
+ * postinstall.sh spielte die Zweitschrift danach nicht mehr zurueck (Fall
+ * ui_post, ebenso ui_post_alt mit einer vorher geoeffneten Seite). Der Knopf
+ * "Dienst starten" startete den Dienst mitten im pip-Lauf (Fall
+ * pip_fenster).
+ *
+ * Solange die Marke aus preupgrade.sh gilt, zeigt die Seite deshalb nur
+ * einen Hinweis: sie heilt nichts, sie erzeugt kein Aktionstoken, und sie
+ * nimmt kein Formular an - auch keines, das vor der Aktualisierung
+ * ausgeliefert wurde. Die Pruefung steht VOR vw_config() und vw_token(),
+ * weil beide schreiben koennen. */
+if (vw_upgrade_laeuft()) {
+    if (class_exists('LBWeb', false)) {
+        LBWeb::lbheader('Volkswagen ID', 'https://wiki.loxberry.de/', 'help.html');
+    }
+    echo '<div class="sm-wrap" style="max-width:980px;margin:0 auto;'
+       . 'font-family:-apple-system,\'Segoe UI\',Roboto,sans-serif;color:#333;">' . "\n"
+       . '<h1>Volkswagen ID</h1>' . "\n"
+       . '<div style="border:1px solid #e0c060;border-left:4px solid #e0a020;'
+       . 'background:#fdf8e8;border-radius:6px;padding:12px 14px;margin:12px 0;">'
+       . '<b>' . vw_e(vw_t('HINWEIS.UPGRADE_LAEUFT')) . '</b> '
+       . vw_e(vw_t('HINWEIS.UPGRADE_LAEUFT_TEXT')) . '</div>' . "\n"
+       . '</div>' . "\n";
+    if (class_exists('LBWeb', false)) {
+        LBWeb::lbfooter();
+    }
+    exit;
+}
+
 /* ==================================================================
  * DIE REIHENFOLGE IST BAUVORSCHRIFT, NICHT GESCHMACKSSACHE
  * ==================================================================

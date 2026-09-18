@@ -20,6 +20,26 @@ function vw_pruefungen()
     $z = vw_zugang();
     $zeilen = array();
 
+    /* ---- Liegt eine Upgrade-Marke? ----
+     *
+     * Zu jeder Regel gehoert das Werkzeug, das sie findet (CLAUDE.md,
+     * Abschnitt 6). Eine GELTENDE Marke sieht man hier nie - dann zeigt die
+     * Seite nur den Hinweis auf die Aktualisierung. Diese Zeile ist fuer den
+     * Rest: keine Marke (gruen), eine liegengebliebene, die nicht mehr gilt
+     * (Hinweis), und eine unlesbare (Kreuz - sie gehoert von Hand entfernt). */
+    list($vw_ml, $vw_mzeit) = vw_upgrade_lage();
+    if ($vw_ml === 'keine') {
+        $zeilen[] = vw_pruefzeile(1, vw_t('TEST.F_UPGRADE_MARKE'),
+            vw_t('TEST.A_UPGRADE_MARKE_KEINE'));
+    } elseif ($vw_ml === 'unlesbar') {
+        $zeilen[] = vw_pruefzeile(0, vw_t('TEST.F_UPGRADE_MARKE'),
+            sprintf(vw_t('TEST.A_UPGRADE_MARKE_UNLESBAR'), vw_e(vw_upgrade_marke())));
+    } else {
+        $zeilen[] = vw_pruefzeile(-1, vw_t('TEST.F_UPGRADE_MARKE'),
+            sprintf(vw_t('TEST.A_UPGRADE_MARKE_UNGUELTIG'),
+                    date('Y-m-d H:i:s', $vw_mzeit), vw_e(vw_upgrade_marke())));
+    }
+
     $venv = $p['bindir'] . '/venv/bin/python3';
     $zeilen[] = vw_pruefzeile(is_file($venv) ? 1 : 0, vw_t('TEST.F_VENV'),
         is_file($venv) ? $venv : vw_t('TEST.A_VENV_FEHLT'));
