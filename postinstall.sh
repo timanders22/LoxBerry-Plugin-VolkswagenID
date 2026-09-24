@@ -22,12 +22,41 @@ ARGV3=$3
 ARGV5=$5
 PFOLDER="${ARGV3:-volkswagenid}"
 BASE="${ARGV5:-$LBHOMEDIR}"
-if [ -z "$BASE" ] || [ ! -d "$BASE" ]; then
-    # Ableitung aus dem eigenen Ablageort - LoxBerry::System taugt hier nicht,
-    # weil es den Pluginordner aus dem Aufrufort ableitet und aus
-    # postinstall.sh heraus ueberall Leerstring liefert.
-    SELF=$(cd "$(dirname "$0")" && pwd)
-    BASE=$(cd "$SELF/../.." 2>/dev/null && pwd)
+# Ableitung aus dem eigenen Ablageort - LoxBerry::System taugt hier nicht,
+# weil es den Pluginordner aus dem Aufrufort ableitet und aus postinstall.sh
+# heraus ueberall Leerstring liefert.
+#
+# Bis 0.9.23 waren es zwei feste Ebenen ($SELF/../..). Dieses Skript liegt
+# beim Einbau im Auspackordner - zwei Ebenen darueber ist irgendein
+# Verzeichnis, nicht die Wurzel. Gemessen (Pruefung-VolkswagenID-0.9.24,
+# Fall K6): in einem fremden Baum legte postinstall.sh dort Ordner an.
+# Deshalb aufwaerts suchen, und zwar nach config/plugins, data/plugins UND
+# config/system/general.json (Regeln/06). Ohne Wurzel wird abgebrochen -
+# alles, was danach kommt, schreibt unter $BASE.
+vw_wurzel_suchen() {
+    vw_v=$(cd "$1" 2>/dev/null && pwd -P) || return 1
+    vw_i=0
+    while [ -n "$vw_v" ] && [ "$vw_v" != "/" ] && [ "$vw_i" -lt 8 ]; do
+        if [ -d "$vw_v/config/plugins" ] && [ -d "$vw_v/data/plugins" ] \
+           && [ -f "$vw_v/config/system/general.json" ]; then
+            echo "$vw_v"
+            return 0
+        fi
+        vw_v=$(dirname "$vw_v")
+        vw_i=$((vw_i + 1))
+    done
+    return 1
+}
+SELF=$(cd "$(dirname "$0")" && pwd)
+if [ -z "$BASE" ] || [ ! -d "$BASE/config/plugins" ] || [ ! -d "$BASE/data/plugins" ]; then
+    BASE=$(vw_wurzel_suchen "$SELF") || BASE=""
+fi
+if [ -z "$BASE" ]; then
+    echo "<FAIL> Es wurde kein LoxBerry-Wurzelverzeichnis gefunden: weder als"
+    echo "<FAIL> fuenftes Argument noch in \$LBHOMEDIR, und oberhalb von $SELF"
+    echo "<FAIL> traegt kein Verzeichnis config/plugins, data/plugins und"
+    echo "<FAIL> config/system/general.json. Es wurde nichts angelegt."
+    exit 1
 fi
 
 PBIN="$BASE/bin/plugins/$PFOLDER"

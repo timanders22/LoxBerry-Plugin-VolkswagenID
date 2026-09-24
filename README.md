@@ -20,6 +20,71 @@ Plug-in-Hybrid führt das Plugin beide.
 > gegen Attrappen, sondern gegen **echte Objekte der Bibliothek**. Deshalb
 > 0.9.x und nicht 1.0.0, und deshalb sind schreibende Befehle ab Werk gesperrt.
 
+## Neu in 0.9.24
+
+**Der LoxBerry-Wurzelordner wird jetzt gelesen, nicht geraten.** Acht Dateien
+des Plugins rechneten sich den Wurzelordner aus einer festen Zahl von Ebenen
+über ihrem eigenen Ablageort aus — `bin/dienst.sh`, `bin/vw.py`,
+`bin/healthcheck`, `webfrontend/html/vw_lib.php` (an zwei Stellen),
+`uninstall/uninstall`, `postinstall.sh`, `preupgrade.sh` und
+`postupgrade.sh`. Solange alles am vorgesehenen Platz liegt, stimmt das; aus
+einem ausgepackten Archiv, aus einem Prüfordner oder nach einem
+abgebrochenen Einbau stimmt es nicht. Gemessen wurde (WSL Ubuntu,
+24.09.2026, Prüfstände `messe_h1.sh` und `messe_haken.sh` unter
+`Pruefung-VolkswagenID-0.9.24/`):
+
+* `dienst.sh status` aus einem Prüfarchiv legte in der **laufenden**
+  Installation `data/plugins/bin` und `log/plugins/bin` an;
+* nach einem Upgrade, das den Datenordner abgeräumt hat, legte schon ein
+  `status` ihn wieder an;
+* in einem fremden Verzeichnisbaum startete `start` einen Dienst und
+  `stop` löschte dort den Startmerker;
+* `uninstall`, von der falschen Stelle aufgerufen, löschte in einem fremden
+  Baum `config/plugins/<ordner>/vw.json` samt Zweitschriften;
+* `preupgrade.sh` rechnete ohne fünftes Argument und ohne `$LBHOMEDIR` auf
+  den Pfad `/data/plugins` — das Skript läuft am Gerät als `root`;
+* der `healthcheck` meldete den Zustand eines fremden Baums als den der
+  Anlage.
+
+Jetzt gilt überall dieselbe Reihenfolge: erst `$LBHOMEDIR` (beim Installer
+zusätzlich das fünfte Argument), dann eine Suche vom eigenen Ablageort
+aufwärts nach einem Verzeichnis, das `config/plugins`, `data/plugins` **und**
+`config/system/general.json` trägt. Die dritte Bedingung unterscheidet einen
+LoxBerry von einem liegengebliebenen Prüfordner. Findet sich nichts, wird
+**gewarnt statt vollzogen**: es wird nichts angelegt, nichts gestartet,
+nichts angehalten und nichts gelöscht, und der Rückgabewert ist ungleich
+null (`dienst.sh status` antwortet mit 4). Einen Rückfall auf feste Ebenen
+oder auf einen fest verdrahteten Systempfad gibt es nicht mehr. Der
+Ordnername kommt aus `$LBPPLUGINDIR`, sonst aus dem Ablageort. Angelegt wird
+erst beim Start, nach der Prüfung der Upgrade-Marke — nicht mehr bei jedem
+Aufruf.
+
+**Was der Dienst über sich selbst sagt, bleibt nicht mehr im Broker stehen.**
+Nach dem Hausstandard ist ein Zustand des Fahrzeugs zurückbehalten
+(`retain`), damit Loxone nach einem Neustart sofort den letzten gültigen
+Stand hat. `ok`, `fehler_folge`, `fehlertext` und `fahrzeugN/ausfalltext`
+sind aber keine Zustände des Fahrzeugs, sondern Aussagen des **Dienstes über
+sich selbst**. Zurückbehalten sagten sie nach dem Tod des Dienstes weiter
+„alles in Ordnung“ — und beim Ausfalltext war es schlimmer: ein leerer Text
+wird gar nicht gesendet, also blieb die letzte Fehlermeldung **für immer**
+stehen, auch während der Dienst längst wieder maß. Diese vier Themen gehen
+jetzt flüchtig hinaus.
+
+Damit die alten Werte aus früheren Fassungen nicht ewig im Broker liegen
+bleiben, räumt das Plugin sie **einmalig** ab: es sieht am Broker nach, was
+dort wirklich zurückbehalten liegt, löscht es mit einer leeren Nutzlast,
+**liest danach noch einmal nach** und setzt den Merker erst, wenn nichts
+mehr dasteht. Der Weg geht direkt über den Broker (paho), nicht über den
+UDP-Eingang des Gateways — der verwirft unter Last einen großen Teil der
+Datagramme, und ein Merker, der nur am Absenden hängt, meldet dann
+fälschlich „erledigt“. Der Merker trägt eine Kennung samt Themenpräfix; ein
+Merker einer Vorfassung oder ein Wechsel des Präfixes lassen das Abräumen
+erneut laufen. Der gültige Wert geht unmittelbar danach hinaus.
+
+Die Tabelle im Reiter *MQTT* hat dafür eine neue Spalte **Zurückbehalten**,
+und der Reiter *Test* hält sie gegen die Liste im Dienst — eine Tabelle, die
+niemand nachmisst, läuft auseinander.
+
 ## Neu in 0.9.23
 
 **Während einer Aktualisierung konnten Konto und Passwort verlorengehen.**

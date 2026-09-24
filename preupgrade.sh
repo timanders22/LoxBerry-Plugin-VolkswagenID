@@ -10,6 +10,45 @@ ARGV5=$5
 PFOLDER="${ARGV3:-volkswagenid}"
 BASE="${ARGV5:-$LBHOMEDIR}"
 
+# ---------- Die Wurzel: GELESEN, nicht geraten ----------
+#
+# Bis 0.9.23 stand hier NUR die Zeile darueber - ohne Rueckfall und ohne
+# Pruefung. Bleibt $5 leer und ist $LBHOMEDIR nicht gesetzt, dann ist $BASE
+# leer, und die naechste Zeile lautete "mkdir -p /data/plugins": ein
+# absoluter Pfad ausserhalb jedes LoxBerry, und dieses Skript laeuft am
+# Geraet als root. In WSL gemessen (Pruefung-VolkswagenID-0.9.24, Fall K7).
+#
+# Gesucht wird aufwaerts nach config/plugins, data/plugins UND
+# config/system/general.json (Regeln/06); ohne Wurzel wird gewarnt statt
+# vollzogen - ohne Marke laeuft die Aktualisierung weiter, nur mit dem alten
+# Risiko.
+vw_wurzel_suchen() {
+    vw_v=$(cd "$1" 2>/dev/null && pwd -P) || return 1
+    vw_i=0
+    while [ -n "$vw_v" ] && [ "$vw_v" != "/" ] && [ "$vw_i" -lt 8 ]; do
+        if [ -d "$vw_v/config/plugins" ] && [ -d "$vw_v/data/plugins" ] \
+           && [ -f "$vw_v/config/system/general.json" ]; then
+            echo "$vw_v"
+            return 0
+        fi
+        vw_v=$(dirname "$vw_v")
+        vw_i=$((vw_i + 1))
+    done
+    return 1
+}
+SELF=$(cd "$(dirname "$0")" && pwd)
+if [ -z "$BASE" ] || [ ! -d "$BASE/config/plugins" ] || [ ! -d "$BASE/data/plugins" ]; then
+    BASE=$(vw_wurzel_suchen "$SELF") || BASE=""
+fi
+if [ -z "$BASE" ]; then
+    echo "<WARNING> Es wurde kein LoxBerry-Wurzelverzeichnis gefunden: weder als"
+    echo "<WARNING> fuenftes Argument noch in \$LBHOMEDIR, und oberhalb von $SELF"
+    echo "<WARNING> traegt kein Verzeichnis config/plugins, data/plugins und"
+    echo "<WARNING> config/system/general.json. Es wurde nichts angelegt, nichts"
+    echo "<WARNING> gesichert und kein Dienst angehalten."
+    exit 1
+fi
+
 # ---------- Die Upgrade-Marke, als ERSTES ----------
 #
 # Zwischen dem Kopieren der neuen Dateien und postinstall.sh liegt fast eine

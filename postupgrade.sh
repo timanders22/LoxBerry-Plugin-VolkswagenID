@@ -25,9 +25,38 @@ ARGV3=$3
 ARGV5=$5
 PFOLDER="${ARGV3:-volkswagenid}"
 BASE="${ARGV5:-$LBHOMEDIR}"
-if [ -z "$BASE" ] || [ ! -d "$BASE" ]; then
-    SELF=$(cd "$(dirname "$0")" && pwd)
-    BASE=$(cd "$SELF/../.." 2>/dev/null && pwd)
+# Bis 0.9.23 waren es zwei feste Ebenen ($SELF/../..). Dieses Skript liegt
+# beim Einbau im Auspackordner; zwei Ebenen darueber ist irgendein
+# Verzeichnis. Gemessen (Pruefung-VolkswagenID-0.9.24, Fall K9): in einem
+# fremden Baum entfernte postupgrade.sh dort __pycache__ und die Marke.
+# Deshalb aufwaerts suchen (config/plugins, data/plugins UND
+# config/system/general.json, Regeln/06); ohne Wurzel wird gewarnt statt
+# vollzogen.
+vw_wurzel_suchen() {
+    vw_v=$(cd "$1" 2>/dev/null && pwd -P) || return 1
+    vw_i=0
+    while [ -n "$vw_v" ] && [ "$vw_v" != "/" ] && [ "$vw_i" -lt 8 ]; do
+        if [ -d "$vw_v/config/plugins" ] && [ -d "$vw_v/data/plugins" ] \
+           && [ -f "$vw_v/config/system/general.json" ]; then
+            echo "$vw_v"
+            return 0
+        fi
+        vw_v=$(dirname "$vw_v")
+        vw_i=$((vw_i + 1))
+    done
+    return 1
+}
+SELF=$(cd "$(dirname "$0")" && pwd)
+if [ -z "$BASE" ] || [ ! -d "$BASE/config/plugins" ] || [ ! -d "$BASE/data/plugins" ]; then
+    BASE=$(vw_wurzel_suchen "$SELF") || BASE=""
+fi
+if [ -z "$BASE" ]; then
+    echo "<WARNING> Es wurde kein LoxBerry-Wurzelverzeichnis gefunden: weder als"
+    echo "<WARNING> fuenftes Argument noch in \$LBHOMEDIR, und oberhalb von $SELF"
+    echo "<WARNING> traegt kein Verzeichnis config/plugins, data/plugins und"
+    echo "<WARNING> config/system/general.json. Es wurde nichts entfernt; eine"
+    echo "<WARNING> liegengebliebene Upgrade-Marke gilt nach 3600 s ohnehin nicht mehr."
+    exit 1
 fi
 
 PBIN="$BASE/bin/plugins/$PFOLDER"

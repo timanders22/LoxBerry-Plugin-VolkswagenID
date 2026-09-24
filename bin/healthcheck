@@ -37,12 +37,26 @@ ini_set('display_errors', '0');
 
 $vw_was = isset($argv[1]) ? (string) $argv[1] : 'check';
 
-/* Den LoxBerry-Wurzelordner ohne festen Systempfad bestimmen. */
+/* Den LoxBerry-Wurzelordner ohne festen Systempfad bestimmen.
+ *
+ * Erst $LBHOMEDIR (der Kern setzt es), dann aufwaerts suchen - und zwar nach
+ * config/plugins, data/plugins UND config/system/general.json. Bis 0.9.23
+ * genuegten config/plugins und webfrontend, und die Umgebung wurde gar nicht
+ * gefragt: in einem fremden Baum mit diesen beiden Ordnern meldete der
+ * healthcheck dessen Zustand als den der Anlage (in WSL gemessen,
+ * Pruefung-VolkswagenID-0.9.24, Fall K11). Rueckgabe '' heisst "keine
+ * Wurzel"; der Aufrufer faengt das ab.
+ */
 function vw_hc_wurzel()
 {
+    $h = getenv('LBHOMEDIR');
+    if ($h && is_dir($h . '/config/plugins') && is_dir($h . '/data/plugins')) {
+        return rtrim($h, '/');
+    }
     $d = __DIR__;
     for ($i = 0; $i < 8; $i++) {
-        if (is_dir($d . '/config/plugins') && is_dir($d . '/webfrontend')) {
+        if (is_dir($d . '/config/plugins') && is_dir($d . '/data/plugins')
+            && is_file($d . '/config/system/general.json')) {
             return $d;
         }
         $eltern = dirname($d);
@@ -72,7 +86,23 @@ if ($vw_was === 'title') {
 }
 
 $vw_home = vw_hc_wurzel();
-$vw_ordner = basename(dirname(__DIR__)) === 'plugins' ? basename(__DIR__) : 'volkswagenid';
+/* Ohne Wurzel wird nichts gelesen und nichts behauptet. Ein leerer $vw_home
+ * ergaebe sonst Pfade wie /data/plugins/<ordner> - und die Antwort "der
+ * Dienst ist angehalten" waere eine Aussage ueber eine Anlage, die hier gar
+ * nicht gefunden wurde. Status 0 = "unbekannt". */
+if ($vw_home === '') {
+    vw_hc_antwort('Volkswagen ID', 0,
+        'Der LoxBerry-Wurzelordner liess sich von hier aus nicht bestimmen '
+        . '(weder $LBHOMEDIR noch eine Suche oberhalb von ' . __DIR__
+        . ' fuehrten zu einem Verzeichnis mit config/plugins, data/plugins und '
+        . 'config/system/general.json). Es wurde nichts gelesen.');
+}
+$vw_lbp = basename(rtrim((string) getenv('LBPPLUGINDIR'), '/'));
+if ($vw_lbp !== '' && !in_array($vw_lbp, array('.', '/', 'bin', 'plugins'), true)) {
+    $vw_ordner = $vw_lbp;
+} else {
+    $vw_ordner = basename(dirname(__DIR__)) === 'plugins' ? basename(__DIR__) : 'volkswagenid';
+}
 $vw_pdata = $vw_home . '/data/plugins/' . $vw_ordner;
 $vw_url = '/admin/plugins/' . $vw_ordner . '/index.php';
 $vw_log = $vw_home . '/log/plugins/' . $vw_ordner . '/vw.log';

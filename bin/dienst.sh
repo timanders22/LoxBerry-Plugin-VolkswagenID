@@ -43,8 +43,99 @@ if [ "$(id -u)" = "0" ] && id loxberry >/dev/null 2>&1; then
 fi
 
 SELF=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)          # <home>/bin/plugins/<ordner>
-PNAME=$(basename "$SELF")
-LBHOMEDIR=$(cd "$SELF/../../.." && pwd)
+
+# ---------- Wurzel und Ordnername: GELESEN, nicht geraten ----------
+#
+# Bis 0.9.23 stand hier
+#     PNAME=$(basename "$SELF")
+#     LBHOMEDIR=$(cd "$SELF/../../.." && pwd)
+# und weiter unten ein 'mkdir -p' auf oberster Ebene. Ein gesetztes
+# $LBHOMEDIR wurde damit UEBERSCHRIEBEN, der Ordnername kam allein aus dem
+# Ablageort, und der geratene Pfad wurde bei JEDEM Aufruf angelegt - auch bei
+# 'status'. In WSL gemessen (24.09.2026, Pruefung-VolkswagenID-0.9.24,
+# messung_h1_vorher.txt): 'dienst.sh status' aus einem Pruefarchiv unter
+# <Wurzel>/pruefung/volkswagenid/bin legte in der LAUFENDEN Installation
+# data/plugins/bin und log/plugins/bin an (Faelle H4, H9), nach einem
+# purge_installation legte schon ein 'status' den Datenordner wieder an
+# (H6, H7), und in einem fremden Baum ohne general.json startete 'start'
+# einen Dienst (F1).
+#
+# Zwei Stufen (Regeln/03, Regeln/06; Bauart wortgleich mit Govee 0.9.20 und
+# ZendureSolarFlow 0.9.25):
+#   1. $LBHOMEDIR aus der Umgebung, wenn es config/plugins und data/plugins
+#      traegt - am Geraet steht es in /etc/environment, der Cron liest es
+#      ueber pam_env;
+#   2. aufwaerts suchen, bis ein Verzeichnis config/plugins, data/plugins UND
+#      config/system/general.json traegt. Die dritte Bedingung stammt aus dem
+#      Raumklima-Vorfall (Regeln/06): eine Suche ueber die ersten beiden
+#      allein trifft auf einem Arbeitsrechner das Laufwerk selbst.
+# Findet keine etwas, bricht das Skript ab, BEVOR es etwas anlegt, startet
+# oder anhaelt (Regeln/06: ohne brauchbare Wurzel warnen statt vollziehen).
+# Eine dritte Stufe "drei Ebenen ueber dem Ablageort" gibt es NICHT mehr -
+# genau dieser Rueckfall machte die Suche wirkungslos (Stand-Protokolle/
+# 2026-09-18_Welle1, "Neue Lehre fuer alle H1-Linien").
+# 'pwd -P': ist die Wurzel ein Verweis, zaehlt der aufgeloeste Pfad. So steht
+# er in der Befehlszeile des Dienstes, denn SELF ist ueber readlink -f
+# ebenfalls aufgeloest (Faelle G4 und G7).
+vw_wurzel_suchen() {
+    vw_v="$SELF"
+    vw_i=0
+    while [ -n "$vw_v" ] && [ "$vw_v" != "/" ] && [ "$vw_i" -lt 8 ]; do
+        if [ -d "$vw_v/config/plugins" ] && [ -d "$vw_v/data/plugins" ] \
+           && [ -f "$vw_v/config/system/general.json" ]; then
+            echo "$vw_v"
+            return 0
+        fi
+        vw_v=$(dirname "$vw_v")
+        vw_i=$((vw_i + 1))
+    done
+    return 1
+}
+if [ -n "${LBHOMEDIR:-}" ] && [ -d "$LBHOMEDIR/config/plugins" ] \
+   && [ -d "$LBHOMEDIR/data/plugins" ]; then
+    LBHOMEDIR=$(cd "$LBHOMEDIR" && pwd -P)
+else
+    LBHOMEDIR=$(vw_wurzel_suchen) || LBHOMEDIR=""
+fi
+# Ohne Wurzel: nichts anlegen, nichts starten, nichts anhalten. "status"
+# antwortet mit 4 ("Zustand unbekannt"), damit es sich von 1 ("gestoppt")
+# unterscheidet; alles andere mit 1. Die Meldung geht nur auf die Ausgabe -
+# ohne Wurzel gibt es keine Protokolldatei, und der Cron-Waechter leitet
+# seine Ausgabe nach /dev/null (Fall F4).
+if [ -z "$LBHOMEDIR" ]; then
+    echo "FEHLER: Es wurde kein LoxBerry-Wurzelverzeichnis gefunden."
+    echo "FEHLER: \$LBHOMEDIR ist nicht gesetzt, und oberhalb von $SELF traegt"
+    echo "FEHLER: kein Verzeichnis config/plugins, data/plugins und config/system/general.json."
+    echo "FEHLER: Es wurde nichts angelegt, nichts gestartet und nichts angehalten."
+    [ "${1:-}" = "status" ] && exit 4
+    exit 1
+fi
+# Der Ordnername kommt aus $LBPPLUGINDIR, sonst aus dem Ablageort. Am Geraet
+# steht $LBPPLUGINDIR in keiner Cron-Schale (Regeln/03, 43 Linien) - dann
+# traegt der Ablageort, und bei einer regulaeren Installation ist das richtig.
+PNAME="${LBPPLUGINDIR:-}"
+PNAME="${PNAME%/}"
+PNAME="${PNAME##*/}"
+[ -n "$PNAME" ] || PNAME=$(basename "$SELF")
+PBIN="$LBHOMEDIR/bin/plugins/$PNAME"
+
+# Die Gegenprobe steht VOR allem, was schreibt (Vorbild Govee 0.9.20,
+# Dashboard 0.9.22): liegt dieses Skript nicht im bin-Ordner der Anlage, und
+# ist <ordner> dort auch kein eingerichtetes Plugin, dann kommt der Aufruf
+# aus einem ausgepackten Archiv oder einem Pruefordner - es wird nichts
+# angelegt und nichts angefasst (Faelle H1, H4, H5, H8, H10; auch 'stop' mit
+# nur gesetztem LBHOMEDIR sagt ab, statt "laeuft nicht" zu melden).
+if [ "$SELF" != "$(readlink -f "$PBIN" 2>/dev/null)" ] \
+   && [ ! -d "$LBHOMEDIR/config/plugins/$PNAME" ]; then
+    echo "FEHLER: '$PNAME' ist unter $LBHOMEDIR kein eingerichtetes Plugin,"
+    echo "        und $SELF ist nicht dessen bin-Ordner."
+    echo "        Der Aufruf kommt offenbar aus einem ausgepackten Archiv oder"
+    echo "        einem Pruefordner. Es wurde nichts angelegt."
+    echo "        Abhilfe: LBHOMEDIR und LBPPLUGINDIR setzen oder dienst.sh"
+    echo "        aus <LoxBerry-Wurzel>/bin/plugins/<ordner> aufrufen."
+    exit 1
+fi
+
 PDATA="$LBHOMEDIR/data/plugins/$PNAME"
 PLOG="$LBHOMEDIR/log/plugins/$PNAME"
 PCONFIG="$LBHOMEDIR/config/plugins/$PNAME"
@@ -64,8 +155,15 @@ LOGDATEI="$PLOG/vw.log"
 # (06.09.2026): sieben Dienste hielten so eine geloeschte Protokolldatei offen.
 # Regel: genau einer schreibt in eine Protokolldatei.
 STARTLOG="$PLOG/vw_start.log"
-PY="$SELF/venv/bin/python3"
-SKRIPT="$SELF/vw.py"
+# Die virtuelle Umgebung und das Dienstskript DER ANLAGE, nicht die neben
+# dieser Datei. Sonst verwaltete ein dienst.sh aus einem ausgepackten Archiv
+# den Dienst des Archivs, waehrend der Aufrufer mit LBHOMEDIR/LBPPLUGINDIR
+# die Anlage meinte: 'status' meldete "gestoppt", obwohl ihr Dienst lief, und
+# 'stop' nahm ihr soll_laufen weg, ohne den Dienst zu beenden (Faelle H2, H3;
+# vorher gemessen in messung_h1_vorher.txt). Installiert ist PBIN derselbe
+# Ordner wie SELF - die Gegenprobe dazu steht oben.
+PY="$PBIN/venv/bin/python3"
+SKRIPT="$PBIN/vw.py"
 # Zweite Schreibweise desselben Skripts fuer den Vergleich weiter unten: wurde
 # der Dienst ueber einen anderen Weg auf dieselbe Datei gestartet (Symlink im
 # Pfad, LBHOMEDIR gegen den aufgeloesten Ablageort), steht in seiner
@@ -124,7 +222,16 @@ upgrade_laeuft() {
     [ $((vw_jetzt - vw_dann)) -lt 3600 ]
 }
 
-mkdir -p "$PDATA" "$PLOG" 2>/dev/null
+# Angelegt wird erst beim START - in starten(), NACH der Markenpruefung und
+# nach allen Vorbedingungen, sowie im Waechter, bevor er in die Startdatei
+# umlenkt -, nicht bei jedem Aufruf. Bis 0.9.23 stand dieses mkdir auf
+# oberster Ebene; gemessen in den Faellen H1, H4, H5, H6, H7, H8, H9 und F4.
+# Der Waechter braucht es trotzdem: log/plugins ist eine Ramdisk; fehlt der
+# Ordner nach einem Neustart, scheiterte die Umlenkung, und starten() liefe
+# gar nicht erst (Fall G8).
+ordner_anlegen() {
+    mkdir -p "$PDATA" "$PLOG" 2>/dev/null
+}
 
 # ---------- Die eigenen Prozesse erkennen ----------
 #
@@ -217,7 +324,10 @@ starten() {
         ERSTE=$(printf '%s\n' "$LAUFEND" | head -n 1)
         # Die PID-Datei nachziehen, wenn sie fehlt oder veraltet ist. Die
         # Nummer ist argumentweise geprueft - eine ungepruefte Nummer darf
-        # hier nie hinein.
+        # hier nie hinein. Der Datenordner kann fehlen (purge_installation
+        # hat ihn geloescht, der Dienst lief weiter) - dann wird er hier
+        # angelegt, sonst ginge die PID-Datei still verloren.
+        ordner_anlegen
         echo "$ERSTE" > "$PID" 2>/dev/null
         echo "laeuft bereits (PID $ERSTE)"
         return 0
@@ -244,6 +354,9 @@ starten() {
         echo "        gestartet - sonst liefe er in eine Neustartschleife."
         return 1
     fi
+    # Erst hier wird angelegt: nach der Markenpruefung und nach allen
+    # Vorbedingungen. Ein abgewiesener Start hinterlaesst damit nichts.
+    ordner_anlegen
     # Die Ausgabe des Dienstes geht in die Startdatei, NICHT in das Protokoll:
     # dort schreibt allein der Handler des Programms. Beim Start gekappt, damit
     # sie nur die Ausgabe EINES Laufes sammelt und nicht unbegrenzt waechst.
@@ -325,6 +438,10 @@ case "$1" in
         # Minute "Dienst lief nicht, wird neu gestartet" ins Protokoll,
         # obwohl gleich darauf nichts gestartet wird (Fall marke, M10j).
         if [ -f "$SOLL" ] && ! laeuft && ! upgrade_laeuft; then
+            # log/plugins liegt auf der Ramdisk; nach einem Neustart ist der
+            # Ordner fort. Ohne ihn scheiterte die Umlenkung, und starten()
+            # liefe gar nicht erst (Fall G8).
+            ordner_anlegen
             echo "[$(date '+%Y-%m-%d %H:%M:%S')] Waechter: Dienst lief nicht, wird neu gestartet." >> "$LOGDATEI"
             starten >> "$STARTLOG" 2>&1
         fi

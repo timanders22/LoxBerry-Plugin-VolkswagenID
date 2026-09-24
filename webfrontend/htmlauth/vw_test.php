@@ -285,6 +285,7 @@ function vw_pruefungen()
     // MQTT ist die Anleitung - eine Liste, die niemand nachmisst, laeuft
     // auseinander.
     $zeilen[] = vw_themen_zeile();
+    $zeilen[] = vw_retain_zeile();
 
     // Sind die Vorlagen wohlgeformt? Eine kaputte Vorlage merkt der Anwender
     // sonst erst in Loxone Config.
@@ -561,6 +562,58 @@ function vw_themen_zeile()
     $n = count($soll_zahl) + count($soll_text) + count($soll_oben);
     return vw_pruefzeile($mangel ? 0 : 1, vw_t('TEST.F_THEMEN'),
         $mangel ? implode(' ', $mangel) : sprintf(vw_t('TEST.A_THEMEN_OK'), $n));
+}
+
+/**
+ * Sagt die Spalte "zurueckbehalten?" dasselbe wie der Dienst?
+ *
+ * Die Entscheidung je Thema steht an zwei Stellen: in MQTT_OHNE_RETAIN
+ * (bin/vw.py, entscheidet beim Senden) und in vw_mqtt_themen() (die Spalte,
+ * die der Anwender liest). Laufen sie auseinander, sagt die Oberflaeche
+ * etwas an, das nie eintritt - genau der Befund, den Bewaesserung 0.9.26 am
+ * Broker hinterlassen hat (Regeln/07). Diese Zeile haelt beide gegeneinander.
+ *
+ * Massstab ist die Entscheidung vom 19.09.2026: Aussagen des Dienstes ueber
+ * sich selbst und Messwerte mit Zeitbezug sind nie zurueckbehalten,
+ * Aussagen ueber das Geraet schon.
+ *
+ * Der Dienst entscheidet ueber den Teil HINTER dem letzten Schraegstrich
+ * (mqtt_ohne_retain()); die Tabelle wird deshalb genauso gelesen. Eine
+ * Konstante, die sich nicht lesen laesst, ist ein Hinweis (-1), kein Kreuz.
+ */
+function vw_retain_zeile()
+{
+    $dienst = vw_mqtt_themen_im_dienst();
+    if ($dienst === null || !isset($dienst['ohne_retain'])) {
+        return vw_pruefzeile(-1, vw_t('TEST.F_RETAIN'), vw_t('TEST.A_RETAIN_UNKLAR'));
+    }
+    $ohne = array_flip($dienst['ohne_retain']);
+    $falsch_retain = array();   // Tabelle sagt retain, der Dienst sendet fluechtig
+    $falsch_fluechtig = array();
+    foreach (vw_mqtt_themen() as $thema => $info) {
+        $kurz = strrchr($thema, '/');
+        $kurz = $kurz === false ? $thema : substr($kurz, 1);
+        $dienst_retain = !isset($ohne[$kurz]);
+        $tabelle_retain = !empty($info['r']);
+        if ($dienst_retain && !$tabelle_retain) {
+            $falsch_fluechtig[] = $thema;
+        } elseif (!$dienst_retain && $tabelle_retain) {
+            $falsch_retain[] = $thema;
+        }
+    }
+    $mangel = array();
+    if ($falsch_retain) {
+        $mangel[] = sprintf(vw_t('TEST.A_RETAIN_NUR_TABELLE'),
+            vw_e(implode(', ', $falsch_retain)));
+    }
+    if ($falsch_fluechtig) {
+        $mangel[] = sprintf(vw_t('TEST.A_RETAIN_NUR_DIENST'),
+            vw_e(implode(', ', $falsch_fluechtig)));
+    }
+    $n = count(vw_mqtt_themen());
+    $f = count($dienst['ohne_retain']);
+    return vw_pruefzeile($mangel ? 0 : 1, vw_t('TEST.F_RETAIN'),
+        $mangel ? implode(' ', $mangel) : sprintf(vw_t('TEST.A_RETAIN_OK'), $n, $f));
 }
 
 /**

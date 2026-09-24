@@ -42,13 +42,21 @@ def lb_wurzel_ermitteln():
     """Den LoxBerry-Wurzelordner ohne festen Systempfad bestimmen.
 
     Vom eigenen Ablageort aufwaerts, bis ein Verzeichnis gefunden ist, das
-    config/plugins UND webfrontend enthaelt. Trifft die uebliche
-    Installation genauso wie eine an einem anderen Ort.
+    config/plugins, data/plugins UND config/system/general.json traegt.
+
+    Die dritte Bedingung ist die entscheidende. Bis 0.9.23 wurde nur auf
+    config/plugins und webfrontend geprueft - und genau diese beiden Ordner
+    hinterlaesst ein Pruefstand auf einem Arbeitsrechner. Am 05.09.2026 hat
+    eine solche Suche dort C:\\ als "LoxBerry" erkannt und Daten geloescht
+    (Regeln/06, "Eine Wurzelsuche ueber config/plugins und data/plugins
+    trifft auf einem Pruefrechner das Laufwerk selbst"). Ein LoxBerry hat
+    immer config/system/general.json; ein solcher Rest hat sie nie.
     """
     d = os.path.dirname(os.path.abspath(__file__))
     for _ in range(8):
         if os.path.isdir(os.path.join(d, "config", "plugins")) \
-                and os.path.isdir(os.path.join(d, "webfrontend")):
+                and os.path.isdir(os.path.join(d, "data", "plugins")) \
+                and os.path.isfile(os.path.join(d, "config", "system", "general.json")):
             return d
         eltern = os.path.dirname(d)
         if eltern == d:
@@ -106,32 +114,81 @@ def mqtt_wert_saeubern(wert, laenge: int = MQTT_MAX):
 # trotzdem Erfolg meldet.
 # ---------------------------------------------------------------------------
 SELF = Path(__file__).resolve().parent            # <home>/bin/plugins/<ordner>
-PNAME = SELF.name
 
 
-def _ist_lbhome(p: Path) -> bool:
-    """Sieht dieses Verzeichnis wie ein LoxBerry aus?"""
+def _ist_lbhome(p) -> bool:
+    """Sieht dieses Verzeichnis wie ein LoxBerry aus?
+
+    Drei Merkmale, nicht zwei: config/plugins, data/plugins UND
+    config/system/general.json (Begruendung in lb_wurzel_ermitteln()).
+    """
     try:
-        return (p / "config" / "plugins").is_dir() and (p / "webfrontend").is_dir()
+        p = Path(p)
+        return ((p / "config" / "plugins").is_dir()
+                and (p / "data" / "plugins").is_dir()
+                and (p / "config" / "system" / "general.json").is_file())
     except OSError:
         return False
 
 
-# Die drei Ebenen aufwaerts sind der Normalfall - aber sie werden GEPRUEFT.
+# ---------------------------------------------------------------------------
+# Wurzel und Ordnername: GELESEN, nicht geraten.
 #
-# Bis 0.9.9 stand hier `if len(SELF.parents) >= 3`, und das ist bei jedem
-# absoluten Pfad erfuellt: der Rueckfallweg wurde nie genommen, und
-# lb_wurzel_ermitteln() war toter Code. Aus einem entpackten Archiv heraus
-# ergab das LBHOME = <Desktop> und PNAME = "bin" - der Selbsttest meldete
-# dann drei nicht beschreibbare Ordner statt zu sagen, dass das Plugin gar
-# nicht installiert ist. Gemessen am 27.08.2026.
-LBHOME = SELF.parents[2] if len(SELF.parents) >= 3 and _ist_lbhome(SELF.parents[2]) else None
-if LBHOME is None:
-    _ersatz = os.environ.get("LBHOMEDIR") or lb_wurzel_ermitteln()
-    LBHOME = Path(_ersatz) if _ersatz else SELF.parents[min(2, len(SELF.parents) - 1)]
-    NICHT_INSTALLIERT = not _ist_lbhome(LBHOME)
-else:
-    NICHT_INSTALLIERT = False
+# Bis 0.9.23 stand hier
+#     LBHOME = SELF.parents[2] if len(SELF.parents) >= 3 and _ist_lbhome(...)
+#     ... else Path($LBHOMEDIR) or lb_wurzel_ermitteln() or SELF.parents[2]
+#     PNAME  = SELF.name
+# Drei Dinge waren daran falsch:
+#   1. Gefragt wurden zuerst die drei festen Ebenen, nicht die Umgebung.
+#   2. _ist_lbhome() kannte general.json nicht - siehe dort.
+#   3. NACH der Suche stand wieder ein fester Rueckfall auf den Ablageort.
+#      Genau dieser Rueckfall macht jede Suche wirkungslos: in einem fremden
+#      Baum ohne general.json wird er wieder Wurzel (Stand-Protokolle/
+#      2026-09-18_Welle1, "Neue Lehre fuer alle H1-Linien"; in WSL gemessen
+#      am 24.09.2026, Pruefung-VolkswagenID-0.9.24).
+#
+# Reihenfolge nach Regeln/03, Stufe 1 ist die Umgebung:
+#   Wurzel:      $LBHOMEDIR  ->  Aufwaertssuche (mit general.json)  ->  Abbruch
+#   Ordnername:  $LBPPLUGINDIR  ->  Ablageort  ->  der vorgesehene Name
+# Die letzte Stufe des Ordnernamens greift nur dort, wo der Ablageort
+# nachweislich kein Pluginordner sein kann ("bin", "plugins") - dieselbe
+# Abstufung wie vw_paths() in der Oberflaeche.
+# ---------------------------------------------------------------------------
+def _lbhome_ermitteln() -> Path:
+    h = os.environ.get("LBHOMEDIR") or ""
+    # Ein gesetztes LBHOMEDIR gilt mit config/plugins UND data/plugins
+    # darunter - general.json wird hier nicht verlangt, damit Attrappen ohne
+    # sie (Werkzeuge/lb) weiter tragen. Dieselbe Regel wie vw_wurzel_suchen()
+    # in bin/dienst.sh und vw_lbhome() in der Oberflaeche.
+    if h and os.path.isdir(os.path.join(h, "config", "plugins")) \
+            and os.path.isdir(os.path.join(h, "data", "plugins")):
+        return Path(h).resolve()
+    gefunden = lb_wurzel_ermitteln()
+    if gefunden:
+        return Path(gefunden)
+    sys.stderr.write(
+        "FEHLER: Es wurde kein LoxBerry-Wurzelverzeichnis gefunden. LBHOMEDIR "
+        "ist nicht gesetzt oder traegt kein config/plugins und data/plugins, "
+        "und oberhalb von %s traegt kein Verzeichnis config/plugins, "
+        "data/plugins und config/system/general.json. Es wurde nichts "
+        "angelegt und nichts gelesen.\n" % SELF)
+    raise SystemExit(1)
+
+
+def _pname_ermitteln() -> str:
+    # LBPPLUGINDIR steht am Geraet nicht in jeder Umgebung (Regeln/03, an 43
+    # Linien gemessen) - deshalb die zweite Stufe.
+    p = (os.environ.get("LBPPLUGINDIR") or "").strip("/")
+    if p and p not in ("bin", "plugins"):
+        return p
+    if SELF.name not in ("", "/", "bin", "plugins"):
+        return SELF.name
+    return "volkswagenid"
+
+
+LBHOME = _lbhome_ermitteln()
+PNAME = _pname_ermitteln()
+NICHT_INSTALLIERT = not (LBHOME / "config" / "plugins" / PNAME).is_dir()
 PDATA = LBHOME / "data" / "plugins" / PNAME
 PLOG = LBHOME / "log" / "plugins" / PNAME
 PCONFIG = LBHOME / "config" / "plugins" / PNAME
@@ -143,6 +200,11 @@ DATEI_LOXONE = PDATA / "loxone.json"
 DATEI_ZUSTAND = PDATA / "zustand.json"
 DATEI_TOKEN = PDATA / "token.json"          # Anmeldemarken der Bibliothek
 DATEI_ZWISCHEN = PDATA / "bibliothek_cache.json"
+# Merker des einmaligen Abraeumens zurueckbehaltener Dienstaussagen (0.9.24).
+# Er liegt IM Datenordner: purge_installation raeumt ihn beim Upgrade mit ab,
+# und nach einer Neuinstallation ist ohnehin nichts abzuraeumen, was dieses
+# Plugin hinterlassen haette - die Deinstallation leert den Broker.
+DATEI_RETAIN_GERAEUMT = PDATA / "retain_dienstzustand_geraeumt"
 ORDNER_BEFEHLE = PDATA / "befehle"
 ORDNER_ANTWORTEN = PDATA / "antworten"
 DATEI_LOG = PLOG / "vw.log"
@@ -1795,9 +1857,24 @@ MQTT_OBEN = (
 # Zustaende bleiben behalten: Ladestand, Kilometerstand, Verriegelung,
 # Position. Nach einem Neustart des Brokers hat Loxone damit sofort den
 # zuletzt gueltigen Stand, statt bis zum naechsten Abruf leer zu bleiben.
+#
+# Seit 0.9.24 stehen hier auch die AUSSAGEN DES DIENSTES UEBER SICH SELBST -
+# Entscheidung des Hausherrn vom 19.09.2026 (Regeln/07, Abschnitt 3):
+# 'ok', 'fehler_folge', 'fehlertext' und 'fahrzeugN/ausfalltext' sagen, dass
+# der LAUFENDE Dienst gerade keinen Fehler sieht. Stirbt er, bliebe eine
+# zurueckbehaltene Null stehen, und nach einem Neustart von Broker oder
+# Gateway laese Loxone "alles in Ordnung" von einem Dienst, der nicht mehr
+# laeuft. 'fahrzeugN/ausfalltext' war der schwerste der Funde
+# (Bestand-2026-09-18/klasse-E, Zeile 140): ein leerer Ausfalltext wird gar
+# nicht gesendet, also blieb die letzte Fehlermeldung fuer immer
+# zurueckbehalten stehen - auch waehrend der Dienst laeuft und misst.
+# Die Prueffrage je Thema lautet: sagt das GERAET das, oder der Dienst ueber
+# sich selbst? Alles, was das Geraet sagt, bleibt behalten.
 MQTT_OHNE_RETAIN = frozenset((
     # Lebenszeichen - nie behalten
     "ts", "zaehler",
+    # Aussagen des Dienstes ueber sich selbst - nie behalten (19.09.2026)
+    "ok", "fehler_folge", "fehlertext", "ausfalltext",
     # Leistung und Tempo
     "ladeleistung_kw", "ladetempo_kmh", "ladesaeule_kw",
     # Zeitpunkte und Restzeiten
@@ -1805,6 +1882,17 @@ MQTT_OHNE_RETAIN = frozenset((
     # Temperaturen
     "aussentemperatur", "batterie_temp",
 ))
+
+# Genau die Themen, deren zurueckbehaltener Altwert aus den Fassungen bis
+# 0.9.23 EINMAL abgeraeumt werden muss. Die Liste ist die Schnittmenge aus
+# "neu in MQTT_OHNE_RETAIN" - mehr wird nicht angefasst.
+MQTT_ALTLAST = ("ok", "fehler_folge", "fehlertext", "ausfalltext")
+
+# Kennung des Abraeumens. Sie steht IM Merker, nicht nur in seinem Namen.
+# Grund (Regeln/07, Nachtrag 19.09.2026): ein Merker einer Vorfassung darf
+# das Abraeumen nicht als "schon erledigt" vortaeuschen. Aendert sich die
+# Liste oder das Themenpraefix, laeuft es deshalb erneut.
+RETAIN_ABRAEUM_KENNUNG = "dienstzustand-1"
 
 
 def fahrzeugnummern(vins: list) -> dict:
@@ -1950,6 +2038,20 @@ def abbild_schreiben(stand: dict, cfg: dict, ok: int, fehler: str = "",
 
     praefix = str(cfg.get("mqtt_topic") or "volkswagen").strip("/") or "volkswagen"
     retain = 1 if cfg.get("mqtt_retain") else 0
+
+    # Einmalig die zurueckbehaltenen Dienstaussagen frueherer Fassungen
+    # abraeumen - VOR dem Senden, damit der gueltige Wert unmittelbar
+    # hinterhergeht (Regeln/07: eine leere Nutzlast loescht den virtuellen
+    # Eingang in Loxone, bis der naechste Wert kommt). Solange es nicht
+    # nachweislich durch ist, laeuft es beim naechsten Durchgang wieder; der
+    # Merker faellt erst nach dem Nachlesen am Broker. Ein Fehlschlag darf
+    # den Durchgang nicht anhalten.
+    if cfg.get("mqtt_ein"):
+        try:
+            mqtt_altlast_abraeumen(praefix)
+        except Exception as err:  # noqa: BLE001
+            _LOG.warning("MQTT: Abraeumen der Altwerte uebersprungen (%s).",
+                         fehlertext(err))
 
     # Das Lebenszeichen - immer, und bei einer Stoerung ohne die Messwerte.
     # Die alten Messwerte erneut zu veroeffentlichen liesse sie frisch aussehen.
@@ -2728,9 +2830,11 @@ def selbsttest() -> int:
         zeilen.append(f"[FEHL] Die Entfernungsrechnung liefert {_e} m statt rund 300000 m")
 
     if NICHT_INSTALLIERT:
-        zeilen.append(f"[INFO] Dieses Plugin ist NICHT installiert - es laeuft aus einem "
-                      f"entpackten Archiv. Die Pfade unten zeigen deshalb neben den Ordner "
-                      f"({LBHOME}); das ist kein Fehler, aber auch keine Pruefung der Anlage.")
+        zeilen.append(f"[INFO] Unter {LBHOME} gibt es kein config/plugins/{PNAME} - dieses "
+                      f"Plugin ist dort NICHT eingerichtet; der Aufruf kommt offenbar aus "
+                      f"einem entpackten Archiv oder einem Pruefordner. Die Pfade unten "
+                      f"zeigen deshalb auf Ordner, die es nicht gibt; das ist kein Fehler, "
+                      f"aber auch keine Pruefung der Anlage.")
 
     lox = json_lesen(DATEI_LOXONE)
     if lox:
@@ -2752,6 +2856,156 @@ def selbsttest() -> int:
     zeilen.append("  - ob die schreibenden Befehle am Fahrzeug die erwartete Wirkung haben")
     print("\n".join(zeilen))
     return 1 if fehler else 0
+
+
+# ---------------------------------------------------------------------------
+# Einmaliges Abraeumen der zurueckbehaltenen Dienstaussagen (0.9.24)
+#
+# Bis 0.9.23 gingen 'ok', 'fehler_folge', 'fehlertext' und
+# 'fahrzeugN/ausfalltext' mit dem Befehlswort 'retain' hinaus. Wer auf
+# 0.9.24 aktualisiert, hat sie also im Broker stehen - und weil sie jetzt
+# fluechtig gesendet werden, ueberschreibt sie niemand mehr. Sie wuerden
+# fuer immer dort stehenbleiben; beim Ausfalltext ist das der Fund, der die
+# Klasse E ausgeloest hat.
+#
+# NICHT ueber den UDP-Eingang des Gateways, sondern unmittelbar am Broker.
+# Begruendung (Regeln/07, Nachtrag vom 19.09.2026, am Geraet gemessen): der
+# Eingang verwirft in Stoessen 17-70 % der Datagramme. Beschattungswaechter
+# 0.9.19 und BatterieBMS 0.9.22 haben genau hier ihren Merker auf ein
+# einziges fwrite gestuetzt - der Altwert stand danach weiter im Broker, und
+# das Plugin hielt die Sache fuer erledigt. Der Weg ueber paho ist derselbe,
+# den mqtt_leeren() seit 0.9.13 fuer die Deinstallation geht.
+#
+# Drei Dinge machen es belastbar:
+#   1. Es wird nur geloescht, was WIRKLICH zurueckbehalten im Broker liegt -
+#      gefunden ueber ein Abonnement, nicht geraten.
+#   2. Nach dem Loeschen wird NACHGELESEN. Der Merker faellt erst, wenn ein
+#      zweites Abonnement nichts mehr findet.
+#   3. Der Merker traegt eine Kennung samt Themenpraefix. Ein Merker einer
+#      Vorfassung, eine leere Datei oder ein gewechseltes Praefix lassen das
+#      Abraeumen erneut laufen.
+# Der gueltige Wert geht unmittelbar danach hinaus: der Aufrufer ruft im
+# selben Durchgang mqtt_senden().
+#
+# Rueckgabe: 0 erledigt oder nichts zu tun, 1 es blieb etwas stehen,
+# 2 nicht moeglich (keine Bibliothek, kein Broker, Anmeldung abgewiesen).
+# ---------------------------------------------------------------------------
+def mqtt_altlast_abraeumen(praefix: str, warten: float = 3.0) -> int:
+    praefix = str(praefix or "").strip("/")
+    if not praefix or "#" in praefix or "+" in praefix:
+        return 2
+    soll = RETAIN_ABRAEUM_KENNUNG + "|" + praefix
+    try:
+        if DATEI_RETAIN_GERAEUMT.read_text(encoding="utf-8").strip() == soll:
+            return 0
+    except (OSError, ValueError):
+        pass
+
+    def gehoert_dazu(thema: str) -> bool:
+        if not thema.startswith(praefix + "/"):
+            return False
+        rest = thema[len(praefix) + 1:].split("/")
+        if len(rest) == 1:
+            return rest[0] in MQTT_ALTLAST
+        return (len(rest) == 2 and rest[0].startswith("fahrzeug")
+                and rest[0][8:].isdigit() and 1 <= len(rest[0][8:]) <= 2
+                and rest[1] in MQTT_ALTLAST)
+
+    try:
+        import paho.mqtt.client as mqtt
+    except ImportError:
+        return 2
+    z = mqtt_zustand()
+    broker = z.get("broker") or "127.0.0.1"
+    try:
+        port = int(z.get("brokerport") or 1883)
+    except (TypeError, ValueError):
+        port = 1883
+
+    gesehen: set = set()
+    angemeldet = threading.Event()
+    code = {"wert": None}
+
+    def bei_verbindung(_k, _d, _f, *rest):
+        try:
+            code["wert"] = int(getattr(rest[0], "value", rest[0]) or 0) if rest else 0
+        except (TypeError, ValueError):
+            code["wert"] = 0
+        angemeldet.set()
+
+    def bei_nachricht(_k, _d, n):
+        if n.retain and n.payload and gehoert_dazu(n.topic):
+            gesehen.add(n.topic)
+
+    try:
+        k = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+    except (AttributeError, TypeError):
+        try:
+            k = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1)
+        except (AttributeError, TypeError):
+            k = mqtt.Client()
+    k.on_connect = bei_verbindung
+    k.on_message = bei_nachricht
+    if z.get("benutzer"):
+        k.username_pw_set(z["benutzer"], z.get("passwort") or None)
+    try:
+        k.connect(broker, port, 30)
+    except Exception as err:  # noqa: BLE001
+        melde_gebremst("retain_altlast",
+                       f"MQTT: Broker {broker}:{port} nicht erreichbar "
+                       f"({fehlertext(err)}) - die zurueckbehaltenen Altwerte aus "
+                       f"frueheren Fassungen stehen noch im Broker.")
+        return 2
+    k.loop_start()
+    try:
+        if not angemeldet.wait(10) or code["wert"]:
+            melde_gebremst("retain_altlast",
+                           "MQTT: der Broker hat die Anmeldung nicht angenommen - die "
+                           "zurueckbehaltenen Altwerte aus frueheren Fassungen stehen "
+                           "noch im Broker.")
+            return 2
+        k.subscribe(praefix + "/#")
+        time.sleep(warten)
+        k.unsubscribe(praefix + "/#")
+        zu_leeren = sorted(gesehen)
+        for thema in zu_leeren:
+            info = k.publish(thema, b"", qos=1, retain=True)
+            try:
+                info.wait_for_publish(5)
+            except TypeError:           # paho 1.x vor 1.6 kennt kein timeout
+                info.wait_for_publish()
+        # NACHLESEN: ein neues Abonnement bekommt alles, was noch behalten ist.
+        gesehen.clear()
+        k.subscribe(praefix + "/#")
+        time.sleep(warten)
+        rest = sorted(gesehen)
+    except Exception as err:  # noqa: BLE001
+        melde_gebremst("retain_altlast",
+                       f"MQTT: das Abraeumen der Altwerte scheiterte ({fehlertext(err)}).")
+        return 2
+    finally:
+        k.loop_stop()
+        try:
+            k.disconnect()
+        except Exception:  # noqa: BLE001
+            pass
+    if rest:
+        _LOG.warning("MQTT: %d von %d zurueckbehaltenen Altwerten stehen noch im Broker "
+                     "(zum Beispiel %s) - es wird beim naechsten Durchgang erneut "
+                     "versucht.", len(rest), len(zu_leeren), rest[0])
+        return 1
+    # ERST JETZT der Merker - nach dem Nachlesen, nicht nach dem Senden.
+    try:
+        PDATA.mkdir(parents=True, exist_ok=True)
+        DATEI_RETAIN_GERAEUMT.write_text(soll + "\n", encoding="utf-8")
+    except OSError as err:
+        _LOG.warning("MQTT: der Merker %s liess sich nicht schreiben (%s) - das "
+                     "Abraeumen laeuft beim naechsten Durchgang erneut.",
+                     DATEI_RETAIN_GERAEUMT, err)
+    if zu_leeren:
+        _LOG.info("MQTT: %d zurueckbehaltene Altwerte aus frueheren Fassungen geloescht "
+                  "und nachgelesen (%s).", len(zu_leeren), ", ".join(zu_leeren))
+    return 0
 
 
 # ---------------------------------------------------------------------------
@@ -2887,9 +3141,15 @@ def main() -> int:
     # dort soll kein Protokoll mehr entstehen.
     if "--mqtt-leeren" in sys.argv:
         return mqtt_leeren()
-    log_einrichten()
+    # Auch --selbsttest steht VOR log_einrichten() (seit 0.9.24): der
+    # Selbsttest gibt seine Zeilen auf die Ausgabe und schreibt keine
+    # Protokollzeile, log_einrichten() legte aber log/plugins/<ordner> an.
+    # Aus einem Pruefarchiv unter <Wurzel>/pruefung/<ordner>/bin heraus
+    # entstand damit ein Ordner in der LAUFENDEN Installation - in WSL
+    # gemessen (Pruefung-VolkswagenID-0.9.24, Fall Y1).
     if "--selbsttest" in sys.argv:
         return selbsttest()
+    log_einrichten()
     signal.signal(signal.SIGTERM, signal_behandeln)
     signal.signal(signal.SIGINT, signal_behandeln)
     try:

@@ -28,11 +28,18 @@ if (!function_exists('vw_e')) {
 /* Den LoxBerry-Wurzelordner ohne festen Systempfad bestimmen.
  *
  * Vom eigenen Ablageort aufwaerts, bis ein Verzeichnis gefunden ist, das
- * config/plugins UND webfrontend enthaelt. Das trifft die uebliche
- * Installation genauso wie eine an einem anderen Ort - und es trifft auch
- * den Fall, dass das Plugin noch als entpacktes Archiv daliegt (dann findet
- * es nichts und gibt einen Leerstring zurueck, was der Aufrufer ohnehin
- * abfangen muss).
+ * config/plugins, data/plugins UND config/system/general.json traegt. Das
+ * trifft die uebliche Installation genauso wie eine an einem anderen Ort -
+ * und es trifft auch den Fall, dass das Plugin noch als entpacktes Archiv
+ * daliegt (dann findet es nichts und gibt einen Leerstring zurueck, was der
+ * Aufrufer ohnehin abfangen muss).
+ *
+ * Die dritte Bedingung ist seit 0.9.24 da und ist die entscheidende. Bis
+ * dahin genuegten config/plugins und webfrontend - und genau diese beiden
+ * Ordner hinterlaesst ein Pruefstand auf einem Arbeitsrechner. Am 05.09.2026
+ * hat eine solche Suche dort C:\ als "LoxBerry" erkannt und Daten geloescht
+ * (Regeln/06). Ein LoxBerry hat immer config/system/general.json; ein
+ * solcher Rest hat sie nie.
  *
  * Der Name traegt kein Plugin-Kuerzel und ist deshalb abgesichert: zwei
  * Bibliotheken landen nie im selben Prozess, aber die Pruefung kostet nichts.
@@ -42,7 +49,8 @@ if (!function_exists('lb_wurzel_ermitteln')) {
     {
         $d = __DIR__;
         for ($i = 0; $i < 8; $i++) {
-            if (is_dir($d . '/config/plugins') && is_dir($d . '/webfrontend')) {
+            if (is_dir($d . '/config/plugins') && is_dir($d . '/data/plugins')
+                && is_file($d . '/config/system/general.json')) {
                 return $d;
             }
             $eltern = dirname($d);
@@ -53,21 +61,38 @@ if (!function_exists('lb_wurzel_ermitteln')) {
     }
 }
 
+/* Die Wurzel in der Reihenfolge, die Regeln/03 vorgibt: erst die Umgebung,
+ * dann die Suche - und DANACH NICHTS MEHR.
+ *
+ * Bis 0.9.23 stand hier als dritte Stufe ein fest verdrahteter Systempfad
+ * (das Heimatverzeichnis des Benutzers loxberry). Er macht jede Suche
+ * wirkungslos und trifft auf einem anders installierten LoxBerry die
+ * falsche Anlage; dieselbe Stelle wurde am 19.09.2026 in ZendureSolarFlow
+ * 0.9.25 (zd_lbhome) und Weissware 0.9.29 (ww_lbhome) entfernt.
+ *
+ * Ein gesetztes LBHOMEDIR gilt mit config/plugins UND data/plugins darunter -
+ * general.json wird hier nicht verlangt, damit Attrappen ohne sie
+ * (Werkzeuge/lb) weiter tragen. Rueckgabe '' heisst "keine Wurzel"; jeder
+ * Aufrufer muss das abfangen.
+ */
+if (!function_exists('vw_lbhome')) {
+    function vw_lbhome()
+    {
+        $h = getenv('LBHOMEDIR');
+        if ($h && is_dir($h . '/config/plugins') && is_dir($h . '/data/plugins')) {
+            return rtrim($h, '/');
+        }
+        return lb_wurzel_ermitteln();
+    }
+}
+
 function vw_paths()
 {
     static $p = null;
     if ($p !== null) {
         return $p;
     }
-    $home = getenv('LBHOMEDIR');
-    if (!$home || !is_dir($home)) {
-        foreach (array(lb_wurzel_ermitteln(), '/home/loxberry/loxberry') as $k) {
-            if (is_dir($k)) {
-                $home = $k;
-                break;
-            }
-        }
-    }
+    $home = vw_lbhome();
     // Der Pluginordner ergibt sich aus dem Ablageort dieser Datei. Der
     // MD5-Schluessel aus der plugindatabase.json wird bewusst NICHT benutzt -
     // er wird aus Autorenname, E-Mail und Plugin-Name gebildet und aendert
@@ -85,10 +110,11 @@ function vw_paths()
      * Der feste Name greift nur noch dort, wo der ermittelte nachweislich kein
      * Plugin-Ordner sein kann: aus dem ausgepackten Archiv heraus heisst er
      * "html". */
-    $lbp = getenv('LBPPLUGINDIR');
-    if ($lbp) {
+    $lbp = basename(rtrim((string) getenv('LBPPLUGINDIR'), '/'));
+    if ($lbp !== '' && !in_array($lbp, array('.', '/', 'html', 'bin', 'plugins'), true)) {
         $dir = $lbp;
-    } elseif ($dir === '' || $dir === '.' || $dir === '/' || $dir === 'html') {
+    } elseif ($dir === '' || $dir === '.' || $dir === '/' || $dir === 'html'
+              || $dir === 'bin' || $dir === 'plugins') {
         $dir = 'volkswagenid';
     }
     if ($home) {
@@ -1374,20 +1400,26 @@ function vw_abo_text()
  */
 function vw_mqtt_themen()
 {
-    $z = function ($s, $e, $a, $min, $max) {
-        return array('s' => $s, 'e' => $e, 'a' => $a, 'min' => $min, 'max' => $max);
+    /* $r = 1 heisst "geht zurueckbehalten hinaus" (Spalte im Reiter MQTT).
+     * Die Spalte wird im Reiter Test gegen MQTT_OHNE_RETAIN aus bin/vw.py
+     * gehalten - eine Tabelle, die niemand nachmisst, driftet (Vorbild
+     * Bewaesserung 0.9.27, APC-UPS 1.2.10). */
+    $z = function ($s, $e, $a, $min, $max, $r = 1) {
+        return array('s' => $s, 'e' => $e, 'a' => $a, 'min' => $min, 'max' => $max,
+                     'r' => $r);
     };
-    $t = function ($s) {
-        return array('s' => $s, 'e' => '', 'a' => 0, 'min' => 0, 'max' => 0, 'text' => 1);
+    $t = function ($s, $r = 1) {
+        return array('s' => $s, 'e' => '', 'a' => 0, 'min' => 0, 'max' => 0, 'text' => 1,
+                     'r' => $r);
     };
     return array(
         // ---- oberhalb der Fahrzeugebene ----
-        'ok'          => $z('VW_MQTT.OK', '', 0, 0, 1),
+        'ok'          => $z('VW_MQTT.OK', '', 0, 0, 1, 0),
         'fahrzeuge'   => $z('VW_MQTT.FAHRZEUGE', '', 1, 0, 99),
-        'ts'          => $z('VW_MQTT.TS', 's', 1, 0, 2147483647),
-        'zaehler'     => $z('VW_MQTT.ZAEHLER', '', 1, -1, 999),
-        'fehler_folge' => $z('VW_MQTT.FEHLER_FOLGE', '', 1, 0, 100000),
-        'fehlertext'  => $t('VW_MQTT.FEHLERTEXT'),
+        'ts'          => $z('VW_MQTT.TS', 's', 1, 0, 2147483647, 0),
+        'zaehler'     => $z('VW_MQTT.ZAEHLER', '', 1, -1, 999, 0),
+        'fehler_folge' => $z('VW_MQTT.FEHLER_FOLGE', '', 1, 0, 100000, 0),
+        'fehlertext'  => $t('VW_MQTT.FEHLERTEXT', 0),
         // ---- je Fahrzeug: Zahlen (bis 0.9.9) ----
         'fahrzeugN/soc'               => $z('VW_MQTT.SOC', '%', 1, 0, 100),
         'fahrzeugN/tank_prozent'      => $z('VW_MQTT.TANK', '%', 1, 0, 100),
@@ -1402,16 +1434,16 @@ function vw_mqtt_themen()
         'fahrzeugN/erreichbar'        => $z('VW_MQTT.ERREICHBAR', '', 0, 0, 1),
         'fahrzeugN/klima_an'          => $z('VW_MQTT.KLIMA', '', 0, 0, 1),
         'fahrzeugN/zieltemperatur'    => $z('VW_MQTT.ZIELTEMP', '&deg;C', 1, 0, 40),
-        'fahrzeugN/aussentemperatur'  => $z('VW_MQTT.AUSSEN', '&deg;C', 1, -50, 60),
+        'fahrzeugN/aussentemperatur'  => $z('VW_MQTT.AUSSEN', '&deg;C', 1, -50, 60, 0),
         'fahrzeugN/scheibenheizung'   => $z('VW_MQTT.SCHEIBE', '', 0, 0, 1),
         'fahrzeugN/laedt'             => $z('VW_MQTT.LAEDT', '', 0, 0, 1),
-        'fahrzeugN/ladeleistung_kw'   => $z('VW_MQTT.LADEKW', 'kW', 1, 0, 400),
-        'fahrzeugN/ladetempo_kmh'     => $z('VW_MQTT.TEMPO', 'km/h', 1, 0, 2000),
+        'fahrzeugN/ladeleistung_kw'   => $z('VW_MQTT.LADEKW', 'kW', 1, 0, 400, 0),
+        'fahrzeugN/ladetempo_kmh'     => $z('VW_MQTT.TEMPO', 'km/h', 1, 0, 2000, 0),
         'fahrzeugN/ladegrenze'        => $z('VW_MQTT.LADEGRENZE', '%', 1, 0, 100),
         'fahrzeugN/ladestrom_a'       => $z('VW_MQTT.LADESTROM', 'A', 1, 0, 64),
         'fahrzeugN/kabel_verbunden'   => $z('VW_MQTT.KABEL', '', 0, 0, 1),
         'fahrzeugN/stecker_verriegelt' => $z('VW_MQTT.STECKER', '', 0, 0, 1),
-        'fahrzeugN/laden_fertig_um'   => $z('VW_MQTT.FERTIG', 's', 1, 0, 2147483647),
+        'fahrzeugN/laden_fertig_um'   => $z('VW_MQTT.FERTIG', 's', 1, 0, 2147483647, 0),
         'fahrzeugN/breite'            => $z('VW_MQTT.BREITE', '&deg;', 1, -90, 90),
         'fahrzeugN/laenge'            => $z('VW_MQTT.LAENGE', '&deg;', 1, -180, 180),
         'fahrzeugN/inspektion_tage'   => $z('VW_MQTT.INSP_TAGE', 'd', 1, -3650, 3650),
@@ -1423,10 +1455,10 @@ function vw_mqtt_themen()
         'fahrzeugN/reichweite_verbrenner_km' => $z('VW_MQTT.REICHW_V', 'km', 1, 0, 2000),
         'fahrzeugN/reichweite_wltp_km'      => $z('VW_MQTT.REICHW_WLTP', 'km', 1, 0, 2000),
         'fahrzeugN/batterie_kwh'            => $z('VW_MQTT.BATT_KWH', 'kWh', 1, 0, 300),
-        'fahrzeugN/batterie_temp'           => $z('VW_MQTT.BATT_TEMP', '&deg;C', 1, -50, 90),
+        'fahrzeugN/batterie_temp'           => $z('VW_MQTT.BATT_TEMP', '&deg;C', 1, -50, 90, 0),
         'fahrzeugN/oelstand_prozent'        => $z('VW_MQTT.OELSTAND', '%', 1, 0, 100),
         'fahrzeugN/anzahl_antriebe'         => $z('VW_MQTT.ANTRIEBE', '', 1, 0, 4),
-        'fahrzeugN/klima_fertig_um'         => $z('VW_MQTT.KLIMA_FERTIG', 's', 1, 0, 2147483647),
+        'fahrzeugN/klima_fertig_um'         => $z('VW_MQTT.KLIMA_FERTIG', 's', 1, 0, 2147483647, 0),
         'fahrzeugN/sitzheizung_ein'         => $z('VW_MQTT.SITZHEIZUNG', '', 0, 0, 1),
         'fahrzeugN/klima_bei_entriegeln'    => $z('VW_MQTT.KLIMA_ENTR', '', 0, 0, 1),
         'fahrzeugN/stecker_entriegeln'      => $z('VW_MQTT.STECKER_AUTO', '', 0, 0, 1),
@@ -1434,15 +1466,15 @@ function vw_mqtt_themen()
         'fahrzeugN/adblue_km'               => $z('VW_MQTT.ADBLUE', 'km', 1, 0, 20000),
         'fahrzeugN/tueren_zahl'             => $z('VW_MQTT.TUEREN_ZAHL', '', 1, 0, 10),
         'fahrzeugN/fenster_zahl'            => $z('VW_MQTT.FENSTER_ZAHL', '', 1, 0, 10),
-        'fahrzeugN/standzeit_min'           => $z('VW_MQTT.STANDZEIT', 'min', 1, 0, 2147483647),
+        'fahrzeugN/standzeit_min'           => $z('VW_MQTT.STANDZEIT', 'min', 1, 0, 2147483647, 0),
         'fahrzeugN/hoehe'                   => $z('VW_MQTT.HOEHE', 'm', 1, -500, 9000),
         'fahrzeugN/entfernung_m'            => $z('VW_MQTT.ENTFERNUNG', 'm', 1, 0, 40000000),
         'fahrzeugN/zuhause'                 => $z('VW_MQTT.ZUHAUSE', '', 0, 0, 1),
-        'fahrzeugN/ladesaeule_kw'           => $z('VW_MQTT.SAEULE_KW', 'kW', 1, 0, 400),
+        'fahrzeugN/ladesaeule_kw'           => $z('VW_MQTT.SAEULE_KW', 'kW', 1, 0, 400, 0),
         'fahrzeugN/ladeempfehlung'          => $z('VW_MQTT.EMPFEHLUNG', '', 1, -1, 1),
         'fahrzeugN/ladung_kwh'              => $z('VW_MQTT.LADUNG_KWH', 'kWh', 1, 0, 300),
         'fahrzeugN/ladung_dauer_min'        => $z('VW_MQTT.LADUNG_MIN', 'min', 1, 0, 100000),
-        'fahrzeugN/ladung_vor_stunden'      => $z('VW_MQTT.LADUNG_VOR', 'h', 1, 0, 100000),
+        'fahrzeugN/ladung_vor_stunden'      => $z('VW_MQTT.LADUNG_VOR', 'h', 1, 0, 100000, 0),
         'fahrzeugN/tag_kwh'                 => $z('VW_MQTT.TAG_KWH', 'kWh', 1, 0, 1000),
         'fahrzeugN/ladungen_gesamt'         => $z('VW_MQTT.LADUNGEN', '', 1, 0, 100000),
         // ---- je Fahrzeug: Text, ab 0.9.10 ----
@@ -1461,7 +1493,7 @@ function vw_mqtt_themen()
         'fahrzeugN/fenster_namen'           => $t('VW_MQTT.T_FENSTER_NAMEN'),
         'fahrzeugN/ladesaeule_name'         => $t('VW_MQTT.T_SAEULE_NAME'),
         'fahrzeugN/ladesaeule_betreiber'    => $t('VW_MQTT.T_SAEULE_BETREIBER'),
-        'fahrzeugN/ausfalltext'             => $t('VW_MQTT.T_AUSFALL'),
+        'fahrzeugN/ausfalltext'             => $t('VW_MQTT.T_AUSFALL', 0),
     );
 }
 
@@ -1491,6 +1523,14 @@ function vw_mqtt_themen_im_dienst()
         return null;
     }
     $aus = array();
+    /* MQTT_OHNE_RETAIN steht als frozenset((...)) da und braucht deshalb ein
+     * eigenes Muster. Es kam mit 0.9.24 dazu: die Spalte "zurueckbehalten?"
+     * der Oberflaeche wird im Reiter Test dagegen gehalten. */
+    if (!preg_match('/^MQTT_OHNE_RETAIN\s*=\s*frozenset\(\((.*?)^\)\)/ms', $t, $mr)) {
+        return null;
+    }
+    preg_match_all('/"([a-z0-9_]+)"/', $mr[1], $xr);
+    $aus['ohne_retain'] = $xr[1];
     foreach (array('felder' => 'MQTT_FELDER', 'text' => 'MQTT_TEXTFELDER',
                    'oben' => 'MQTT_OBEN') as $name => $konstante) {
         if (!preg_match('/^' . $konstante . '\s*=\s*\((.*?)^\)/ms', $t, $m)) {
@@ -2158,15 +2198,11 @@ function vw_t($schluessel)
 {
     static $texte = null;
     if ($texte === null) {
-        $home = getenv('LBHOMEDIR');
-        if (!$home || !is_dir($home)) {
-            foreach (array(lb_wurzel_ermitteln(), '/home/loxberry/loxberry') as $k) {
-                if (is_dir($k)) {
-                    $home = $k;
-                    break;
-                }
-            }
-        }
+        // Dieselbe Wurzelregel wie vw_paths(): Umgebung, dann Suche, danach
+        // nichts. Der fest verdrahtete Systempfad stand hier bis
+        // 0.9.23 - an genau dieser zweiten Fundstelle wurde er bei Zendure
+        // 0.9.24 uebersehen (Stand-Protokolle/2026-09-18_Welle1).
+        $home = vw_lbhome();
         $ordner = basename(dirname(__FILE__));
         $pfad = $home . '/templates/plugins/' . $ordner . '/lang';
         if (!is_dir($pfad)) {

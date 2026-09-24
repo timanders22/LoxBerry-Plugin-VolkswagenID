@@ -1079,14 +1079,17 @@ $vw_text_t = count($vw_themen) - $vw_zahl_t;
 <div style="overflow-x:auto;">
 <table class="sm-tbl">
 <tr><th><?= vw_e(vw_t('MQTT.T_THEMA')) ?></th><th><?= vw_e(vw_t('LOX.T_EINHEIT')) ?></th>
+    <th><?= vw_e(vw_t('MQTT.T_RETAIN')) ?></th>
     <th><?= vw_e(vw_t('MQTT.T_BEDEUTUNG')) ?></th></tr>
 <?php foreach ($vw_themen as $vw_thema => $vw_info) { ?>
 <tr><td><span class="sm-mono"><?= vw_e($vw_cfg['mqtt_topic'] . '/' . $vw_thema) ?></span></td>
     <td><?= empty($vw_info['text']) ? $vw_info['e'] : vw_e(vw_t('MQTT.T_TEXTWERT')) ?></td>
+    <td><?= vw_e(vw_t(empty($vw_info['r']) ? 'MQTT.T_FLUECHTIG' : 'MQTT.T_BEHALTEN')) ?></td>
     <td><?= vw_t($vw_info['s']) ?></td></tr>
 <?php } ?>
 </table>
 </div>
+<p class="sm-hilfe"><?= vw_t('MQTT.RETAIN_ERKLAERUNG') ?></p>
 <p class="sm-hilfe"><?= vw_t('MQTT.PLATZHALTER') ?></p>
 <p class="sm-hilfe"><?= vw_t('MQTT.TEXT_ERKLAERUNG') ?></p>
 
