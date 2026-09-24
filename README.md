@@ -20,6 +20,16 @@ Plug-in-Hybrid führt das Plugin beide.
 > gegen Attrappen, sondern gegen **echte Objekte der Bibliothek**. Deshalb
 > 0.9.x und nicht 1.0.0, und deshalb sind schreibende Befehle ab Werk gesperrt.
 
+## Neu in 0.9.25
+
+**Das Installationsprotokoll sagt nach einem Upgrade nur noch „nichts weiter
+zu tun", wenn die Zugangsdaten wirklich da sind.** Bis 0.9.24 genügte dafür,
+dass überhaupt eine Sicherung zurückgespielt wurde — auch eine mit leerer
+E-Mail und leerem Passwort. Jetzt entscheidet der Inhalt von `zugang.json`
+(E-Mail und Passwort nicht leer, dieselbe Bedingung, unter der der Dienst
+anläuft); fehlt eines, erscheint die Anleitung samt Warnung, sonst
+„Aktualisierung abgeschlossen, Einstellungen übernommen".
+
 ## Neu in 0.9.24
 
 **Der LoxBerry-Wurzelordner wird jetzt gelesen, nicht geraten.** Acht Dateien

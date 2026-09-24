@@ -99,8 +99,8 @@ chmod 600 "$PCONFIG/zugang.json"
 # Sicherung zurueckspielen (uebersteht Update UND Neuinstallation)
 #
 # UEBERNOMMEN merkt sich, ob hier etwas aus einem frueheren Einbau
-# weiterlebt. Davon haengt das Schlusswort ab: nach einer Aktualisierung
-# ist "Zugangsdaten eintragen und den Dienst starten" falsch (Regeln/06).
+# weiterlebt. Das Schlusswort haengt NICHT mehr allein daran (siehe dort):
+# zurueckgespielt wird auch eine Sicherung ohne Zugangsdaten.
 UEBERNOMMEN=0
 for f in vw.json zugang.json; do
     BK="$BASE/config/plugins/$PFOLDER.backup.$f"
@@ -243,7 +243,9 @@ chmod 600 "$PDATA/token.json" 2>/dev/null
 # Installation ungefragt - auch dann, wenn er absichtlich abgeschaltet
 # worden war.
 MERKER="$BASE/config/plugins/$PFOLDER.lief_vorher"
+DIENST_LIEF=0
 if [ -f "$MERKER" ]; then
+    DIENST_LIEF=1
     rm -f "$MERKER"
     if [ ! -x "$PBIN/dienst.sh" ]; then
         echo "<INFO> $PBIN/dienst.sh fehlt - der Dienst wurde nicht gestartet."
@@ -274,10 +276,44 @@ if [ -f "$MERKER" ]; then
     fi
 fi
 
-if [ "$UEBERNOMMEN" -eq 1 ]; then
-    echo "<OK> Aktualisierung abgeschlossen."
-    echo "<INFO> Die bisherigen Einstellungen wurden uebernommen - es ist nichts weiter zu tun."
+# ---------- Schlusswort ----------
+# Dieses Skript laeuft bei der Erstinstallation UND bei jedem Upgrade
+# (plugininstall.pl uebergibt kein Kennzeichen). Bis 0.9.24 entschied hier
+# UEBERNOMMEN - also ob OBEN etwas zurueckkopiert wurde, nicht was. Eine
+# Sicherung mit leerer Adresse und leerem Passwort wurde ebenso kopiert, und
+# dann stand "es ist nichts weiter zu tun" ueber einem Plugin, das sich nie
+# anmelden kann (gemessen 24.09.2026, Pruefung-VolkswagenID-0.9.25/
+# postinstall_hinweis.md, Fall c).
+# Jetzt entscheidet der INHALT von zugang.json: E-Mail UND Passwort nicht
+# leer - dieselbe Bedingung, unter der der Dienst ueberhaupt anlaeuft
+# (bin/vw.py, dienst(): "if not z["email"] or not z["passwort"]"). Ist die
+# Datei unlesbar oder fehlt eines davon, erscheint die Anleitung.
+EINGERICHTET=0
+if "$PY" -c '
+import json, sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as d:
+        z = json.load(d)
+except Exception:
+    sys.exit(1)
+ok = (isinstance(z, dict) and str(z.get("email") or "").strip() != ""
+      and str(z.get("passwort") or "") != "")
+sys.exit(0 if ok else 1)
+' "$PCONFIG/zugang.json" 2>/dev/null; then
+    EINGERICHTET=1
+fi
+
+if [ "$EINGERICHTET" -eq 1 ]; then
+    echo "<OK> Aktualisierung abgeschlossen, Einstellungen uebernommen (Zugangsdaten vorhanden)."
+    if [ "$DIENST_LIEF" -eq 0 ]; then
+        echo "<INFO> Der Dienst lief vor dem Upgrade nicht und wurde nicht gestartet"
+        echo "<INFO> (Reiter Einstellungen, Knopf 'Dienst starten')."
+    fi
 else
+    if [ "$UEBERNOMMEN" -eq 1 ]; then
+        echo "<WARNING> Die Einstellungen wurden aus der Sicherung zurueckgespielt, sie"
+        echo "<WARNING> enthalten aber keine Zugangsdaten (E-Mail und Passwort)."
+    fi
     echo "<OK> Installation abgeschlossen."
     echo "<INFO> Bitte die Plugin-Oberflaeche oeffnen, die Zugangsdaten des Volkswagen-Kontos"
     echo "<INFO> eintragen und den Dienst im Reiter Einstellungen starten."
