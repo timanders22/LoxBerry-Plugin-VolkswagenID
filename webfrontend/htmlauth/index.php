@@ -924,12 +924,12 @@ if ($vw_rahmen) {
  * Datei fehlte oder unbrauchbar war. */
 /* Der Kasten zur Lage steht seit dem Durchgang 02.10.2026 ganz oben und
  * kommt aus der ERSTEN Lage dieses Seitenaufbaus (O8, $vw_lagekasten). */
+/* Unzulaessige gespeicherte Werte: seit K1 (02.10.2026) im Reiter
+ * Einstellungen, mit Grund und Vorgabe statt des Rohwerts (der hier bis
+ * 0.9.27 stand, auch ein unzulaessiges Aktionstoken). Hier ueber allen
+ * Reitern nur ein Verweis - ohne Feldnamen und ohne Wert (Nachtrag K1). */
 if ($vw_lage['abgewiesen']) { ?>
-<div class="sm-warnung"><b><?= vw_e(vw_t('ALLG.KONFIG_ABGEWIESEN')) ?></b>
-<?php foreach ($vw_lage['abgewiesen'] as $vw_k => $vw_v) { ?>
-<br><span class="sm-mono"><?= vw_e($vw_k) ?></span> = <span class="sm-mono"><?= vw_e(substr((string) $vw_v, 0, 40)) ?></span>
-<?php } ?>
-</div>
+<div class="sm-warnung"><?= vw_e(vw_t('ALLG.KONFIG_UNGUELTIG_VERWEIS')) ?></div>
 <?php }
 if ($vw_lage['fremd']) { ?>
 <div class="sm-warnung"><b><?= vw_e(vw_t('ALLG.KONFIG_FREMD')) ?></b>
@@ -995,6 +995,18 @@ $vw_beschriftung = array(
 
 <?php if ($vw_pyv !== '' && version_compare($vw_pyv, '3.9.0', '<')) { ?>
 <div class="sm-fehler"><?= vw_t('EINST.PYTHON_ZU_ALT') ?></div>
+<?php } ?>
+<?php
+/* K1 (02.10.2026, Nr. 19): ein unzulaessiger gespeicherter Wert wird durch die
+ * Vorgabe ersetzt - das sagt dieser Kasten, je Feld mit Grund und Vorgabe, nie
+ * mit dem gespeicherten Wert. */
+$vw_k1_saetze = vw_abgewiesen_saetze($vw_lage);
+if ($vw_k1_saetze) { ?>
+<div class="sm-warnung"><b><?= vw_e(vw_t('ALLG.KONFIG_ABGEWIESEN')) ?></b>
+<?php foreach ($vw_k1_saetze as $vw_k1_s) { ?>
+<br><?= vw_e($vw_k1_s) ?>
+<?php } ?>
+</div>
 <?php } ?>
 
 <h2><?= vw_e(vw_t('EINST.H_DIENST')) ?></h2>

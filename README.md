@@ -20,6 +20,28 @@ Plug-in-Hybrid führt das Plugin beide.
 > gegen Attrappen, sondern gegen **echte Objekte der Bibliothek**. Deshalb
 > 0.9.x und nicht 1.0.0, und deshalb sind schreibende Befehle ab Werk gesperrt.
 
+## Neu in 0.9.28
+
+Ungültige gespeicherte Werte werden gemeldet statt still ersetzt (Verbesserungsliste VW-k1, Nr. 19).
+Gemessen an der Attrappe `Werkzeuge/lb` mit
+`rendern.py` unter PHP 7.4 und 8.5 (sieben Fälle); nicht am Gerät.
+
+* **Ein ungültiger gespeicherter Wert wird genannt.** Steht in der Konfiguration ein Wert, den das Plugin nicht
+  zulässt (von Hand geändert, aus einer älteren Fassung), gilt wie bisher die Vorgabe. Neu sagt der Reiter
+  Einstellungen das gelb, je Feld mit Grund und Vorgabe, z. B. „Gespeicherter Wert für intervall ist ungültig (keine
+  ganze Zahl von 180 bis 3600); es gilt die Vorgabe 300. Bitte neu speichern.“ Der gespeicherte Wert selbst wird nie
+  angezeigt.
+* Über allen Reitern steht dann nur noch ein kurzer Verweis: „Ein gespeicherter Wert ist ungültig – Einzelheiten im
+  Reiter Einstellungen.“ Er nennt weder Feld noch Wert. Bisher stand dort der gespeicherte Rohwert.
+* **Die Sicherung sagt es auch.** Sie trägt für so ein Feld die Vorgabe und meldet das im Kopf unter `_warnung` mit
+  denselben Sätzen. Zurückspielen lässt sie sich trotzdem.
+* Gründe, die genannt werden: ganze Zahl außerhalb der Grenzen, Kommazahl außerhalb der Grenzen, weder 0 noch 1, zu
+  lang, passt nicht ins Muster, Mindesttemperatur über der Höchsttemperatur, kein einzelner Wert.
+* Nach „Speichern“ im Reiter Einstellungen sollte die Vorgabe in der Datei stehen und die Warnung verschwinden. Das
+  folgt daraus, dass das Formular die Vorgabe zeigt; gemessen ist es nicht.
+
+**In Loxone:** Nichts zu ändern.
+
 ## Neu in 0.9.27
 
 „Sichern“ warnt, Baustein-Liste nach A4 (Nachzug B, Bestand 02.10.).

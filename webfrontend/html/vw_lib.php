@@ -362,6 +362,79 @@ function vw_wert_pruefen($schluessel, $wert)
     return array(false, null);
 }
 
+/**
+ * Warum faellt ein gespeicherter Wert durch? (K1, 02.10.2026, Nr. 19)
+ *
+ * Rueckgabe: ein Kennwort mit den Grenzen der Regel, z. B. array('GANZ', 180,
+ * 3600). Der Wert selbst steht NIE darin - unter den Schluesseln ist das
+ * Aktionstoken. vw_abgewiesen_saetze() macht daraus den Satz.
+ */
+function vw_wert_grund($schluessel, $wert)
+{
+    $regeln = vw_regeln();
+    if (!isset($regeln[$schluessel]) || !vw_wert_taugt($wert)) {
+        return array('FORM');
+    }
+    $r = $regeln[$schluessel];
+    switch ($r[0]) {
+        case 'ganz':
+            return array('GANZ', $r[1], $r[2]);
+        case 'schalt':
+            return array('SCHALT');
+        case 'text':
+            return strlen(trim((string) $wert)) > $r[2] ? array('LAENGE', $r[2]) : array('MUSTER');
+        case 'zahl':
+            return array('ZAHL', $r[1], $r[2]);
+    }
+    return array('FORM');
+}
+
+/**
+ * Die Saetze zu den abgewiesenen gespeicherten Werten (K1, 02.10.2026, Nr. 19):
+ * "Gespeicherter Wert fuer <Feld> ist ungueltig (<Grund>); es gilt die
+ * Vorgabe <Wert>. Bitte neu speichern." - fuer den Reiter Einstellungen und
+ * den Kopf der Sicherung. $lage ist die Rueckgabe von vw_config_lesen().
+ * Genannt werden Feld, Grund und Vorgabe, nie der gespeicherte Wert.
+ */
+function vw_abgewiesen_saetze($lage)
+{
+    $aus = array();
+    if (!is_array($lage) || empty($lage['abgewiesen']) || !is_array($lage['abgewiesen'])) {
+        return $aus;
+    }
+    $vorgaben = vw_vorgaben();
+    $gruende = (isset($lage['gruende']) && is_array($lage['gruende'])) ? $lage['gruende'] : array();
+    foreach (array_keys($lage['abgewiesen']) as $k) {
+        $g = isset($gruende[$k]) && is_array($gruende[$k]) ? $gruende[$k] : array('FORM');
+        switch ($g[0]) {
+            case 'GANZ':
+                $grund = sprintf(vw_t('EINST.GRUND_GANZ'), $g[1], $g[2]);
+                break;
+            case 'ZAHL':
+                $grund = sprintf(vw_t('EINST.GRUND_ZAHL'), $g[1], $g[2]);
+                break;
+            case 'SCHALT':
+                $grund = vw_t('EINST.GRUND_SCHALT');
+                break;
+            case 'LAENGE':
+                $grund = sprintf(vw_t('EINST.GRUND_LAENGE'), $g[1]);
+                break;
+            case 'MUSTER':
+                $grund = vw_t('EINST.GRUND_MUSTER');
+                break;
+            case 'TEMP':
+                $grund = vw_t('EINST.GRUND_TEMP');
+                break;
+            default:
+                $grund = vw_t('EINST.GRUND_FORM');
+        }
+        $v = array_key_exists($k, $vorgaben) ? (string) $vorgaben[$k] : '';
+        $aus[] = sprintf(vw_t('EINST.WERT_UNGUELTIG'), $k, $grund,
+                         $v === '' ? vw_t('EINST.VORGABE_LEER') : $v);
+    }
+    return $aus;
+}
+
 function vw_json_lesen($pfad)
 {
     if (!is_file($pfad)) {
@@ -470,6 +543,7 @@ function vw_config_lesen($erzeugen = true)
     $vorgaben = vw_vorgaben();
     $fertig = $vorgaben;
     $abgewiesen = array();
+    $gruende = array();     // K1: je Schluessel der Grund, nie der Wert
     $fremd = array();
     foreach ($cfg as $k => $v) {
         if (!array_key_exists($k, $vorgaben)) {
@@ -481,6 +555,7 @@ function vw_config_lesen($erzeugen = true)
             $fertig[$k] = $rein;
         } else {
             $abgewiesen[$k] = is_scalar($v) ? (string) $v : gettype($v);
+            $gruende[$k] = vw_wert_grund($k, $v);
         }
     }
     /* temp_min > temp_max: beide fuer sich zulaessig, zusammen nicht. Bis 0.9.26
@@ -491,6 +566,8 @@ function vw_config_lesen($erzeugen = true)
     if ($fertig['temp_min'] > $fertig['temp_max']) {
         $abgewiesen['temp_min'] = (string) $fertig['temp_min'];
         $abgewiesen['temp_max'] = (string) $fertig['temp_max'];
+        $gruende['temp_min'] = array('TEMP');
+        $gruende['temp_max'] = array('TEMP');
         $fertig['temp_min'] = $vorgaben['temp_min'];
         $fertig['temp_max'] = $vorgaben['temp_max'];
     }
@@ -537,7 +614,7 @@ function vw_config_lesen($erzeugen = true)
 
     $GLOBALS['vw_cfg_speicher'][$schluessel] =
         array('cfg' => $fertig, 'lage' => $lage,
-              'abgewiesen' => $abgewiesen, 'fremd' => $fremd,
+              'abgewiesen' => $abgewiesen, 'gruende' => $gruende, 'fremd' => $fremd,
               'fehlend' => $fehlend, 'anzahl' => count($vorgaben));
     /* Die ERSTE Lage dieses Seitenaufbaus bleibt erhalten (O8, Durchgang
      * 02.10.2026). Bis 0.9.26 ging sie verloren: vw_token() schrieb nach dem
@@ -2626,13 +2703,25 @@ function vw_sicherung_schreiben($pruefen = true)
      * eingetragenen S-PIN "12" in zugang.json kommentarlos geliefert und
      * erst beim Zurueckspielen abgewiesen (gemessen, vb_g1_bau_skripte/vw/proben). */
     $namen = $pruefen ? vw_sicherung_maengel() : array();
-    if ($namen) {
+    /* K1 (02.10.2026, Nr. 19): ein unzulaessiger GESPEICHERTER Wert steht in
+     * der Sicherung als Vorgabe (vw_config() ersetzt ihn). Bis 0.9.27 geschah
+     * das still; jetzt sagt es der Kopf - Feld, Grund und Vorgabe, nie den
+     * gespeicherten Wert. Die Sicherung selbst ginge beim Zurueckspielen durch. */
+    $vorgabe_saetze = $pruefen ? vw_abgewiesen_saetze(vw_config_lesen(true)) : array();
+    if ($namen || $vorgabe_saetze) {
+        $warn = array();
+        if ($namen) {
+            $warn[] = 'Diese Sicherung wuerde beim Zurueckspielen abgewiesen. '
+                    . 'Beanstandet: ' . implode(', ', $namen) . '.';
+        }
+        if ($vorgabe_saetze) {
+            $warn[] = vw_t('EINST.SICH_VORGABE') . ' ' . implode(' ', $vorgabe_saetze);
+        }
         $kopf = array();
         foreach ($aus as $k => $v) {
             $kopf[$k] = $v;
             if ($k === '_hinweis') {
-                $kopf['_warnung'] = 'Diese Sicherung wuerde beim Zurueckspielen abgewiesen. '
-                                  . 'Beanstandet: ' . implode(', ', $namen) . '.';
+                $kopf['_warnung'] = implode(' ', $warn);
             }
         }
         $aus = $kopf;
