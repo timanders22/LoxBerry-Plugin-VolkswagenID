@@ -2400,16 +2400,20 @@ function vw_t($schluessel)
  * Unbekannte Schluessel sind eine Beanstandung, kein stiller Verlust: sie
  * stammen aus einer anderen Fassung oder einem anderen Plugin.
  *
- * Rueckgabe: array(Konfiguration|null, Beanstandungen[], uebernommene Werte).
+ * Rueckgabe: array(Konfiguration|null, Beanstandungen[], uebernommene Werte,
+ * Zugangsdaten|null, Hinweise[], Namen der beanstandeten Werte[]). Das letzte
+ * seit dem Nachzug G1 (02.10.2026): die Namen fuer die Warnung beim Sichern
+ * (X-3, vw_sicherung_maengel()) - nur Namen, nie Werte.
  */
 function vw_sicherung_lesen($roh)
 {
     $mangel = array();
     $hinweise = array();
+    $namen = array();
     $zugang = null;
     $daten = json_decode((string) $roh, true);
     if (!is_array($daten)) {
-        return array(null, array(vw_t('EINST.SICH_KEIN_JSON')), 0, null, array());
+        return array(null, array(vw_t('EINST.SICH_KEIN_JSON')), 0, null, array(), array('json'));
     }
     $neu = vw_vorgaben();
     $bekannt = array_keys($neu);
@@ -2431,6 +2435,7 @@ function vw_sicherung_lesen($roh)
         if ($k === 'zugang') {
             if (!is_array($w) || array_diff(array_keys($w), array('email', 'passwort', 'spin'))) {
                 $mangel[] = vw_t('EINST.SICH_ZUGANG_FORM');
+                $namen[] = 'zugang';
                 continue;
             }
             $zf = vw_zugang_pruefen(isset($w['email']) ? $w['email'] : '',
@@ -2439,6 +2444,7 @@ function vw_sicherung_lesen($roh)
             if ($zf['fehler']) {
                 foreach ($zf['fehler'] as $feld => $text) {
                     $mangel[] = vw_t('EINST.SICH_ZUGANG') . ' ' . $text;
+                    $namen[] = 'zugang.' . $feld;
                 }
                 continue;
             }
@@ -2449,6 +2455,7 @@ function vw_sicherung_lesen($roh)
         if (!in_array($k, $bekannt, true)) {
             $mangel[] = sprintf(vw_t('EINST.SICH_FREMD'),
                                  htmlspecialchars((string) $k, ENT_QUOTES, 'UTF-8'));
+            $namen[] = (string) $k;
             continue;
         }
         /* Jeder WERT wird geprueft, nicht nur der Schluessel.
@@ -2467,6 +2474,7 @@ function vw_sicherung_lesen($roh)
                 htmlspecialchars((string) $k, ENT_QUOTES, 'UTF-8'),
                 htmlspecialchars(is_scalar($w) ? substr((string) $w, 0, 40) : gettype($w),
                                  ENT_QUOTES, 'UTF-8'));
+            $namen[] = (string) $k;
             continue;
         }
         /* EIN LEERES TOKEN BEHAELT DAS GELTENDE (O7, Durchgang 02.10.2026;
@@ -2508,11 +2516,19 @@ function vw_sicherung_lesen($roh)
     if ($fehlend) {
         $mangel[] = sprintf(vw_t('EINST.SICH_FEHLEND'), count($fehlend),
             htmlspecialchars(implode(', ', $fehlend), ENT_QUOTES, 'UTF-8'));
+        $namen = array_merge($namen, $fehlend);
     }
     if (!$mangel && $neu['temp_min'] > $neu['temp_max']) {
         $mangel[] = vw_t('EINST.FEHLER_TEMP_TAUSCH');
+        $namen[] = 'temp_min';
+        $namen[] = 'temp_max';
     }
-    return array($mangel ? null : $neu, $mangel, $anzahl, $mangel ? null : $zugang, $hinweise);
+    if ($mangel && !$namen) {
+        // SICH_LEER: kein einzelner Wert, die Datei als Ganzes.
+        $namen[] = 'json';
+    }
+    return array($mangel ? null : $neu, $mangel, $anzahl, $mangel ? null : $zugang, $hinweise,
+                 array_values(array_unique($namen)));
 }
 
 /**
@@ -2579,7 +2595,7 @@ function vw_zugang_pruefen($email, $passwort, $spin)
  * Knopf sagt das. Das Formularmerkmal gehoert NICHT hinein: es wird aus dem
  * Aktionstoken abgeleitet und lebt eine Sitzung lang.
  */
-function vw_sicherung_schreiben()
+function vw_sicherung_schreiben($pruefen = true)
 {
     $cfg = vw_config();
     $aus = array(
@@ -2601,7 +2617,45 @@ function vw_sicherung_schreiben()
         'passwort' => isset($zg['passwort']) && is_string($zg['passwort']) ? $zg['passwort'] : '',
         'spin'     => isset($zg['spin']) && is_string($zg['spin']) ? $zg['spin'] : '',
     );
+    /* X-3 (Nachzug G1, 02.10.2026; Bauform Skoda-Connect-NG 0.9.29, APC-UPS
+     * 1.2.17): die Sicherung geht durch DIESELBE Pruefung wie das
+     * Zurueckspielen (vw_sicherung_maengel -> vw_sicherung_lesen). Wuerde sie
+     * dort abgewiesen, traegt sie eine Warnung im Kopf - nur die Namen, nie
+     * die Werte - und die Seite warnt gelb am Knopf. Geliefert wird sie
+     * trotzdem. Bis 0.9.27 wurde eine Sicherung mit einer von Hand
+     * eingetragenen S-PIN "12" in zugang.json kommentarlos geliefert und
+     * erst beim Zurueckspielen abgewiesen (gemessen, vb_g1_bau_skripte/vw/proben). */
+    $namen = $pruefen ? vw_sicherung_maengel() : array();
+    if ($namen) {
+        $kopf = array();
+        foreach ($aus as $k => $v) {
+            $kopf[$k] = $v;
+            if ($k === '_hinweis') {
+                $kopf['_warnung'] = 'Diese Sicherung wuerde beim Zurueckspielen abgewiesen. '
+                                  . 'Beanstandet: ' . implode(', ', $namen) . '.';
+            }
+        }
+        $aus = $kopf;
+    }
     return json_encode($aus, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+}
+
+/**
+ * Welche Werte der Sicherung wuerde das Zurueckspielen beanstanden? (X-3)
+ * Leer heisst: keiner. Gerechnet mit vw_sicherung_lesen() an der Sicherung
+ * selbst (ohne Warnung gebaut), nicht nachgebaut.
+ */
+function vw_sicherung_maengel()
+{
+    $js = vw_sicherung_schreiben(false);
+    if (!is_string($js) || $js === '') {
+        return array('json');
+    }
+    $r = vw_sicherung_lesen($js);
+    if ($r[0] !== null) {
+        return array();
+    }
+    return (isset($r[5]) && $r[5]) ? $r[5] : array('json');
 }
 
 /** Die Fassung aus der plugin.cfg, oder ''. */

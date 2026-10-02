@@ -20,6 +20,16 @@ Plug-in-Hybrid führt das Plugin beide.
 > gegen Attrappen, sondern gegen **echte Objekte der Bibliothek**. Deshalb
 > 0.9.x und nicht 1.0.0, und deshalb sind schreibende Befehle ab Werk gesperrt.
 
+## Neu in 0.9.27
+
+„Sichern“ warnt, Baustein-Liste nach A4 (Nachzug B, Bestand 02.10.).
+Gemessen mit der gerenderten Oberfläche unter PHP 7.4 und 8.5; nicht am Gerät.
+
+* **„Einstellungen sichern“ warnt jetzt,** wenn die eigene Sicherung beim Zurückspielen abgewiesen würde. Das betrifft etwa eine von Hand eingetragene S-PIN mit zwei Ziffern oder eine E-Mail ohne @ in `zugang.json`. Über dem Knopf erscheint dann ein gelber Kasten. Die Datei bekommt einen Kopf `_warnung`, der nur die Namen der beanstandeten Werte nennt, nie die Werte selbst. Geliefert wird die Sicherung trotzdem. Geprüft wird mit derselben Funktion wie beim Zurückspielen.
+* **Baustein-Liste:** Die Meldung „Fahrzeug offen oder Licht an“ läuft über drei ODER (#14 bis #16), jeder Eingang trägt genau eine Quelle. Alle späteren Zeilen rücken um zwei (#15 → #17 … #34 → #36).
+
+**In Loxone:** Eine nach der alten Liste gebaute Logik arbeitet unverändert weiter.
+
 ## Neu in 0.9.26
 
 Durchgang mit vier Prüfern (Befunde: `Pruefung-Durchgang-2026-09-29/VolkswagenID_BEFUNDE_UND_VERBESSERUNGEN.md`, Entscheidungen 1, 4, 5, 8, 16, 19, 26).
