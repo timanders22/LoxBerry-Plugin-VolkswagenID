@@ -76,6 +76,50 @@ VENV="$PBIN/venv"
 MARKE="$BASE/data/plugins/$PFOLDER.upgrade_laeuft"
 trap 'vw_rc=$?; [ "$vw_rc" -ne 0 ] && rm -f "$MARKE" 2>/dev/null' EXIT
 
+# ---------- Upgrade oder Neuinstallation? (I1, Durchgang 02.10.2026) ----------
+#
+# Entscheidung 1 (29.09.2026): zurueckgespielt wird NUR bei einer
+# Aktualisierung, und eine Aktualisierung erkennt dieses Skript an der Marke,
+# die preupgrade.sh als Erstes anlegt - ohne Altersvergleich (Entscheidung 8).
+# Bis 0.9.26 spielte auch eine Neuinstallation die Zweitschriften einer
+# FRUEHEREN Installation ein - altes Konto, Passwort, S-PIN, Aktionstoken -,
+# startete den Dienst und meldete "Aktualisierung abgeschlossen" (gemessen,
+# Installerbericht N1).
+UPG_MARKE=0
+[ -f "$MARKE" ] && UPG_MARKE=1
+RETTUNG="$BASE/data/plugins/$PFOLDER.rettung"
+VENV_GERETTET="$PBIN.venv"
+
+# Neuinstallation: was preinstall.sh nicht schon beiseitegelegt hat (etwa
+# weil es fehlte), geht hier nach .alt - einmal <WARNING> mit den Pfaden.
+if [ "$UPG_MARKE" = 0 ]; then
+    ALT_LISTE=""
+    for z in "$BASE/config/plugins/$PFOLDER.backup.vw.json" \
+             "$BASE/config/plugins/$PFOLDER.backup.zugang.json" \
+             "$BASE/config/plugins/$PFOLDER.lief_vorher" \
+             "$BASE/data/plugins/$PFOLDER.nummern.json" "$RETTUNG"; do
+        [ -e "$z" ] || [ -L "$z" ] || continue
+        if [ -L "$z.alt" ] || [ -f "$z.alt" ]; then
+            rm -f "$z.alt"
+        elif [ -d "$z.alt" ]; then
+            rm -rf "${z:?}.alt"
+        fi
+        if mv -f "$z" "$z.alt" 2>/dev/null; then
+            ALT_LISTE="$ALT_LISTE $z.alt"
+        else
+            ALT_LISTE="$ALT_LISTE $z (liess sich NICHT verschieben)"
+        fi
+    done
+    if [ -L "$VENV_GERETTET" ]; then
+        rm -f "$VENV_GERETTET"
+    elif [ -d "$VENV_GERETTET" ]; then
+        rm -rf "${VENV_GERETTET:?}"
+    fi
+    if [ -n "$ALT_LISTE" ]; then
+        echo "<WARNING> Neuinstallation: Einstellungen, Zugangsdaten und Bestaende einer frueheren Installation wurden nicht eingespielt, sondern beiseitegelegt:$ALT_LISTE - der Dienst wird nicht gestartet; die Deinstallation raeumt sie ab."
+    fi
+fi
+
 # Fassungen, gegen die dieses Plugin gebaut wurde. Auf einen Stand
 # festgenagelt, damit eine Installation von heute morgen und eine von heute
 # abend dasselbe ergeben. Die Feldnamen im Dienst stammen aus genau diesen
@@ -96,13 +140,16 @@ if [ ! -f "$PCONFIG/zugang.json" ]; then
 fi
 chmod 600 "$PCONFIG/zugang.json"
 
-# Sicherung zurueckspielen (uebersteht Update UND Neuinstallation)
+# Sicherung zurueckspielen - NUR BEI EINER AKTUALISIERUNG (I1, Durchgang
+# 02.10.2026). Bis 0.9.26 stand hier "uebersteht Update UND
+# Neuinstallation" - genau das war der Befund. Bei einer Neuinstallation
+# liegen die Zweitschriften schon unter .alt (oben, preinstall.sh).
 #
 # UEBERNOMMEN merkt sich, ob hier etwas aus einem frueheren Einbau
 # weiterlebt. Das Schlusswort haengt NICHT mehr allein daran (siehe dort):
 # zurueckgespielt wird auch eine Sicherung ohne Zugangsdaten.
 UEBERNOMMEN=0
-for f in vw.json zugang.json; do
+[ "$UPG_MARKE" = 1 ] && for f in vw.json zugang.json; do
     BK="$BASE/config/plugins/$PFOLDER.backup.$f"
     CF="$PCONFIG/$f"
     if [ -f "$BK" ]; then
@@ -114,6 +161,31 @@ for f in vw.json zugang.json; do
     fi
 done
 chmod 600 "$PCONFIG/zugang.json"
+
+# ---------- Rettung aus preupgrade.sh zurueckholen (I3, Durchgang 02.10.2026) ----------
+#
+# purge_installation loescht data/plugins/<ordner>/ bei jedem Upgrade. Bis
+# 0.9.26 waren danach Anmeldemarken, Verlauf, Ladeprotokoll und die
+# Fortschreibung eines laufenden Ladevorgangs fort (gemessen, Installerbericht
+# U1), obwohl die README eine Aufbewahrung von 8 bis 90 Tagen zusagt. Nur mit
+# Marke; was im neuen Datenordner schon liegt, wird nicht ueberschrieben.
+if [ "$UPG_MARKE" = 1 ] && [ -d "$RETTUNG" ] && [ ! -L "$RETTUNG" ]; then
+    ZURUECK=""
+    for f in token.json verlauf ladungen.csv fortschreibung.json; do
+        if { [ -e "$RETTUNG/$f" ] || [ -L "$RETTUNG/$f" ]; } && [ ! -e "$PDATA/$f" ]; then
+            if [ -L "$RETTUNG/$f" ]; then
+                echo "<WARNING> $RETTUNG/$f ist ein Verweis - nicht zurueckgeholt."
+            elif mv -f "$RETTUNG/$f" "$PDATA/$f"; then
+                ZURUECK="$ZURUECK $f"
+            fi
+        fi
+    done
+    [ -f "$PDATA/token.json" ] && chmod 600 "$PDATA/token.json"
+    if [ -n "$ZURUECK" ]; then
+        echo "<OK> Aus der Rettung zurueckgeholt:$ZURUECK (Verlauf: $(ls "$PDATA/verlauf" 2>/dev/null | wc -l) Dateien)."
+    fi
+    rm -rf "${RETTUNG:?}"
+fi
 
 # ---------- Python suchen ----------
 PY=""
@@ -135,6 +207,26 @@ fi
 echo "<INFO> Verwendetes Python: $PY ($($PY -V 2>&1))"
 
 # ---------- virtuelle Umgebung ----------
+#
+# DIE GERETTETE UMGEBUNG ZUERST (I2, Durchgang 02.10.2026). preupgrade.sh legt
+# die venv neben den Ordner (bin/plugins/<ordner>.venv), weil
+# purge_installation den Ordner selbst loescht. Bis 0.9.26 wurde sie bei
+# jedem Update neu aus dem Netz geholt: ein Update ohne Internet oder bei
+# einer PyPI-Stoerung endete mit "<FAIL> carconnectivity konnte nicht
+# installiert werden", und der Dienst blieb tot (gemessen, Installerbericht
+# O1/O1b). Zurueck an denselben Pfad - die venv kennt ihren Ort.
+GERETTET=0
+if [ "$UPG_MARKE" = 1 ] && [ -d "$VENV_GERETTET" ] && [ ! -L "$VENV_GERETTET" ] && [ ! -e "$VENV" ]; then
+    if mv -f "$VENV_GERETTET" "$VENV"; then
+        GERETTET=1
+        echo "<INFO> Virtuelle Umgebung der vorigen Fassung uebernommen: $VENV"
+    fi
+fi
+if [ -L "$VENV_GERETTET" ]; then
+    rm -f "$VENV_GERETTET"
+elif [ -d "$VENV_GERETTET" ]; then
+    rm -rf "${VENV_GERETTET:?}"
+fi
 BRAUCHBAR=0
 if [ -x "$VENV/bin/python3" ]; then
     if "$VENV/bin/python3" -c 'import sys; sys.exit(0 if sys.version_info >= (3,9) else 1)' 2>/dev/null; then
@@ -142,10 +234,12 @@ if [ -x "$VENV/bin/python3" ]; then
     fi
 fi
 if [ "$BRAUCHBAR" -eq 0 ]; then
+    GERETTET=0
     rm -rf "$VENV"
     if ! "$PY" -m venv "$VENV"; then
         echo "<FAIL> Virtuelle Umgebung konnte nicht angelegt werden ($VENV)."
-        echo "<FAIL> Fehlt das Paket python3-venv? (apt install python3-venv)"
+        echo "<FAIL> Das Paket python3-venv fehlt; der Installer zieht es ueber dpkg/apt"
+        echo "<FAIL> selbst nach. Ist das gescheitert, bitte die Installation wiederholen."
         exit 1
     fi
     echo "<OK> Virtuelle Umgebung angelegt: $VENV"
@@ -155,6 +249,21 @@ if [ ! -x "$VENV/bin/python3" ]; then
     exit 1
 fi
 
+# Passen die festgenagelten Fassungen schon (gerettete venv)? Dann ohne pip.
+PIP_NOETIG=1
+if [ "$GERETTET" = 1 ]; then
+    IST0=$("$VENV/bin/python3" -c 'import importlib.metadata as m; print(m.version("carconnectivity"), m.version("carconnectivity-connector-volkswagen"))' 2>/dev/null)
+    if [ "$IST0" = "$KERN $CONNECTOR" ]; then
+        PIP_NOETIG=0
+        echo "<OK> carconnectivity $KERN und der Volkswagen-Connector $CONNECTOR sind schon"
+        echo "<OK> in der uebernommenen Umgebung - es wird nichts aus dem Netz geholt."
+    else
+        echo "<INFO> In der uebernommenen Umgebung stehen andere Fassungen (${IST0:-unbekannt}) -"
+        echo "<INFO> es wird nachinstalliert."
+    fi
+fi
+
+if [ "$PIP_NOETIG" = 1 ]; then
 "$VENV/bin/python3" -m pip install --upgrade pip setuptools wheel >/dev/null 2>&1 || \
     echo "<INFO> pip liess sich nicht aktualisieren - wird mit der vorhandenen Fassung versucht."
 
@@ -165,17 +274,27 @@ if ! "$VENV/bin/python3" -m pip install --no-cache-dir \
     echo "<INFO> Feste Fassungen nicht installierbar - versuche die neuesten."
     if ! "$VENV/bin/python3" -m pip install --no-cache-dir \
             "carconnectivity-connector-volkswagen"; then
-        echo "<FAIL> carconnectivity konnte nicht installiert werden."
-        echo "<FAIL> Haeufigste Ursachen: keine Internetverbindung, oder PyPI war"
-        echo "<FAIL> nicht erreichbar."
-        exit 1
-    fi
+        if [ "$GERETTET" = 1 ]; then
+            # I2: scheitert pip, bleibt die gerettete Umgebung in Betrieb.
+            echo "<WARNING> carconnectivity liess sich nicht nachinstallieren (keine"
+            echo "<WARNING> Internetverbindung oder PyPI nicht erreichbar). Es bleibt die"
+            echo "<WARNING> Bibliothek der vorigen Fassung in Betrieb (${IST0:-Fassung unbekannt});"
+            echo "<WARNING> das naechste Update mit Netz holt die festgenagelten Fassungen."
+        else
+            echo "<FAIL> carconnectivity konnte nicht installiert werden."
+            echo "<FAIL> Haeufigste Ursachen: keine Internetverbindung, oder PyPI war"
+            echo "<FAIL> nicht erreichbar."
+            exit 1
+        fi
+    else
     # Ersatzweg gegangen - und angezeigt, sonst wird aus dem Ersatz unbemerkt
     # der Normalfall. Bei einer anderen Fassung koennen sich Feldnamen
     # geaendert haben.
     echo "<INFO> ERSATZWEG: Es wurden die neuesten Fassungen statt $KERN / $CONNECTOR"
     echo "<INFO> installiert. Falls Werte leer bleiben, im Reiter Test"
     echo "<INFO> 'Rohdaten als JSON ansehen' aufrufen und vergleichen."
+    fi
+fi
 fi
 
 # ---------- paho-mqtt: freiwillig, und ein Fehlschlag ist keiner ----------
@@ -185,8 +304,10 @@ fi
 # Selbsttest sagt dann, was fehlt. Deshalb bricht ein Fehlschlag hier die
 # Installation NICHT ab: ein Plugin, das wegen einer freiwilligen Zutat gar
 # nicht erst startet, ist schlechter als eines mit einer Funktion weniger.
-echo "<INFO> Installiere paho-mqtt (nur fuer Ladeempfehlung und Vorklimatisierung) ..."
-if "$VENV/bin/python3" -m pip install --no-cache-dir "paho-mqtt" >/dev/null 2>&1 \
+if [ "$GERETTET" = 1 ] && "$VENV/bin/python3" -c 'import paho.mqtt.client' 2>/dev/null; then
+    echo "<OK> paho-mqtt ist vorhanden (uebernommene Umgebung)."
+elif echo "<INFO> Installiere paho-mqtt (nur fuer Ladeempfehlung und Vorklimatisierung) ..." \
+   && "$VENV/bin/python3" -m pip install --no-cache-dir "paho-mqtt" >/dev/null 2>&1 \
    && "$VENV/bin/python3" -c 'import paho.mqtt.client' 2>/dev/null; then
     echo "<OK> paho-mqtt ist vorhanden."
 else
@@ -198,12 +319,18 @@ fi
 
 # Rueckgabewert allein genuegt nicht - es wird nachgesehen, ob sich beide
 # Pakete auch laden lassen.
-if ! "$VENV/bin/python3" -c 'from carconnectivity.carconnectivity import CarConnectivity' 2>/dev/null; then
-    echo "<FAIL> carconnectivity ist installiert, laesst sich aber nicht laden."
+#
+# Pythons eigene Meldung geht ins Installationsprotokoll (I7, Durchgang
+# 02.10.2026; Regeln/06): bis 0.9.26 stand dort nur, DASS der Import scheitert,
+# nicht warum (2>/dev/null).
+if ! LADEFEHLER=$("$VENV/bin/python3" -c 'from carconnectivity.carconnectivity import CarConnectivity' 2>&1); then
+    echo "<FAIL> carconnectivity ist installiert, laesst sich aber nicht laden:"
+    printf '%s\n' "$LADEFEHLER" | tail -n 5 | sed 's/^/<FAIL>     /'
     exit 1
 fi
-if ! "$VENV/bin/python3" -c 'import carconnectivity_connectors.volkswagen.connector' 2>/dev/null; then
-    echo "<FAIL> Der Volkswagen-Connector ist installiert, laesst sich aber nicht laden."
+if ! LADEFEHLER=$("$VENV/bin/python3" -c 'import carconnectivity_connectors.volkswagen.connector' 2>&1); then
+    echo "<FAIL> Der Volkswagen-Connector ist installiert, laesst sich aber nicht laden:"
+    printf '%s\n' "$LADEFEHLER" | tail -n 5 | sed 's/^/<FAIL>     /'
     exit 1
 fi
 IST=$("$VENV/bin/python3" -c 'import importlib.metadata as m; print(m.version("carconnectivity"), m.version("carconnectivity-connector-volkswagen"))' 2>/dev/null || echo "unbekannt")
@@ -242,11 +369,16 @@ chmod 600 "$PDATA/token.json" 2>/dev/null
 # liegengebliebener Merker startete den Dienst bei einer spaeteren
 # Installation ungefragt - auch dann, wenn er absichtlich abgeschaltet
 # worden war.
+#
+# Seit dem Durchgang 02.10.2026 NUR MIT MARKE (I1): eine Neuinstallation
+# startet keinen Dienst aus dem Merker einer frueheren Installation (er liegt
+# dann ohnehin unter .alt). Und der Merker bleibt liegen, bis ein Start
+# GELINGT (I2): bis 0.9.26 fiel er auch bei einem gescheiterten Start, und das
+# naechste Update mit Netz liess den Dienst angehalten (gemessen O1b).
 MERKER="$BASE/config/plugins/$PFOLDER.lief_vorher"
 DIENST_LIEF=0
-if [ -f "$MERKER" ]; then
+if [ "$UPG_MARKE" = 1 ] && [ -f "$MERKER" ]; then
     DIENST_LIEF=1
-    rm -f "$MERKER"
     if [ ! -x "$PBIN/dienst.sh" ]; then
         echo "<INFO> $PBIN/dienst.sh fehlt - der Dienst wurde nicht gestartet."
     else
@@ -265,14 +397,20 @@ if [ -f "$MERKER" ]; then
         else
             AUSGABE=$(VW_START_TROTZ_MARKE=1 "$PBIN/dienst.sh" start 2>&1)
         fi
-        case "$AUSGABE" in
-            *gestartet*|*laeuft*)
-                echo "<OK> Dienst wieder gestartet: $AUSGABE"
-                UEBERNOMMEN=1 ;;
-            *)
-                echo "<INFO> Der Dienst liess sich nicht wieder starten: $AUSGABE"
-                echo "<INFO> Reiter Einstellungen, Knopf 'Dienst starten'." ;;
-        esac
+        # DIE WIRKUNG ENTSCHEIDET, NICHT DER WORTLAUT (I2, Durchgang 02.10.2026). Bis
+        # 0.9.26 stand hier ein Muster ueber die Ausgabe (*gestartet*|*laeuft*) -
+        # und "Der Dienst wird nicht gestartet" enthaelt "gestartet": ein
+        # gescheiterter Start erschien als "<OK> Dienst wieder gestartet: FEHLER ..."
+        # (gemessen, Bauprobe O2). Jetzt wird dienst.sh status gefragt.
+        if "$PBIN/dienst.sh" status >/dev/null 2>&1; then
+            rm -f "$MERKER"
+            echo "<OK> Dienst wieder gestartet: $AUSGABE"
+            UEBERNOMMEN=1
+        else
+            echo "<WARNING> Der Dienst liess sich nicht wieder starten: $AUSGABE"
+            echo "<WARNING> Reiter Einstellungen, Knopf 'Dienst starten'. Der Merker bleibt"
+            echo "<WARNING> liegen; das naechste Update startet den Dienst erneut."
+        fi
     fi
 fi
 
@@ -303,12 +441,17 @@ sys.exit(0 if ok else 1)
     EINGERICHTET=1
 fi
 
-if [ "$EINGERICHTET" -eq 1 ]; then
+# Seit dem Durchgang 02.10.2026 entscheidet zuerst die Marke (I1): eine
+# Neuinstallation heisst nie "Aktualisierung abgeschlossen".
+if [ "$EINGERICHTET" -eq 1 ] && [ "$UPG_MARKE" = 1 ]; then
     echo "<OK> Aktualisierung abgeschlossen, Einstellungen uebernommen (Zugangsdaten vorhanden)."
     if [ "$DIENST_LIEF" -eq 0 ]; then
         echo "<INFO> Der Dienst lief vor dem Upgrade nicht und wurde nicht gestartet"
         echo "<INFO> (Reiter Einstellungen, Knopf 'Dienst starten')."
     fi
+elif [ "$EINGERICHTET" -eq 1 ]; then
+    echo "<OK> Installation abgeschlossen."
+    echo "<INFO> Der Dienst ist angehalten; gestartet wird er im Reiter Einstellungen."
 else
     if [ "$UEBERNOMMEN" -eq 1 ]; then
         echo "<WARNING> Die Einstellungen wurden aus der Sicherung zurueckgespielt, sie"

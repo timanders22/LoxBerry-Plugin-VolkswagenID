@@ -116,7 +116,15 @@ fi
 # Konfigordner (Dateiname mit Punkt), wo der Loeschblock ihn nicht
 # erwischt.
 MERKER="$BASE/config/plugins/$PFOLDER.lief_vorher"
-rm -f "$MERKER"
+# Ein Merker aus einem FRUEHEREN Update bleibt liegen (I2, Durchgang
+# 02.10.2026): er faellt erst, wenn postinstall.sh den Dienst wirklich
+# gestartet hat. Bis 0.9.26 wurde er hier geloescht - nach einem Update ohne
+# Netz (Dienst tot, Merker liegen geblieben) startete das naechste Update
+# mit Netz den Dienst deshalb nicht mehr (gemessen, Installerbericht O1b).
+if [ -f "$MERKER" ]; then
+    echo "<INFO> Ein frueheres Update hat den Dienst nicht wieder gestartet - er wird"
+    echo "<INFO> nach diesem Update gestartet."
+fi
 
 PIDDATEI="$BASE/data/plugins/$PFOLDER/dienst.pid"
 
@@ -256,6 +264,77 @@ NEUNR="$BASE/data/plugins/$PFOLDER.nummern.json"
 if [ -f "$ALTNR" ] && [ ! -f "$NEUNR" ]; then
     cp -p "$ALTNR" "$NEUNR" 2>/dev/null || true
     echo "<INFO> Fahrzeugnummern gesichert."
+fi
+
+# ---------- Rettung des Datenordners (I3, Durchgang 02.10.2026) ----------
+#
+# purge_installation loescht data/plugins/<ordner>/ bei jedem Upgrade. Bis
+# 0.9.26 waren danach Anmeldemarken (token.json), Verlauf, Ladeprotokoll und
+# die Fortschreibung eines laufenden Ladevorgangs fort (gemessen,
+# Installerbericht U1). Sie gehen NEBEN den Ordner: unter .neu gebaut, mit tar
+# (Zeitstempel bleiben), gezaehlt, erst dann umbenannt (Regeln/06). Eine
+# Rettung aus einem frueheren, abgebrochenen Lauf wird nicht wiederverwendet,
+# sondern nach .alt gelegt (Entscheidung 1).
+PDATA_ALT="$BASE/data/plugins/$PFOLDER"
+RETTUNG="$BASE/data/plugins/$PFOLDER.rettung"
+if [ -e "$RETTUNG" ] || [ -L "$RETTUNG" ]; then
+    if [ -L "$RETTUNG.alt" ] || [ -f "$RETTUNG.alt" ]; then
+        rm -f "$RETTUNG.alt"
+    elif [ -d "$RETTUNG.alt" ]; then
+        rm -rf "${RETTUNG:?}.alt"
+    fi
+    if mv -f "$RETTUNG" "$RETTUNG.alt" 2>/dev/null; then
+        echo "<WARNING> Eine Rettung aus einem frueheren, abgebrochenen Update wurde nicht wiederverwendet, sondern beiseitegelegt: $RETTUNG.alt"
+    else
+        echo "<WARNING> Eine Rettung aus einem frueheren Update liess sich nicht beiseitelegen: $RETTUNG"
+    fi
+fi
+VW_LISTE=""
+for f in token.json verlauf ladungen.csv fortschreibung.json; do
+    [ -e "$PDATA_ALT/$f" ] && [ ! -L "$PDATA_ALT/$f" ] && VW_LISTE="$VW_LISTE $f"
+done
+if [ -n "$VW_LISTE" ] && [ ! -e "$RETTUNG" ]; then
+    rm -rf "${RETTUNG:?}.neu"
+    if mkdir -p "$RETTUNG.neu" && chmod 700 "$RETTUNG.neu" \
+       && (cd "$PDATA_ALT" && tar cf - $VW_LISTE) | (cd "$RETTUNG.neu" && tar xpf -); then
+        VW_FEHLT=""
+        for f in $VW_LISTE; do
+            [ -e "$RETTUNG.neu/$f" ] || VW_FEHLT="$VW_FEHLT $f"
+        done
+        if [ -z "$VW_FEHLT" ] && mv -f "$RETTUNG.neu" "$RETTUNG"; then
+            [ -f "$RETTUNG/token.json" ] && chmod 600 "$RETTUNG/token.json"
+            echo "<OK> Gerettet:$VW_LISTE (Verlauf: $(ls "$RETTUNG/verlauf" 2>/dev/null | wc -l) Dateien)."
+        else
+            rm -rf "${RETTUNG:?}.neu"
+            echo "<WARNING> Die Rettung ist unvollstaendig (fehlt:$VW_FEHLT) - nichts gerettet."
+        fi
+    else
+        rm -rf "${RETTUNG:?}.neu"
+        echo "<WARNING> Verlauf, Ladeprotokoll und Anmeldemarken liessen sich nicht retten."
+    fi
+fi
+
+# ---------- Die virtuelle Umgebung (I2, Durchgang 02.10.2026) ----------
+#
+# purge_installation loescht bin/plugins/<ordner>/ samt venv. Sie geht neben
+# den Ordner (bin/plugins/<ordner>.venv); postinstall.sh legt sie an denselben
+# Pfad zurueck und holt nur dann etwas aus dem Netz, wenn die festgenagelten
+# Fassungen nicht passen. Bis 0.9.26 war ein Update ohne Internet das Ende des
+# Dienstes (gemessen, Installerbericht O1). Eine alte Ablage wird vorher
+# entfernt (Entscheidung 1).
+VENV_JETZT="$BASE/bin/plugins/$PFOLDER/venv"
+VENV_ABLAGE="$BASE/bin/plugins/$PFOLDER.venv"
+if [ -L "$VENV_ABLAGE" ]; then
+    rm -f "$VENV_ABLAGE"
+elif [ -d "$VENV_ABLAGE" ]; then
+    rm -rf "${VENV_ABLAGE:?}"
+fi
+if [ -d "$VENV_JETZT" ] && [ ! -L "$VENV_JETZT" ]; then
+    if mv -f "$VENV_JETZT" "$VENV_ABLAGE"; then
+        echo "<OK> Virtuelle Umgebung beiseitegelegt: $VENV_ABLAGE"
+    else
+        echo "<INFO> Die virtuelle Umgebung liess sich nicht beiseitelegen - sie wird neu angelegt."
+    fi
 fi
 
 CFGDIR="$BASE/config/plugins/$PFOLDER"

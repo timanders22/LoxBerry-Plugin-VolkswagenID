@@ -1,0 +1,15 @@
+# These packages will be installed by apt-get -y install PACKAGENAME
+# One line per package, use exact packagename as you would do for apt-get.
+#
+# python3-venv liefert das Modul venv. Ohne dieses Paket scheitert in
+# postinstall.sh der Aufruf "python3 -m venv" mit "ensurepip is not available":
+# es entsteht keine virtuelle Umgebung, carconnectivity wird nicht installiert,
+# und der Abrufdienst kann nicht starten (in WSL gemessen, Installerbericht N2).
+#
+# Ein systemweites "pip3 install" ist kein Ersatz: Debian 12/13 kennzeichnen
+# die System-Python-Umgebung als extern verwaltet (PEP 668) und weisen es mit
+# "error: externally-managed-environment" ab - auch als root.
+#
+# Bis 0.9.26 gab es diese Datei nicht (I4, Durchgang 02.10.2026), und
+# postinstall.sh trug dem Anwender auf, das Paket von Hand zu installieren.
+python3-venv

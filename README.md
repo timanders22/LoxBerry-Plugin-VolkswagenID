@@ -20,6 +20,45 @@ Plug-in-Hybrid führt das Plugin beide.
 > gegen Attrappen, sondern gegen **echte Objekte der Bibliothek**. Deshalb
 > 0.9.x und nicht 1.0.0, und deshalb sind schreibende Befehle ab Werk gesperrt.
 
+## Neu in 0.9.26
+
+Durchgang mit vier Prüfern (Befunde: `Pruefung-Durchgang-2026-09-29/VolkswagenID_BEFUNDE_UND_VERBESSERUNGEN.md`, Entscheidungen 1, 4, 5, 8, 16, 19, 26).
+Gemessen mit einer carconnectivity-Attrappe, Broker und Gateway unter PHP 7.4, 8.3 und 8.5 sowie im Installer-Prüfstand. Nicht gemessen sind ein echtes Volkswagen-Konto, ein Fahrzeug und das Gerät.
+
+* **Richtiges Fahrzeug:** Schalten trifft dasselbe Fahrzeug wie das Lesen, über eine feste Nummer je VIN.
+  * Bisher konnte bei mehreren Fahrzeugen das falsche Auto geschaltet werden, gemeldet mit `OK=1`.
+  * Eine unbekannte Nummer ergibt 404.
+  * Die Vorklimatisierung zur Abfahrt nimmt die kleinste feste Nummer.
+* **Ehrliche Werte:**
+  * `OK=0` ab dem Dreifachen des Abruftakts, je Fahrzeug.
+  * Ein Zeitstempel aus der Zukunft gilt als ungültig.
+  * Ein Neustart während einer Störung behält den letzten guten Stand.
+  * Eine abgewiesene Anmeldung ergibt 503 `GRUND=ANMELDUNG`.
+  * Ein fehlender Pflichtparameter ergibt 400.
+* **Nie doppelt:**
+  * Startsperre im Startskript und Einzelinstanz-Sperre im Dienst.
+  * Ein Befehl wird nur ausgeführt, nachdem er aus der Warteschlange entnommen ist. Bisher kam ein Befehl bei einem Doppelstart zweimal am Fahrzeug an.
+* **Speichern:**
+  * PRG; bei einer Beanstandung wird nichts gespeichert, auch nicht die Zugangsdaten.
+  * Die Eingaben kommen markiert zurück; kein stilles Entfernen von Zeichen.
+  * Eine Liste statt Text ergibt kein Passwort „Array“ mehr.
+  * „Einstellungen sichern“ enthält jetzt wirklich die Zugangsdaten, wie der Knopftext sagt.
+  * Ein leeres Token in der Sicherung lässt das geltende stehen.
+* **Update und Installation:**
+  * Ein Update ohne Internet lässt die bisherige Python-Umgebung in Betrieb. Bisher war das Plugin danach ohne Dienst.
+  * Anmeldemarken, Verlauf, Ladeprotokoll und Fortschreibung überstehen ein Update.
+  * Eine Neuinstallation spielt keine Reste ein (`.alt` und Warnung).
+  * `python3-venv` kommt über `dpkg/apt`.
+  * Nebendateien werden mit Rechten vor dem Inhalt und fsync geschrieben.
+* **MQTT:**
+  * `-` für leer gewordene Texte, Positionen und entfernte Fahrzeuge.
+  * `tag_kwh` und `ladeempfehlung` flüchtig.
+  * Neu je Fahrzeug `fahrzeugN/ok` und `fahrzeugN/ts`.
+  * Abräumen bei Präfixwechsel, „MQTT aus“ und „Werte behalten“ aus.
+  * 5 ms Abstand zwischen Nachrichten.
+  * Die Deinstallation räumt auch ohne paho ab.
+* **In Loxone:** Die Ausfallerkennung auf `OK` prüfen; wer mehrere Fahrzeuge hat, die Nummern im Reiter Einbindung prüfen.
+
 ## Neu in 0.9.25
 
 **Das Installationsprotokoll sagt nach einem Upgrade nur noch „nichts weiter
@@ -659,10 +698,14 @@ gewesen wie beim alten SkodaConnect-Plugin — nur mit Ansage.
   als beim Skoda-Plugin gibt es hier also **keine** Hürde.
 * **Internetverbindung bei der Installation.** Beide Pakete werden von PyPI
   geholt (festgenagelt auf 0.11.10 und 0.10.6; schlägt das fehl, werden die
-  neuesten genommen und das ausdrücklich gemeldet).
+  neuesten genommen und das ausdrücklich gemeldet). Ein Update übernimmt die
+  vorhandene virtuelle Umgebung: passen dort die festgenagelten Fassungen,
+  wird nichts aus dem Netz geholt, und scheitert das Nachladen, bleibt die
+  Bibliothek der vorigen Fassung in Betrieb.
 * **`python3-venv`.** Systemweites `pip3 install` scheitert auf Debian 12/13 an
   PEP 668 (`externally-managed-environment`); deshalb eine eigene venv unter
-  `bin/plugins/volkswagenid/venv`.
+  `bin/plugins/volkswagenid/venv`. Das Paket zieht der Installer über
+  `dpkg/apt` selbst nach.
 * MQTT-Gateway eingeschaltet, wenn die Werte per MQTT kommen sollen. Es ist
   seit LoxBerry 3 Bestandteil des Systems und wird unter *System → MQTT
   Gateway* aktiviert, nicht nachinstalliert.
@@ -839,7 +882,11 @@ Rückwärtslesen mit `fseek`). Umgestellt auf `fseek`.
 Sicherungen mit dem Konfigordner. Das trifft nicht zu — gelöscht wird
 `config/plugins/<ordner>/`, also das *Verzeichnis*, und
 `<ordner>.backup.vw.json` liegt daneben. Genau deshalb übersteht die Sicherung
-eine Neuinstallation; das ist ihr Zweck.
+ein Update. *(Berichtigt im Durchgang 02.10.2026: hier stand, sie überstehe auch
+eine Neuinstallation, und das sei ihr Zweck. Nach Entscheidung 1 spielt eine
+Neuinstallation nichts mehr ein — Zweitschriften, Startmerker, Fahrzeugnummern
+und die Rettung einer früheren Installation gehen nach `<name>.alt`, mit einer
+Warnung im Installationsprotokoll; die Deinstallation räumt sie ab.)*
 
 Beim Prüfen fiel aber etwas Schwereres auf: **es gab kein Uninstall-Skript.**
 Die Sicherung mit E-Mail, Passwort und S-PIN des Volkswagen-Kontos wäre nach

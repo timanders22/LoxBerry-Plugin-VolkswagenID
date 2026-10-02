@@ -336,6 +336,19 @@ function vw_wert_pruefen($schluessel, $wert)
             }
             return preg_match($r[1], $s) ? array(true, $s) : array(false, null);
         case 'zahl':
+            /* OHNE EXPONENT (O14, Durchgang 02.10.2026). Bis 0.9.26 wurde der
+             * Wert als float gespeichert: aus 0.00005 wurde in der Datei 5.0e-5,
+             * und beim naechsten Lesen fiel "5.0E-5" durch das Muster - das
+             * Feld war leer, der Geofence aus, und ein unveraendertes Speichern
+             * wurde abgewiesen (gemessen F12). Jetzt wird die Zahl als
+             * Dezimaltext gefuehrt; eine Zahl aus einer aelteren Datei wird mit
+             * acht Nachkommastellen ausgeschrieben. */
+            if (is_float($wert) || is_int($wert)) {
+                $s = rtrim(rtrim(sprintf('%.8F', (float) $wert), '0'), '.');
+                if ($s === '-0') {
+                    $s = '0';
+                }
+            }
             if ($s === '') {
                 return array(true, '');
             }
@@ -343,7 +356,8 @@ function vw_wert_pruefen($schluessel, $wert)
                 return array(false, null);
             }
             $f = (float) str_replace(',', '.', $s);
-            return ($f >= $r[1] && $f <= $r[2]) ? array(true, $f) : array(false, null);
+            return ($f >= $r[1] && $f <= $r[2]) ? array(true, str_replace(',', '.', $s))
+                                                 : array(false, null);
     }
     return array(false, null);
 }
@@ -469,12 +483,42 @@ function vw_config_lesen($erzeugen = true)
             $abgewiesen[$k] = is_scalar($v) ? (string) $v : gettype($v);
         }
     }
-    // temp_min > temp_max ist keine Ablehnung, sondern ein Tausch: beide Werte
-    // sind fuer sich zulaessig, nur ihre Reihenfolge ist es nicht.
+    /* temp_min > temp_max: beide fuer sich zulaessig, zusammen nicht. Bis 0.9.26
+     * wurden sie hier still getauscht (Nr. 19), waehrend das Formular dieselbe
+     * Lage beanstandete. Seit dem Durchgang 02.10.2026 (C7) eine Beanstandung an
+     * beiden Enden - hier und in bin/vw.py config(): beide gelten als
+     * unzulaessig, es gilt die Voreinstellung. */
     if ($fertig['temp_min'] > $fertig['temp_max']) {
-        $t = $fertig['temp_min'];
-        $fertig['temp_min'] = $fertig['temp_max'];
-        $fertig['temp_max'] = $t;
+        $abgewiesen['temp_min'] = (string) $fertig['temp_min'];
+        $abgewiesen['temp_max'] = (string) $fertig['temp_max'];
+        $fertig['temp_min'] = $vorgaben['temp_min'];
+        $fertig['temp_max'] = $vorgaben['temp_max'];
+    }
+
+    /* FEHLENDE SCHLUESSEL (O13, Durchgang 02.10.2026). Eine lesbare Datei, der
+     * Schluessel fehlen, wird einmal vervollstaendigt - mit der Voreinstellung,
+     * mit Protokollzeile, ohne die vorhandenen Werte anzufassen (auch keinen
+     * unzulaessigen: der bleibt als Beleg stehen und wird oben gemeldet).
+     * Bis 0.9.26 blieb eine Datei mit 2 von 27 Schluesseln so liegen, und
+     * die Testzeile zeigte trotzdem einen Haken (gemessen R3). */
+    $fehlend = array();
+    if ($lage === 'ok') {
+        foreach ($vorgaben as $k => $v) {
+            if (!array_key_exists($k, $cfg)) {
+                $fehlend[] = $k;
+            }
+        }
+    }
+    if ($erzeugen && $fehlend) {
+        $voll = $cfg;
+        foreach ($fehlend as $k) {
+            $voll[$k] = $vorgaben[$k];
+        }
+        if (vw_config_schreiben($voll, false)) {
+            vw_log_zeile('Konfiguration vervollstaendigt: ' . count($fehlend) . ' von '
+                       . count($vorgaben) . ' Schluesseln fehlten und wurden mit der '
+                       . 'Voreinstellung eingetragen (' . implode(', ', $fehlend) . ').');
+        }
     }
 
     // ---- Zurueckschreiben, aber nur wo Schreiben erlaubt ist ----
@@ -493,8 +537,26 @@ function vw_config_lesen($erzeugen = true)
 
     $GLOBALS['vw_cfg_speicher'][$schluessel] =
         array('cfg' => $fertig, 'lage' => $lage,
-              'abgewiesen' => $abgewiesen, 'fremd' => $fremd);
+              'abgewiesen' => $abgewiesen, 'fremd' => $fremd,
+              'fehlend' => $fehlend, 'anzahl' => count($vorgaben));
+    /* Die ERSTE Lage dieses Seitenaufbaus bleibt erhalten (O8, Durchgang
+     * 02.10.2026). Bis 0.9.26 ging sie verloren: vw_token() schrieb nach dem
+     * Heilen ein neues Token, leerte den Zwischenspeicher, und das zweite
+     * Lesen meldete "ok" - die Testzeile "Ist die Konfiguration heil?"
+     * zeigte einen Haken ueber einer beschaedigten Datei (gemessen K1, K3). */
+    if ($erzeugen && !isset($GLOBALS['vw_lage_erst'])) {
+        $GLOBALS['vw_lage_erst'] = $GLOBALS['vw_cfg_speicher'][$schluessel];
+    }
     return $GLOBALS['vw_cfg_speicher'][$schluessel];
+}
+
+/** Die Lage beim ERSTEN Lesen in diesem Seitenaufbau (O8). */
+function vw_config_lage_erst()
+{
+    if (!isset($GLOBALS['vw_lage_erst'])) {
+        vw_config_lesen(true);
+    }
+    return isset($GLOBALS['vw_lage_erst']) ? $GLOBALS['vw_lage_erst'] : vw_config_lesen(true);
 }
 
 /**
@@ -622,7 +684,13 @@ function vw_zugang_speichern($email, $passwort, $spin)
      * auf der TEMPORAEREN Datei gesetzt, nicht danach - sonst laege die Datei
      * einen Augenblick lang mit 0644 da, und in ihr steht ein Passwort. */
     $tmp = $p['zugang'] . '.tmp.' . getmypid();
-    if (@file_put_contents($tmp, $json) === false) {
+    /* Die geschriebene LAENGE wird geprueft, nicht nur false (C10, Durchgang
+     * 02.10.2026). Bis 0.9.26 galt eine bei voller Karte gekuerzte Schreibung
+     * als Erfolg und wurde per rename ueber zugang.json gelegt - Konto und
+     * Passwort waeren durch ein halbes JSON ersetzt (Codebericht Nr. 12;
+     * vw_config_schreiben() prueft das seit jeher). */
+    if (@file_put_contents($tmp, $json) !== strlen($json)) {
+        @unlink($tmp);
         return false;
     }
     @chmod($tmp, 0600);
@@ -766,6 +834,8 @@ function vw_token()
         }
         $cfg['aktionstoken'] = vw_token_erzeugen();
         vw_config_speichern($cfg);
+        // Die Seite sagt es (O8): ein neues Token macht alle Adressen ungueltig.
+        $GLOBALS['vw_token_erzeugt'] = true;
         $cfg = vw_config();
     }
     return (string) $cfg['aktionstoken'];
@@ -852,6 +922,61 @@ function vw_formtoken_ok($cfg = null)
     return hash_equals($soll, $ist);
 }
 
+/* ---------------- Einmalmeldung (PRG) ----------------
+ *
+ * Seit dem Durchgang 02.10.2026 (O1; Regeln/04, Entscheidung 19) endet jeder
+ * POST der Oberflaeche mit einer Umleitung. Was der Handler zu sagen hat,
+ * reist in dieser Datei: 0600, hoechstens 120 s gueltig, gelesen nur beim
+ * GET und dabei geloescht. Bis 0.9.26 renderte jeder POST unmittelbar: F5
+ * nach einem Schaltknopf im Reiter Test legte einen zweiten Befehl an, F5
+ * nach "Token neu" zeigte die Angriffswarnung des Wachpostens (gemessen F1,
+ * F6, F7). */
+function vw_einmal_datei()
+{
+    return vw_paths()['datadir'] . '/einmalmeldung.json';
+}
+
+function vw_einmal_schreiben($inhalt)
+{
+    $p = vw_paths();
+    if (!is_dir($p['datadir'])) {
+        @mkdir($p['datadir'], 0775, true);
+    }
+    $inhalt['ts'] = time();
+    $json = json_encode($inhalt, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
+                                 | JSON_INVALID_UTF8_SUBSTITUTE);
+    if ($json === false) {
+        return false;
+    }
+    $f = vw_einmal_datei();
+    $tmp = $f . '.tmp.' . getmypid();
+    if (@file_put_contents($tmp, $json) !== strlen($json)) {
+        @unlink($tmp);
+        return false;
+    }
+    @chmod($tmp, 0600);
+    if (!@rename($tmp, $f)) {
+        @unlink($tmp);
+        return false;
+    }
+    return true;
+}
+
+/** Die Einmalmeldung lesen und loeschen. null, wenn keine da oder zu alt ist. */
+function vw_einmal_lesen()
+{
+    $f = vw_einmal_datei();
+    if (!is_file($f)) {
+        return null;
+    }
+    $d = vw_json_lesen($f);
+    @unlink($f);
+    if (!isset($d['ts']) || !is_numeric($d['ts']) || abs(time() - (int) $d['ts']) > 120) {
+        return null;
+    }
+    return $d;
+}
+
 /* ---------------- Zwischenspeicher lesen ---------------- */
 
 function vw_loxone()
@@ -869,6 +994,26 @@ function vw_fahrzeuge()
 {
     $l = vw_loxone();
     return isset($l['fahrzeuge']) && is_array($l['fahrzeuge']) ? $l['fahrzeuge'] : array();
+}
+
+/**
+ * Alter eines Zeitstempels fuer den Endpunkt (C2, Durchgang 02.10.2026).
+ *
+ * -1 ohne Zeitstempel. Liegt er MEHR ALS 5 s IN DER ZUKUNFT, ist er keine
+ * Aussage: 999999 (wie Skoda-Connect-NG). Bis 0.9.26 machte max(0, ...)
+ * daraus ALTER=0 - den frischestmoeglichen Wert, mit OK=1 (gemessen,
+ * Codebericht Nr. 2: ts zwei Stunden voraus -> WARTUNG;OK=1;...;ALTER=0).
+ */
+function vw_alter_von($ts)
+{
+    if (!is_numeric($ts) || (int) $ts <= 0) {
+        return -1;
+    }
+    $d = time() - (int) $ts;
+    if ($d < -5) {
+        return 999999;
+    }
+    return min(999999, max(0, $d));
 }
 
 /** Alter des Abbilds in Sekunden, oder -1 wenn es keines gibt. */
@@ -1004,12 +1149,14 @@ function vw_dienst_soll()
 /** $befehl ist 'start', 'stop' oder 'restart'. Rueckgabe: array(ok, Ausgabe) */
 function vw_dienst($befehl)
 {
+    /* Die Texte kommen aus der Sprachdatei (O9, Durchgang 02.10.2026); bis
+     * 0.9.26 stand hier Deutsch auch in der englischen Oberflaeche. */
     if (!in_array($befehl, array('start', 'stop', 'restart'), true)) {
-        return array(0, 'Unbekannter Befehl.');
+        return array(0, vw_t('ALLG.DIENST_UNBEKANNT'));
     }
     $skript = vw_paths()['bindir'] . '/dienst.sh';
     if (!is_file($skript)) {
-        return array(0, 'dienst.sh nicht gefunden: ' . $skript);
+        return array(0, sprintf(vw_t('ALLG.DIENST_SH_FEHLT'), $skript));
     }
     $ausgabe = array();
     $code = 0;
@@ -1122,7 +1269,7 @@ function vw_befehl_absetzen($befehl, $wartezeit = null)
 
     $ordner = $p['datadir'] . '/befehle';
     if (!is_dir($ordner) && !@mkdir($ordner, 0775, true) && !is_dir($ordner)) {
-        return array(0, 'Der Ordner fuer die Warteschlange liess sich nicht anlegen: ' . $ordner);
+        return array(0, sprintf(vw_t('ALLG.BEF_ORDNER'), $ordner));
     }
     $kennung = bin2hex(random_bytes(8));
     $datei = $ordner . '/' . $kennung . '.json';
@@ -1136,11 +1283,11 @@ function vw_befehl_absetzen($befehl, $wartezeit = null)
      * vw_config_write() weiter oben schon tut. */
     $vw_js = json_encode($befehl);
     if ($vw_js === false) {
-        return array(0, 'Der Befehl liess sich nicht als JSON darstellen (ungueltiges UTF-8).');
+        return array(0, vw_t('ALLG.BEF_JSON'));
     }
     if (@file_put_contents($tmp, $vw_js) !== strlen($vw_js) || !@rename($tmp, $datei)) {
         @unlink($tmp);
-        return array(0, 'Der Befehl liess sich nicht ablegen: ' . $datei);
+        return array(0, sprintf(vw_t('ALLG.BEF_ABLEGEN'), $datei));
     }
     $antwort = $p['datadir'] . '/antworten/' . $kennung . '.json';
     for ($i = 0; $i < $wartezeit * 10; $i++) {
@@ -1156,7 +1303,7 @@ function vw_befehl_absetzen($befehl, $wartezeit = null)
         }
         usleep(100000);
     }
-    return array(2, 'Eingereiht, aber der Dienst hat innerhalb von ' . $wartezeit . ' s nicht geantwortet.');
+    return array(2, sprintf(vw_t('ALLG.BEF_KEINE_ANTWORT'), $wartezeit));
 }
 
 /* ---------------- Verlauf ---------------- */
@@ -1471,12 +1618,18 @@ function vw_mqtt_themen()
         'fahrzeugN/entfernung_m'            => $z('VW_MQTT.ENTFERNUNG', 'm', 1, 0, 40000000),
         'fahrzeugN/zuhause'                 => $z('VW_MQTT.ZUHAUSE', '', 0, 0, 1),
         'fahrzeugN/ladesaeule_kw'           => $z('VW_MQTT.SAEULE_KW', 'kW', 1, 0, 400, 0),
-        'fahrzeugN/ladeempfehlung'          => $z('VW_MQTT.EMPFEHLUNG', '', 1, -1, 1),
+        // Seit dem Durchgang 02.10.2026 fluechtig (M4): eine Empfehlung ist keine
+        // Aussage ueber das Fahrzeug, und eine stehengebliebene 1 ist falsch.
+        'fahrzeugN/ladeempfehlung'          => $z('VW_MQTT.EMPFEHLUNG', '', 1, -1, 1, 0),
         'fahrzeugN/ladung_kwh'              => $z('VW_MQTT.LADUNG_KWH', 'kWh', 1, 0, 300),
         'fahrzeugN/ladung_dauer_min'        => $z('VW_MQTT.LADUNG_MIN', 'min', 1, 0, 100000),
         'fahrzeugN/ladung_vor_stunden'      => $z('VW_MQTT.LADUNG_VOR', 'h', 1, 0, 100000, 0),
-        'fahrzeugN/tag_kwh'                 => $z('VW_MQTT.TAG_KWH', 'kWh', 1, 0, 1000),
+        // Tageswerte sind nie zurueckbehalten (Entscheidung 8; M3, 02.10.2026).
+        'fahrzeugN/tag_kwh'                 => $z('VW_MQTT.TAG_KWH', 'kWh', 1, 0, 1000, 0),
         'fahrzeugN/ladungen_gesamt'         => $z('VW_MQTT.LADUNGEN', '', 1, 0, 100000),
+        // ---- je Fahrzeug: Lage, fluechtig, seit dem Durchgang 02.10.2026 (M8) ----
+        'fahrzeugN/ok'                      => $z('VW_MQTT.F_OK', '', 0, 0, 1, 0),
+        'fahrzeugN/ts'                      => $z('VW_MQTT.F_TS', 's', 1, 0, 2147483647, 0),
         // ---- je Fahrzeug: Text, ab 0.9.10 ----
         'fahrzeugN/zustand_text'            => $t('VW_MQTT.T_ZUSTAND'),
         'fahrzeugN/klima_text'              => $t('VW_MQTT.T_KLIMA'),
@@ -2252,9 +2405,11 @@ function vw_t($schluessel)
 function vw_sicherung_lesen($roh)
 {
     $mangel = array();
+    $hinweise = array();
+    $zugang = null;
     $daten = json_decode((string) $roh, true);
     if (!is_array($daten)) {
-        return array(null, array(vw_t('EINST.SICH_KEIN_JSON')), 0);
+        return array(null, array(vw_t('EINST.SICH_KEIN_JSON')), 0, null, array());
     }
     $neu = vw_vorgaben();
     $bekannt = array_keys($neu);
@@ -2265,6 +2420,30 @@ function vw_sicherung_lesen($roh)
          * abzulehnen, die man selbst zwei Zeilen vorher erzeugt hat, ist der
          * Fehler, den WiFi-Scanner NG am 26.08.2026 gemacht hat. */
         if ($k !== '' && $k[0] === '_') {
+            continue;
+        }
+        /* DIE ZUGANGSDATEN (O6, Durchgang 02.10.2026; CLAUDE.md Abschnitt 9).
+         * Bis 0.9.26 trug die Sicherung sie nicht, obwohl der Hinweis am Knopf
+         * es zusagte; nach einem Umzug fehlten Konto und S-PIN, und eine
+         * Sicherung mit "email" wurde als fremd abgewiesen (gemessen F8a-F8c,
+         * F9f). Sie werden geprueft wie im Formular (vw_zugang_pruefen()). Fehlt
+         * der Eintrag (aeltere Sicherung), bleibt der Zugang unveraendert. */
+        if ($k === 'zugang') {
+            if (!is_array($w) || array_diff(array_keys($w), array('email', 'passwort', 'spin'))) {
+                $mangel[] = vw_t('EINST.SICH_ZUGANG_FORM');
+                continue;
+            }
+            $zf = vw_zugang_pruefen(isset($w['email']) ? $w['email'] : '',
+                                    isset($w['passwort']) ? $w['passwort'] : '',
+                                    isset($w['spin']) ? $w['spin'] : '');
+            if ($zf['fehler']) {
+                foreach ($zf['fehler'] as $feld => $text) {
+                    $mangel[] = vw_t('EINST.SICH_ZUGANG') . ' ' . $text;
+                }
+                continue;
+            }
+            $zugang = array('email' => $zf['email'], 'passwort' => $zf['passwort'],
+                            'spin' => $zf['spin']);
             continue;
         }
         if (!in_array($k, $bekannt, true)) {
@@ -2288,6 +2467,17 @@ function vw_sicherung_lesen($roh)
                 htmlspecialchars((string) $k, ENT_QUOTES, 'UTF-8'),
                 htmlspecialchars(is_scalar($w) ? substr((string) $w, 0, 40) : gettype($w),
                                  ENT_QUOTES, 'UTF-8'));
+            continue;
+        }
+        /* EIN LEERES TOKEN BEHAELT DAS GELTENDE (O7, Durchgang 02.10.2026;
+         * Klasse 10/12). Bis 0.9.26 wurde es angenommen, und beim naechsten
+         * Seitenaufbau entstand still ein neues - jede im Miniserver
+         * eingetragene Adresse bekam danach 403, und oben stand nur
+         * "zurueckgespielt" (gemessen F9c). Gesagt wird es oben auf der Seite. */
+        if ($k === 'aktionstoken' && $rein === '') {
+            $geltend = vw_config();
+            $neu[$k] = (string) $geltend['aktionstoken'];
+            $hinweise[] = vw_t('EINST.SICH_TOKEN_LEER');
             continue;
         }
         $neu[$k] = $rein;
@@ -2322,7 +2512,53 @@ function vw_sicherung_lesen($roh)
     if (!$mangel && $neu['temp_min'] > $neu['temp_max']) {
         $mangel[] = vw_t('EINST.FEHLER_TEMP_TAUSCH');
     }
-    return array($mangel ? null : $neu, $mangel, $anzahl);
+    return array($mangel ? null : $neu, $mangel, $anzahl, $mangel ? null : $zugang, $hinweise);
+}
+
+/**
+ * Die Zugangsdaten pruefen - an EINER Stelle fuer das Formular und das
+ * Zurueckspielen (O4/O5/O6, Durchgang 02.10.2026).
+ *
+ * Nichts wird still veraendert (Nr. 19): Leerraum am Rand faellt, sonst wird
+ * abgewiesen. Bis 0.9.26 entfernte das Formular Anfuehrungszeichen und
+ * Steuerzeichen aus der E-Mail - aus o'brien@example.com wurde
+ * obrien@example.com (gemessen F3) -, und eine Liste im Passwortfeld wurde
+ * als "Array" gespeichert (F5b).
+ *
+ * Leer heisst bei allen drei Feldern "nicht angegeben" (behalten); ob ein
+ * leeres E-Mail-Feld erlaubt ist, entscheidet der Aufrufer.
+ * Rueckgabe: array('fehler' => array(feld => Text), 'email', 'passwort', 'spin').
+ */
+function vw_zugang_pruefen($email, $passwort, $spin)
+{
+    $fehler = array();
+    $aus = array('email' => '', 'passwort' => '', 'spin' => '');
+    foreach (array('email' => $email, 'passwort' => $passwort, 'spin' => $spin) as $feld => $w) {
+        if (!is_string($w)) {
+            $fehler[$feld] = sprintf(vw_t('EINST.FEHLER_LISTE'), vw_t('EINST.L_' . strtoupper($feld)));
+        }
+    }
+    if (!isset($fehler['email'])) {
+        $aus['email'] = trim($email);
+        if ($aus['email'] !== '' && (strlen($aus['email']) > 254
+                || !filter_var($aus['email'], FILTER_VALIDATE_EMAIL))) {
+            $fehler['email'] = vw_t('EINST.FEHLER_EMAIL');
+        }
+    }
+    if (!isset($fehler['passwort'])) {
+        $aus['passwort'] = $passwort;
+        if (strlen($passwort) > 1024 || preg_match('/[\x00-\x1F\x7F]/', $passwort)) {
+            $fehler['passwort'] = vw_t('EINST.FEHLER_PASSWORT');
+        }
+    }
+    if (!isset($fehler['spin'])) {
+        $aus['spin'] = trim($spin);
+        if ($aus['spin'] !== '' && !preg_match('/^[0-9]{4}$/', $aus['spin'])) {
+            $fehler['spin'] = vw_t('EINST.FEHLER_SPIN');
+        }
+    }
+    $aus['fehler'] = $fehler;
+    return $aus;
 }
 
 /**
@@ -2348,13 +2584,23 @@ function vw_sicherung_schreiben()
     $cfg = vw_config();
     $aus = array(
         '_hinweis' => 'Einstellungen des LoxBerry-Plugins Volkswagen ID. '
-                    . 'Enthaelt das Aktionstoken dieser Anlage - wie ein Passwort behandeln.',
+                    . 'Enthaelt das Aktionstoken und die Zugangsdaten des Volkswagen-Kontos '
+                    . 'dieser Anlage - wie ein Passwort behandeln.',
         '_stand'   => date('Y-m-d H:i:s'),
         '_fassung' => vw_fassung(),
     );
     foreach (array_keys(vw_vorgaben()) as $k) {
         $aus[$k] = isset($cfg[$k]) ? $cfg[$k] : '';
     }
+    /* DIE ZUGANGSDATEN GEHOEREN HINEIN (O6, Durchgang 02.10.2026; CLAUDE.md
+     * Abschnitt 9, Regeln/05). Bis 0.9.26 fehlten sie, obwohl der Hinweis am
+     * Knopf "Die Datei enthaelt Ihre Zugangsdaten" sagte (gemessen F8a). */
+    $zg = vw_json_lesen(vw_paths()['zugang']);
+    $aus['zugang'] = array(
+        'email'    => isset($zg['email']) && is_string($zg['email']) ? $zg['email'] : '',
+        'passwort' => isset($zg['passwort']) && is_string($zg['passwort']) ? $zg['passwort'] : '',
+        'spin'     => isset($zg['spin']) && is_string($zg['spin']) ? $zg['spin'] : '',
+    );
     return json_encode($aus, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 }
 

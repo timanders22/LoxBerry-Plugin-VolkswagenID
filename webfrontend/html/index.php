@@ -154,8 +154,15 @@ function vw_s($v, $laenge = 120)
 }
 
 $vw_lox = vw_loxone();
-$vw_alter = vw_alter();
-$vw_ok = (!empty($vw_lox['ok']) && $vw_alter >= 0) ? 1 : 0;
+/* OK=0 AB DEM DREIFACHEN TAKT (C2, Durchgang 02.10.2026; Entscheidung 4).
+ * Bis 0.9.26 kam OK allein aus 'ok' in loxone.json: stirbt der Dienst, blieb
+ * OK=1 fuer immer stehen (gemessen, Codebericht Nr. 2: OK=1 bei ALTER=7200
+ * und 172801). Jetzt gilt OK=0, sobald ALTER groesser ist als das Dreifache
+ * des Abruftakts; ALTER steht unveraendert daneben. Ein Zeitstempel mehr als
+ * 5 s in der Zukunft ist keine Aussage: ALTER=999999, OK=0 (vw_alter_von). */
+$vw_grenze = 3 * max(180, (int) $vw_cfg['intervall']);
+$vw_alter = vw_alter_von(isset($vw_lox['ts']) ? $vw_lox['ts'] : null);
+$vw_ok = (!empty($vw_lox['ok']) && $vw_alter >= 0 && $vw_alter <= $vw_grenze) ? 1 : 0;
 $vw_alle = vw_fahrzeuge();
 
 /* Das Lebenszeichen des Dienstes. Es haengt NICHT am Abbild: ein Abruf kann
@@ -236,9 +243,34 @@ $vw_f = vw_waehlen($vw_alle, $vw_fahrzeug);
 
 if (in_array($vw_aktion, array('status', 'laden', 'wartung', 'position', 'verbrauch', 'teile'), true)
     && $vw_f === null) {
+    /* GAR KEIN ABBILD UND EIN BENANNTER AUSFALL (C4, Durchgang 02.10.2026;
+     * Regeln/07 "Faellt die Quelle ganz aus ... 503, auch vor dem ersten
+     * Abruf"). Bis 0.9.26 antwortete der Endpunkt bei abgewiesener Anmeldung
+     * mit 200 FAHRZEUG_UNBEKANNT;N=0 - der wahre Grund stand in loxone.json,
+     * wurde aber nicht genannt (gemessen, MQTT-Bericht H3). */
+    if (!$vw_alle && $vw_lox && empty($vw_lox['ok']) && isset($vw_lox['grund'])
+        && !in_array((string) $vw_lox['grund'], array('', 'OK'), true)) {
+        http_response_code(503);
+        printf("%s;OK=0;GRUND=%s;N=0;ALTER=%d;ZAEHLER=%d\n", strtoupper($vw_aktion),
+            vw_s($vw_lox['grund'], 40), $vw_alter, $vw_zaehler);
+        vw_meldezeile($vw_grund, $vw_fehlertext);
+        exit;
+    }
     printf("%s;OK=0;GRUND=FAHRZEUG_UNBEKANNT;N=%d;ALTER=%d;ZAEHLER=%d\n",
         strtoupper($vw_aktion), count($vw_alle), $vw_alter, $vw_zaehler);
     exit;
+}
+
+/* OK UND ALTER JE FAHRZEUG (C5, Durchgang 02.10.2026; Entscheidung 8). Bis
+ * 0.9.26 war OK der Sammelwert: fiel bei zwei Autos eines aus, meldete es
+ * OK=1 mit Strichen (gemessen, Codebericht Nr. 5, MQTT-Bericht V10). Jetzt
+ * gilt das ok des Fahrzeugs mit, und ALTER rechnet aus dem Zeitstempel seines
+ * letzten gelungenen Abrufs, wenn das Abbild einen traegt. */
+if ($vw_f !== null) {
+    if (isset($vw_f['ts']) && is_numeric($vw_f['ts']) && (int) $vw_f['ts'] > 0) {
+        $vw_alter = vw_alter_von($vw_f['ts']);
+    }
+    $vw_ok = ($vw_ok && !empty($vw_f['ok']) && $vw_alter >= 0 && $vw_alter <= $vw_grenze) ? 1 : 0;
 }
 
 /** Ein Wert aus dem Abbild, oder null. */
@@ -437,15 +469,11 @@ if ($vw_aktion === 'einstellung') {
     }
 }
 
-if (vw_dienst_pid() === 0) {
-    // Nicht stillschweigend einreihen: ohne laufenden Dienst passiert nichts,
-    // und der Befehl laege bis zum naechsten Start in der Warteschlange.
-    http_response_code(503);
-    echo "SET;OK=0;GRUND=DIENST_LAEUFT_NICHT\n";
-    echo "Der Abrufdienst laeuft nicht. Reiter Einstellungen, Knopf 'Dienst starten'.\n";
-    exit;
-}
-
+/* DIE ANFRAGE WIRD GEPRUEFT, BEVOR DER DIENST GEPRUEFT WIRD (C6, Durchgang
+ * 02.10.2026; Regeln/03 Abschnitt 4). Bis 0.9.26 stand die Dienstpruefung vor
+ * den Pflichtparametern: klima_start ohne temp ergab bei angehaltenem Dienst
+ * 503 DIENST_LAEUFT_NICHT statt 400 TEMP_FEHLT - eine falsch gebaute Adresse
+ * sah aus wie ein angehaltener Dienst (gemessen, Codebericht Nr. 6). */
 $vw_befehl = array('aktion' => $vw_aktion, 'fahrzeug' => $vw_fahrzeug, 'von' => 'endpunkt');
 
 if ($vw_aktion === 'klima_start' || $vw_aktion === 'zieltemperatur') {
@@ -480,6 +508,27 @@ if ($vw_aktion === 'klima_start' || $vw_aktion === 'zieltemperatur') {
     }
     $vw_befehl['name'] = $vw_name;
     $vw_befehl['wert'] = (int) $vw_wert;
+}
+
+/* EINE NUMMER, DIE DAS ABBILD NICHT KENNT, SCHALTET NICHTS (C1, Durchgang
+ * 02.10.2026): 404, wie beim Lesen. Der Dienst loest die Nummer ueber die
+ * feste Zuordnung auf (bin/vw.py fahrzeug_waehlen()). Ohne Abbild entscheidet
+ * er selbst ("noch kein Fahrzeug bekannt"). */
+if ($vw_aktion !== 'abruf' && $vw_alle && vw_nummer_von($vw_alle, $vw_fahrzeug) === 0) {
+    http_response_code(404);
+    echo "SET;OK=0;GRUND=FAHRZEUG_UNBEKANNT\n";
+    echo 'Fahrzeug ' . vw_s($vw_fahrzeug, 20) . ' ist nicht bekannt. Bekannt sind: '
+       . implode(', ', array_keys($vw_alle)) . "\n";
+    exit;
+}
+
+if (vw_dienst_pid() === 0) {
+    // Nicht stillschweigend einreihen: ohne laufenden Dienst passiert nichts,
+    // und der Befehl laege bis zum naechsten Start in der Warteschlange.
+    http_response_code(503);
+    echo "SET;OK=0;GRUND=DIENST_LAEUFT_NICHT\n";
+    echo "Der Abrufdienst laeuft nicht. Reiter Einstellungen, Knopf 'Dienst starten'.\n";
+    exit;
 }
 
 /* Die Wartezeit des Endpunkts ist eine EIGENE, kuerzere als die der

@@ -13,7 +13,11 @@ function vw_pruefzeile($stand, $frage, $antwort)
     return array('stand' => $stand, 'frage' => $frage, 'antwort' => $antwort);
 }
 
-function vw_pruefungen()
+/* $netz (O11, Durchgang 02.10.2026): nur wenn der Reiter Test serverseitig
+ * offen ist, ruft die Pruefung den eigenen Endpunkt wirklich auf. Bis 0.9.26
+ * lief die Probe bei JEDEM Seitenaufbau, auch mit offenem Reiter
+ * Einstellungen (gemessen F11; die Kette meldete "rendern wollte ins Netz"). */
+function vw_pruefungen($netz = true)
 {
     $p = vw_paths();
     $cfg = vw_config();
@@ -86,7 +90,13 @@ function vw_pruefungen()
                                : vw_t('TEST.A_CONNECTOR_FEHLT'));
 
     $pid = vw_dienst_pid();
-    $zeilen[] = vw_pruefzeile($pid > 0 ? 1 : 0, vw_t('TEST.F_DIENST'),
+    /* Ein BEWUSST angehaltener Dienst ist eine gewollte Lage: grauer Punkt, kein
+     * Kreuz (O12, Durchgang 02.10.2026; Regeln/04 "Ein rotes Kreuz, das nichts
+     * bedeutet"). Kreuz nur, wenn er laufen soll und es nicht tut. Abbild und
+     * Fahrzeuge werden nur beurteilt, wenn er laeuft oder laufen soll. */
+    $soll = vw_dienst_soll();
+    $beurteilen = ($pid > 0 || $soll);
+    $zeilen[] = vw_pruefzeile($pid > 0 ? 1 : ($soll ? 0 : -1), vw_t('TEST.F_DIENST'),
         $pid > 0 ? vw_t('TEST.A_DIENST_LAEUFT') . ' ' . $pid
                  : (vw_dienst_soll() ? vw_t('TEST.A_DIENST_SOLL_TOT') : vw_t('TEST.A_DIENST_GESTOPPT')));
 
@@ -117,9 +127,10 @@ function vw_pruefungen()
     }
 
     $fahrzeuge = vw_fahrzeuge();
-    $zeilen[] = vw_pruefzeile(count($fahrzeuge) > 0 ? 1 : 0, vw_t('TEST.F_FAHRZEUGE'),
+    $zeilen[] = vw_pruefzeile(count($fahrzeuge) > 0 ? 1 : ($beurteilen ? 0 : -1), vw_t('TEST.F_FAHRZEUGE'),
         count($fahrzeuge) > 0 ? sprintf(vw_t('TEST.A_FAHRZEUGE'), count($fahrzeuge))
-                              : vw_t('TEST.A_KEINE_FAHRZEUGE'));
+                              : vw_t('TEST.A_KEINE_FAHRZEUGE')
+                                . ($beurteilen ? '' : ' &mdash; ' . vw_t('TEST.A_DIENST_AUS_GRAU')));
 
     // Ausgefallene Einzelabrufe benennen, statt sie zu verschweigen. Ein
     // Fahrzeug, das die Klimasteuerung nicht kennt, ist kein Fehler - ein
@@ -139,7 +150,11 @@ function vw_pruefungen()
     }
 
     $alter = vw_alter();
-    if ($alter < 0) {
+    if (!$beurteilen) {
+        $zeilen[] = vw_pruefzeile(-1, vw_t('TEST.F_ABRUF'),
+            ($alter < 0 ? vw_t('TEST.A_NIE_ABGERUFEN') : sprintf(vw_t('TEST.A_ABRUF_ALTER'), $alter))
+            . ' &mdash; ' . vw_t('TEST.A_DIENST_AUS_GRAU'));
+    } elseif ($alter < 0) {
         $zeilen[] = vw_pruefzeile(0, vw_t('TEST.F_ABRUF'), vw_t('TEST.A_NIE_ABGERUFEN'));
     } else {
         $frisch = $alter <= max(600, 3 * (int) $cfg['intervall']);
@@ -252,22 +267,47 @@ function vw_pruefungen()
 
     // Ist die Konfiguration heil? Jeder Zustand, den der Code erzeugen kann,
     // braucht seinen Satz.
-    $lage = vw_config_lesen(true);
+    /* AUS DER ERSTEN LAGE dieses Seitenaufbaus (O8, Durchgang 02.10.2026). Bis
+     * 0.9.26 las diese Zeile die Lage NACH vw_token(): eine beschaedigte oder
+     * leere vw.json war da schon durch die Werkseinstellung ersetzt, und hier
+     * stand ein Haken "vorhanden und lesbar" (gemessen K1, K3). Eine frueher
+     * beiseitegelegte Fassung (.kaputt) ist ein grauer Hinweis, und die Zeile
+     * nennt die Zahl der Schluessel (O13). */
+    $lage = vw_config_lage_erst();
+    $jetzt = vw_config_lesen(true);
     $mangel = array();
-    if ($lage['abgewiesen']) {
+    if ($jetzt['abgewiesen']) {
         $mangel[] = sprintf(vw_t('TEST.A_KONFIG_ABGEWIESEN'),
-            vw_e(implode(', ', array_keys($lage['abgewiesen']))));
+            vw_e(implode(', ', array_keys($jetzt['abgewiesen']))));
     }
-    if ($lage['fremd']) {
-        $mangel[] = sprintf(vw_t('TEST.A_KONFIG_FREMD'), vw_e(implode(', ', $lage['fremd'])));
+    if ($jetzt['fremd']) {
+        $mangel[] = sprintf(vw_t('TEST.A_KONFIG_FREMD'), vw_e(implode(', ', $jetzt['fremd'])));
     }
-    $zeilen[] = vw_pruefzeile(($lage['lage'] === 'ok' && !$mangel) ? 1 : 0,
-        vw_t('TEST.F_KONFIG'),
-        vw_t('ALLG.KONFIG_' . strtoupper($lage['lage'])) . ($mangel ? ' ' . implode(' ', $mangel) : ''));
+    $anzahl = isset($lage['anzahl']) ? (int) $lage['anzahl'] : count(vw_vorgaben());
+    $fehlend = isset($lage['fehlend']) && is_array($lage['fehlend']) ? $lage['fehlend'] : array();
+    $kaputt_datei = $p['config'] . '.kaputt';
+    if ($lage['lage'] !== 'ok') {
+        $zeilen[] = vw_pruefzeile(0, vw_t('TEST.F_KONFIG'),
+            vw_t('ALLG.KONFIG_' . strtoupper($lage['lage'])) . ($mangel ? ' ' . implode(' ', $mangel) : ''));
+    } elseif ($mangel) {
+        $zeilen[] = vw_pruefzeile(0, vw_t('TEST.F_KONFIG'),
+            vw_t('ALLG.KONFIG_OK') . ' ' . implode(' ', $mangel));
+    } elseif ($fehlend) {
+        $zeilen[] = vw_pruefzeile(-1, vw_t('TEST.F_KONFIG'),
+            sprintf(vw_t('TEST.A_KONFIG_ERGAENZT'), $anzahl - count($fehlend), $anzahl,
+                    vw_e(implode(', ', $fehlend))));
+    } elseif (is_file($kaputt_datei)) {
+        $zeilen[] = vw_pruefzeile(-1, vw_t('TEST.F_KONFIG'),
+            sprintf(vw_t('TEST.A_KONFIG_KAPUTT_ALT'), vw_e(date('d.m.Y H:i', (int) @filemtime($kaputt_datei))),
+                    vw_e(basename($kaputt_datei))));
+    } else {
+        $zeilen[] = vw_pruefzeile(1, vw_t('TEST.F_KONFIG'),
+            vw_t('ALLG.KONFIG_OK') . ' ' . sprintf(vw_t('TEST.A_KONFIG_VOLL'), $anzahl, $anzahl));
+    }
 
     // Antwortet der eigene Endpunkt? Ein echter Aufruf auf 127.0.0.1 - er
     // findet die getrennten Baeume, die keine Lesepruefung sieht.
-    $zeilen[] = vw_endpunkt_zeile($cfg);
+    $zeilen[] = $netz ? vw_endpunkt_zeile($cfg) : vw_endpunkt_gespeichert();
 
     // Tragen alle Formulare das Merkmal? Ein Formular vergisst man. Gemeldet
     // wird die ZAHL der angesehenen Stellen: eine Null ist kein "in Ordnung",
@@ -438,8 +478,10 @@ function vw_endpunkt_zeile($cfg)
     }
     $url = 'http://127.0.0.1/plugins/' . rawurlencode($p['plugin'])
          . '/index.php?token=' . rawurlencode($token) . '&aktion=status&fahrzeug=1';
+    /* Frist 3 s (O11, Regeln/04: Netzpruefungen mit 3 s Zeitgrenze; bis 0.9.26
+     * 4 s). */
     $kontext = stream_context_create(array('http' => array(
-        'timeout' => 4, 'ignore_errors' => true, 'method' => 'GET')));
+        'timeout' => 3, 'ignore_errors' => true, 'method' => 'GET')));
     /* Ein EIGENER Fehler-Aufnehmer um den Aufruf.
      *
      * Ein vorangestelltes @ schaltet nur die AUSGABE ab, nicht den
@@ -447,10 +489,24 @@ function vw_endpunkt_zeile($cfg)
      * Webserver, der sich nicht selbst aufrufen kann - landete damit in jedem
      * Fehlerprotokoll und in jedem Renderlauf des Pruefstands. Die verweigerte
      * Verbindung ist hier aber ein gueltiges MESSERGEBNIS, kein Fehler; sie
-     * fuehrt zum dritten Ausgang. */
+     * fuehrt zum dritten Ausgang.
+     *
+     * Die Kopfzeilen kommen aus stream_get_meta_data(), nicht aus der
+     * vordefinierten lokalen Variablen von file_get_contents() (C9, Durchgang
+     * 02.10.2026): PHP 8.5 kuendigt diese ab ("Deprecated: The predefined
+     * locally scoped ... variable is deprecated", gemessen mit php -l 8.5.11);
+     * faellt sie weg, wuerde der Code hier 0 und die Zeile ein falsches Kreuz.
+     * Der Weg ueber fopen() gilt unter 7.4 wie unter 8.5. */
     $vorher = set_error_handler(function () { return true; });
-    $antwort = file_get_contents($url, false, $kontext);
-    $kopf = isset($http_response_header) ? $http_response_header : null;
+    $antwort = false;
+    $kopf = null;
+    $fp = fopen($url, 'r', false, $kontext);
+    if ($fp !== false) {
+        $meta = stream_get_meta_data($fp);
+        $kopf = isset($meta['wrapper_data']) && is_array($meta['wrapper_data']) ? $meta['wrapper_data'] : null;
+        $antwort = stream_get_contents($fp);
+        fclose($fp);
+    }
     if ($vorher === null) {
         restore_error_handler();
     } else {
@@ -476,6 +532,12 @@ function vw_endpunkt_zeile($cfg)
          * Kennt das Abbild Fahrzeuge und dieses nicht, bleibt es ein Kreuz. */
         $stand = 1;
         $text = sprintf(vw_t('TEST.A_ENDPUNKT_OHNE_FAHRZEUG'), $code);
+    } elseif ($code === 503 && preg_match('/^STATUS;OK=0;GRUND=([A-Z_]{1,40});N=0;/', $antwort, $gm)) {
+        /* Kein Abbild und ein benannter Ausfall (C4, Durchgang 02.10.2026): der
+         * Endpunkt antwortet in der vereinbarten Form und nennt den Grund. Die
+         * Stoerung selbst steht in der Zeile "Letzte Stoerung". */
+        $stand = 1;
+        $text = sprintf(vw_t('TEST.A_ENDPUNKT_QUELLE'), $code, vw_e($gm[1]));
     } else {
         $stand = 0;
         $text = sprintf(vw_t('TEST.A_ENDPUNKT_FALSCH'), $code,
@@ -484,6 +546,21 @@ function vw_endpunkt_zeile($cfg)
     @file_put_contents($speicher, json_encode(
         array('ts' => time(), 'stand' => $stand, 'text' => $text)));
     return vw_pruefzeile($stand, vw_t('TEST.F_ENDPUNKT'), $text);
+}
+
+/**
+ * Das letzte Ergebnis der Endpunktprobe, ohne Netz (O11, Durchgang 02.10.2026).
+ * Fehlt es, heisst das "nicht geprueft" - kein Haken und kein Kreuz.
+ */
+function vw_endpunkt_gespeichert()
+{
+    $alt = vw_json_lesen(vw_paths()['datadir'] . '/.endpunkt_probe.json');
+    if (isset($alt['ts'], $alt['stand'], $alt['text']) && is_numeric($alt['ts'])
+        && in_array((int) $alt['stand'], array(-1, 0, 1), true)) {
+        return vw_pruefzeile((int) $alt['stand'], vw_t('TEST.F_ENDPUNKT'), (string) $alt['text']
+            . ' (' . sprintf(vw_t('TEST.A_ENDPUNKT_ALT'), max(0, time() - (int) $alt['ts'])) . ')');
+    }
+    return vw_pruefzeile(-1, vw_t('TEST.F_ENDPUNKT'), vw_t('TEST.A_ENDPUNKT_NICHT_GEPRUEFT'));
 }
 
 /**

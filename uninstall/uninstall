@@ -19,8 +19,14 @@
 #        config/plugins/<ordner>.backup.vw.json
 #        config/plugins/<ordner>.backup.zugang.json
 #      Sie liegen bewusst neben dem Konfigordner, damit sie ein Update
-#      und sogar eine Neuinstallation ueberstehen (preupgrade.sh legt
-#      sie an, postinstall.sh spielt sie zurueck). Beim Deinstallieren
+#      ueberstehen (preupgrade.sh legt sie an, postinstall.sh spielt sie
+#      zurueck). Berichtigt im Durchgang 02.10.2026 (I1): bis 0.9.26 stand
+#      hier "und sogar eine Neuinstallation" - eben das war der Befund.
+#      Eine Neuinstallation spielt nichts mehr ein; sie legt Liegen-
+#      gebliebenes nach <name>.alt, und dieses Skript raeumt auch das
+#      ab (Abschnitt 2c), ebenso die Rettung des Datenordners
+#      (<ordner>.rettung) und die beiseitegelegte virtuelle Umgebung
+#      (bin/plugins/<ordner>.venv). Beim Deinstallieren
 #      ist genau das falsch: in zugang.json stehen E-Mail, Passwort und
 #      S-PIN des Volkswagen-Kontos. Die Datei ist nicht umsonst mit
 #      0600 angelegt. Wer das Plugin entfernt, erwartet nicht, dass
@@ -90,6 +96,27 @@ fi
 PDATA="$BASE/data/plugins/$PFOLDER"
 PBIN="$BASE/bin/plugins/$PFOLDER"
 PCONFIG="$BASE/config/plugins"
+
+# Ueberschreiben und entfernen - aber NIE durch einen Verweis hindurch (I6,
+# Durchgang 02.10.2026; Regeln/06 "als root keinem Verweis folgen"). Bis
+# 0.9.26 schrieb dd als root Nullbytes in das ZIEL eines Verweises, der an der
+# Stelle einer Zweitschrift oder von token.json lag (gemessen, Installerbericht
+# X2: zwei fremde Dateien danach nur noch Nullbytes). Ein Verweis wird nur
+# selbst entfernt, und es steht eine <WARNING> da.
+# Rueckgabe 0 = die Datei (oder der Verweis) ist fort.
+vw_ueberschreiben() {
+    if [ -L "$1" ]; then
+        vw_ziel=$(readlink "$1" 2>/dev/null)
+        rm -f "$1" || return 1
+        echo "<WARNING> $1 war ein Verweis (auf $vw_ziel) - nur der Verweis wurde entfernt, das Ziel nicht ueberschrieben."
+        return 0
+    fi
+    [ -f "$1" ] || return 1
+    vw_laenge=$(stat -c %s "$1" 2>/dev/null || echo 0)
+    [ "$vw_laenge" -gt 0 ] && dd if=/dev/zero of="$1" bs=1 count="$vw_laenge" \
+        conv=notrunc >/dev/null 2>&1
+    rm -f "$1"
+}
 
 # ---------------------------------------------------------------
 # 1. Dienst anhalten
@@ -228,13 +255,10 @@ fi
 # ---------------------------------------------------------------
 for f in vw.json zugang.json; do
     BK="$PCONFIG/$PFOLDER.backup.$f"
-    if [ -f "$BK" ]; then
+    if [ -f "$BK" ] || [ -L "$BK" ]; then
         # Ueberschreiben, dann entfernen: nur unlink liesse den Inhalt
         # auf der Karte stehen, bis der Platz neu vergeben wird.
-        LAENGE=$(stat -c %s "$BK" 2>/dev/null || echo 0)
-        [ "$LAENGE" -gt 0 ] && dd if=/dev/zero of="$BK" bs=1 count="$LAENGE" \
-            conv=notrunc >/dev/null 2>&1
-        rm -f "$BK" && echo "<OK> Sicherung entfernt: $PFOLDER.backup.$f"
+        vw_ueberschreiben "$BK" && echo "<OK> Sicherung entfernt: $PFOLDER.backup.$f"
     fi
 done
 
@@ -254,13 +278,40 @@ GELOESCHT=0
 for f in "$PCONFIG/$PFOLDER/zugang.json" "$PDATA/token.json" \
          "$PDATA/bibliothek_cache.json" "$PCONFIG/$PFOLDER/vw.json" \
          "$PCONFIG/$PFOLDER/vw.json.kaputt"; do
-    if [ -f "$f" ]; then
-        LAENGE=$(stat -c %s "$f" 2>/dev/null || echo 0)
-        [ "$LAENGE" -gt 0 ] && dd if=/dev/zero of="$f" bs=1 count="$LAENGE" \
-            conv=notrunc >/dev/null 2>&1
-        rm -f "$f" && GELOESCHT=$((GELOESCHT + 1))
+    if [ -f "$f" ] || [ -L "$f" ]; then
+        vw_ueberschreiben "$f" && GELOESCHT=$((GELOESCHT + 1))
     fi
 done
+
+# ---------------------------------------------------------------
+# 2c. Was eine Neuinstallation beiseitegelegt hat, die Rettung und die venv
+# ---------------------------------------------------------------
+# Seit dem Durchgang 02.10.2026 (I1, I2, I3): <name>.alt (Entscheidung 1:
+# "uninstall raeumt die .alt mit ab"), die Rettung des Datenordners aus
+# preupgrade.sh und die beiseitegelegte virtuelle Umgebung. Dateien mit
+# Zugangsdaten oder Anmeldemarken werden vorher ueberschrieben.
+ALT_WEG=0
+for f in "$PCONFIG/$PFOLDER.backup.vw.json.alt" "$PCONFIG/$PFOLDER.backup.zugang.json.alt" \
+         "$PCONFIG/$PFOLDER.lief_vorher.alt" "$BASE/data/plugins/$PFOLDER.nummern.json.alt"; do
+    if [ -f "$f" ] || [ -L "$f" ]; then
+        vw_ueberschreiben "$f" && ALT_WEG=$((ALT_WEG + 1))
+    fi
+done
+for d in "$BASE/data/plugins/$PFOLDER.rettung" "$BASE/data/plugins/$PFOLDER.rettung.alt" \
+         "$BASE/data/plugins/$PFOLDER.rettung.neu"; do
+    if [ -L "$d" ]; then
+        vw_ueberschreiben "$d" && ALT_WEG=$((ALT_WEG + 1))
+    elif [ -d "$d" ]; then
+        { [ -f "$d/token.json" ] || [ -L "$d/token.json" ]; } && vw_ueberschreiben "$d/token.json"
+        rm -rf "${d:?}" && ALT_WEG=$((ALT_WEG + 1))
+    fi
+done
+if [ -L "$PBIN.venv" ]; then
+    rm -f "$PBIN.venv"
+elif [ -d "$PBIN.venv" ]; then
+    rm -rf "${PBIN:?}.venv" && echo "<OK> Beiseitegelegte virtuelle Umgebung entfernt."
+fi
+[ "$ALT_WEG" -gt 0 ] && echo "<OK> $ALT_WEG beiseitegelegte Bestaende (.alt, Rettung) entfernt."
 echo "<OK> $GELOESCHT Datei(en) mit Zugangsdaten oder Anmeldemarken ueberschrieben"
 echo "<OK> und entfernt."
 echo "<INFO> Die Zugangsdaten des Volkswagen-Kontos und die Anmeldemarken sind"

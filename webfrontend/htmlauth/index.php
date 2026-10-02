@@ -108,13 +108,97 @@ if (vw_upgrade_laeuft()) {
 
 $vw_meldungen = array();   // Erfolgsmeldungen
 $vw_fehler = array();      // Beanstandungen - gesammelt, nicht ueberschrieben
+/* Drei weitere Toepfe seit dem Durchgang 02.10.2026 (O9, O7): ein Knopf, der
+ * nichts speichert, meldet sein Scheitern nicht unter "Es wurde nichts
+ * gespeichert - bitte berichtigen" (bis 0.9.26 gemessen F7, F14, E1/E2). */
+$vw_stoerungen = array();  // ein Vorgang ist nicht gelungen
+$vw_unklar = array();      // eingereiht, Ergebnis unbekannt
+$vw_hinweise = array();    // zur Kenntnis, gespeichert wurde trotzdem
+$vw_lagekasten = array();  // Lage der Konfiguration beim ersten Lesen (O8)
+$vw_eingaben = null;       // X-2: das beanstandete Formular samt Eingaben
+$vw_teil = false;          // es wurde etwas gespeichert, aber nicht alles
 $vw_testausgabe = '';
 $vw_post = (isset($_SERVER['REQUEST_METHOD']) ? $_SERVER['REQUEST_METHOD'] : '') === 'POST';
+/* Ob die Anfrage ein POST WAR - auch dann, wenn der Wachposten sie abweist.
+ * Jeder POST endet mit einer Umleitung (O1). */
+$vw_ist_post = $vw_post;
+
+/** Die Eingaben eines beanstandeten Formulars fuer X-2 (Regeln/04): nur Text,
+ *  gueltiges UTF-8, hoechstens 2100 Byte. Passwort und S-PIN reisen nie mit. */
+function vw_eingaben_sammeln($formular, $felder, $falsch)
+{
+    $werte = array();
+    foreach ($felder as $f) {
+        if (isset($_POST[$f]) && is_string($_POST[$f]) && strlen($_POST[$f]) <= 2100
+            && preg_match('//u', $_POST[$f])) {
+            $werte[$f] = $_POST[$f];
+        }
+    }
+    return array('formular' => $formular, 'werte' => $werte,
+                 'falsch' => array_values(array_unique($falsch)));
+}
+
+/* ---- X-2 (O3, Durchgang 02.10.2026): Werte und Markierung nach einer
+ * Beanstandung. Bis 0.9.26 zeigte das Formular danach die gespeicherten Werte,
+ * und kein Feld war markiert (gemessen F2: intervall='300' statt 'abc'). ---- */
+function vw_fa($formular)
+{
+    global $vw_eingaben;
+    return is_array($vw_eingaben) && isset($vw_eingaben['formular'])
+        && $vw_eingaben['formular'] === $formular;
+}
+/** Wert eines Feldes: nach einer Beanstandung die Eingabe, sonst der gespeicherte. */
+function vw_fw($formular, $feld, $gespeichert)
+{
+    global $vw_eingaben;
+    if (vw_fa($formular) && isset($vw_eingaben['werte'][$feld])
+        && is_string($vw_eingaben['werte'][$feld])) {
+        return $vw_eingaben['werte'][$feld];
+    }
+    return (string) $gespeichert;
+}
+/** Haken: nach einer Beanstandung so, wie er abgeschickt wurde. */
+function vw_fh($formular, $feld, $gespeichert)
+{
+    global $vw_eingaben;
+    if (!vw_fa($formular)) {
+        return (bool) $gespeichert;
+    }
+    return isset($vw_eingaben['werte'][$feld]);
+}
+/** Markierung eines beanstandeten Feldes (Attribute, schon maskiert). */
+function vw_fm($feld)
+{
+    global $vw_eingaben;
+    return (is_array($vw_eingaben) && isset($vw_eingaben['falsch'])
+            && in_array($feld, $vw_eingaben['falsch'], true))
+        ? ' class="sm-beanstandet" aria-invalid="true"' : '';
+}
+/** Ein beanstandetes Zahlenfeld wird als Textfeld gezeigt - sonst verwirft der
+ *  Browser die Eingabe "abc", und X-2 zeigte ein leeres Feld. */
+function vw_ftyp($feld)
+{
+    return vw_fm($feld) !== '' ? 'text' : 'number';
+}
 
 /* ---------------- 2. Konfiguration und Merkwort ---------------- */
 $vw_cfg = vw_config();
+/* DIE ERSTE LAGE WIRD GEMERKT, BEVOR vw_token() SCHREIBT (O8, Durchgang
+ * 02.10.2026). Bis 0.9.26 sah bei abgeschnittener vw.json ohne Zweitschrift
+ * niemand etwas: ein neues Token entstand still, kein Kasten nannte die Lage,
+ * und die Testzeile zeigte einen Haken (gemessen K1, K3). */
+$vw_lage_erst = vw_config_lage_erst();
 $vw_token = vw_token();
 $vw_lage = vw_config_lesen(true);
+if ($vw_lage_erst['lage'] !== 'ok') {
+    $vw_lagekasten[] = array($vw_lage_erst['lage'] === 'kaputt' ? 'sm-fehler' : 'sm-warnung',
+        '<b>' . vw_e(vw_t('ALLG.KONFIGLAGE')) . '</b> '
+        . vw_t('ALLG.KONFIG_' . strtoupper($vw_lage_erst['lage'])));
+}
+if (!empty($GLOBALS['vw_token_erzeugt'])) {
+    $vw_lagekasten[] = array($vw_lage_erst['lage'] === 'kaputt' ? 'sm-fehler' : 'sm-warnung',
+                             vw_t('ALLG.TOKEN_ERZEUGT'));
+}
 
 /* ==================================================================
  * 3. WACHPOSTEN
@@ -240,7 +324,7 @@ if ($vw_post && isset($_POST['vw_zurueck'])) {
     } elseif ((int) $_FILES['vw_sicherung']['size'] > 65536) {
         $vw_fehler[] = vw_t('EINST.SICH_ZU_GROSS');
     } else {
-        list($vw_neu, $vw_mangel, $vw_n) = vw_sicherung_lesen(
+        list($vw_neu, $vw_mangel, $vw_n, $vw_neuzugang, $vw_shinw) = vw_sicherung_lesen(
             (string) @file_get_contents($_FILES['vw_sicherung']['tmp_name']));
         if ($vw_neu === null) {
             /* ALLE Beanstandungen, nicht nur die erste - und geaendert wird
@@ -249,6 +333,23 @@ if ($vw_post && isset($_POST['vw_zurueck'])) {
             $vw_fehler[] = vw_t('EINST.SICH_ABGELEHNT') . ' ' . implode(' ', $vw_mangel);
         } elseif (vw_config_speichern($vw_neu)) {
             $vw_meldungen[] = sprintf(vw_t('EINST.SICH_UEBERNOMMEN'), $vw_n);
+            /* O7: ein leeres Token in der Datei - das geltende bleibt, und die
+             * Seite sagt es oben (bis 0.9.26 nur eine Protokollzeile). */
+            foreach ((array) $vw_shinw as $vw_h) {
+                $vw_hinweise[] = $vw_h;
+            }
+            /* O6: die Zugangsdaten aus der Sicherung, geprueft wie im Formular;
+             * leere Felder behalten den vorhandenen Wert. zugang.json entsteht
+             * mit 0600 (vw_zugang_speichern()). */
+            if ($vw_neuzugang === null) {
+                $vw_hinweise[] = vw_t('EINST.SICH_OHNE_ZUGANG');
+            } elseif (vw_zugang_speichern($vw_neuzugang['email'], $vw_neuzugang['passwort'],
+                                          $vw_neuzugang['spin'])) {
+                $vw_meldungen[] = vw_t('EINST.SICH_ZUGANG_UEBERNOMMEN');
+            } else {
+                $vw_fehler[] = vw_t('EINST.FEHLER_ZUGANG_SPEICHERN');
+                $vw_teil = true;
+            }
             /* Den Dienst nachziehen und SAGEN, was mit ihm geschehen ist.
              * Der Dienst liest die Konfiguration bei jedem Takt neu; ein
              * Neustart ist deshalb nur noetig, wenn er gerade laeuft und der
@@ -267,36 +368,58 @@ if ($vw_post && isset($_POST['vw_zurueck'])) {
     $vw_tab = 'tab-settings';
 }
 
-/* ---------------- Einstellungen speichern ---------------- */
+/* ---------------- Einstellungen speichern ----------------
+ *
+ * BEI EINER BEANSTANDUNG WIRD NICHTS GESPEICHERT (O2, Durchgang 02.10.2026;
+ * Entscheidungen 16 und 19) - auch nicht die Zugangsdaten im selben Zug. Bis
+ * 0.9.26 wurde vw_zugang_speichern() VOR der Abfrage auf Beanstandungen
+ * gerufen: intervall=abc zusammen mit einem neuen Konto speicherte das Konto,
+ * und die Kopfzeile behauptete "Es wurde nichts gespeichert" (gemessen F2).
+ * Die Eingaben kommen markiert zurueck (X-2, O3). Ein GELEERTES E-Mail-Feld
+ * loescht nichts mehr, es wird beanstandet; geloescht wird nur ueber den Haken
+ * "Zugangsdaten loeschen" (O10; bis 0.9.26 stand danach email='' in der Datei,
+ * und jedes weitere Speichern wurde abgewiesen, F16). Nichts wird still
+ * veraendert (O4/O5): keine entfernten Zeichen, eine Liste ist eine
+ * Beanstandung. */
 if ($vw_post && isset($_POST['speichern'])) {
     $vw_cfg = vw_config();
+    $vw_falsch = array();
 
     /* Die Grenzen kommen aus vw_regeln() - derselben Quelle, gegen die auch
      * die Sicherungsdatei und die Konfiguration beim Lesen geprueft werden.
      * Eine zweite Wahrheit ueber zulaessige Werte gibt es nicht. */
     $vw_regeln = vw_regeln();
-    foreach (array('intervall', 'takt_wartung', 'temp_min', 'temp_max', 'verlauf_tage',
-                   'wartezeit', 'wartezeit_endpunkt', 'heim_radius', 'abstand_abruf',
-                   'befehle_stunde', 'entprellung', 'abfahrt_vorlauf', 'abfahrt_temp')
-             as $vw_feld) {
-        $vw_wert = isset($_POST[$vw_feld]) && is_string($_POST[$vw_feld])
-                 ? trim((string) $_POST[$vw_feld]) : '';
+    $vw_zahlfelder = array('intervall', 'takt_wartung', 'temp_min', 'temp_max', 'verlauf_tage',
+                           'wartezeit', 'wartezeit_endpunkt', 'heim_radius', 'abstand_abruf',
+                           'befehle_stunde', 'entprellung', 'abfahrt_vorlauf', 'abfahrt_temp');
+    foreach ($vw_zahlfelder as $vw_feld) {
+        $vw_name = vw_t('EINST.L_' . strtoupper($vw_feld));
+        $vw_roh = isset($_POST[$vw_feld]) ? $_POST[$vw_feld] : '';
+        if (!is_string($vw_roh)) {
+            $vw_fehler[] = sprintf(vw_t('EINST.FEHLER_LISTE'), $vw_name);
+            $vw_falsch[] = $vw_feld;
+            continue;
+        }
+        $vw_wert = trim($vw_roh);
         if (!preg_match('/^[0-9]+$/', $vw_wert)) {
-            $vw_fehler[] = sprintf(vw_t('EINST.FEHLER_ZAHL'), vw_t('EINST.L_' . strtoupper($vw_feld)));
+            $vw_fehler[] = sprintf(vw_t('EINST.FEHLER_ZAHL'), $vw_name);
+            $vw_falsch[] = $vw_feld;
             continue;
         }
         list($vw_ok2, $vw_rein) = vw_wert_pruefen($vw_feld, $vw_wert);
         if (!$vw_ok2) {
             $vw_g = $vw_regeln[$vw_feld];
-            $vw_fehler[] = sprintf(vw_t('EINST.FEHLER_BEREICH'),
-                vw_t('EINST.L_' . strtoupper($vw_feld)), $vw_g[1], $vw_g[2]);
+            $vw_fehler[] = sprintf(vw_t('EINST.FEHLER_BEREICH'), $vw_name, $vw_g[1], $vw_g[2]);
+            $vw_falsch[] = $vw_feld;
             continue;
         }
         $vw_cfg[$vw_feld] = $vw_rein;
     }
-    if (isset($vw_cfg['temp_min'], $vw_cfg['temp_max'])
+    if (!in_array('temp_min', $vw_falsch, true) && !in_array('temp_max', $vw_falsch, true)
         && $vw_cfg['temp_min'] > $vw_cfg['temp_max']) {
         $vw_fehler[] = vw_t('EINST.FEHLER_TEMP_TAUSCH');
+        $vw_falsch[] = 'temp_min';
+        $vw_falsch[] = 'temp_max';
     }
 
     $vw_cfg['steuerung_ein'] = isset($_POST['steuerung_ein']) ? 1 : 0;
@@ -310,8 +433,14 @@ if ($vw_post && isset($_POST['speichern'])) {
      * gemacht. Eine 0/0 waere ein Punkt im Atlantik, und jede Entfernung
      * daraus waere eine Zahl, die richtig aussieht. */
     foreach (array('heim_breite', 'heim_laenge', 'empf_grenze') as $vw_feld) {
-        $vw_wert = isset($_POST[$vw_feld]) && is_string($_POST[$vw_feld])
-                 ? trim((string) $_POST[$vw_feld]) : '';
+        $vw_name = vw_t('EINST.L_' . strtoupper($vw_feld));
+        $vw_roh = isset($_POST[$vw_feld]) ? $_POST[$vw_feld] : '';
+        if (!is_string($vw_roh)) {
+            $vw_fehler[] = sprintf(vw_t('EINST.FEHLER_LISTE'), $vw_name);
+            $vw_falsch[] = $vw_feld;
+            continue;
+        }
+        $vw_wert = trim($vw_roh);
         if ($vw_wert === '') {
             $vw_cfg[$vw_feld] = '';
             continue;
@@ -319,75 +448,105 @@ if ($vw_post && isset($_POST['speichern'])) {
         list($vw_ok2, $vw_rein) = vw_wert_pruefen($vw_feld, $vw_wert);
         if (!$vw_ok2) {
             $vw_g = $vw_regeln[$vw_feld];
-            $vw_fehler[] = sprintf(vw_t('EINST.FEHLER_BEREICH'),
-                vw_t('EINST.L_' . strtoupper($vw_feld)), $vw_g[1], $vw_g[2]);
+            $vw_fehler[] = sprintf(vw_t('EINST.FEHLER_BEREICH'), $vw_name, $vw_g[1], $vw_g[2]);
+            $vw_falsch[] = $vw_feld;
             continue;
         }
         $vw_cfg[$vw_feld] = $vw_rein;
     }
     /* Ein Heimatort ist ein PAAR. Nur eine Haelfte ergibt keine Entfernung,
      * und ein Feld, das nichts bewirkt, ist schlimmer als ein fehlendes. */
-    if (($vw_cfg['heim_breite'] === '') !== ($vw_cfg['heim_laenge'] === '')) {
+    if (!in_array('heim_breite', $vw_falsch, true) && !in_array('heim_laenge', $vw_falsch, true)
+        && ($vw_cfg['heim_breite'] === '') !== ($vw_cfg['heim_laenge'] === '')) {
         $vw_fehler[] = vw_t('EINST.FEHLER_HEIM_PAAR');
+        $vw_falsch[] = 'heim_breite';
+        $vw_falsch[] = 'heim_laenge';
     }
     foreach (array('empf_thema', 'abfahrt_thema') as $vw_feld) {
-        $vw_wert = isset($_POST[$vw_feld]) && is_string($_POST[$vw_feld])
-                 ? trim((string) $_POST[$vw_feld]) : '';
-        list($vw_ok2, $vw_rein) = vw_wert_pruefen($vw_feld, $vw_wert);
+        $vw_name = vw_t('EINST.L_' . strtoupper($vw_feld));
+        $vw_roh = isset($_POST[$vw_feld]) ? $_POST[$vw_feld] : '';
+        if (!is_string($vw_roh)) {
+            $vw_fehler[] = sprintf(vw_t('EINST.FEHLER_LISTE'), $vw_name);
+            $vw_falsch[] = $vw_feld;
+            continue;
+        }
+        list($vw_ok2, $vw_rein) = vw_wert_pruefen($vw_feld, $vw_roh);
         if (!$vw_ok2) {
-            $vw_fehler[] = sprintf(vw_t('EINST.FEHLER_THEMA'),
-                vw_t('EINST.L_' . strtoupper($vw_feld)));
+            $vw_fehler[] = sprintf(vw_t('EINST.FEHLER_THEMA'), $vw_name);
+            $vw_falsch[] = $vw_feld;
             continue;
         }
         $vw_cfg[$vw_feld] = $vw_rein;
     }
     /* Eine Grenze ohne Thema wirkt nicht, ein Thema ohne Grenze auch nicht. */
-    if (($vw_cfg['empf_thema'] === '') !== ($vw_cfg['empf_grenze'] === '')) {
+    if (!in_array('empf_thema', $vw_falsch, true) && !in_array('empf_grenze', $vw_falsch, true)
+        && ($vw_cfg['empf_thema'] === '') !== ($vw_cfg['empf_grenze'] === '')) {
         $vw_fehler[] = vw_t('EINST.FEHLER_EMPF_PAAR');
+        $vw_falsch[] = 'empf_thema';
+        $vw_falsch[] = 'empf_grenze';
     }
-    if ($vw_cfg['abfahrt_ein'] && $vw_cfg['abfahrt_thema'] === '') {
+    if ($vw_cfg['abfahrt_ein'] && $vw_cfg['abfahrt_thema'] === ''
+        && !in_array('abfahrt_thema', $vw_falsch, true)) {
         $vw_fehler[] = vw_t('EINST.FEHLER_ABFAHRT_THEMA');
+        $vw_falsch[] = 'abfahrt_thema';
     }
 
-
-    /* Zugangsdaten: eigene Datei mit Rechten 0600. Ein leer zurueckgegebenes
-     * Passwortfeld loescht nichts - sonst stuende irgendwann ein leeres
-     * Passwort in der Datei, ohne dass es jemand merkt. */
-    $vw_email = trim(preg_replace('/[\x00-\x1F\x7F"\']/', '',
-        isset($_POST['email']) ? (string) $_POST['email'] : ''));
-    $vw_pw = isset($_POST['passwort']) ? (string) $_POST['passwort'] : '';
-    $vw_spin = isset($_POST['spin']) ? trim((string) $_POST['spin']) : '';
-    if (isset($_POST['zugang_loeschen'])) {
-        // Ausdruecklich gewollt: alles weg. Was im selben Absenden in den
-        // Feldern stand, wird verworfen - sonst waere unklar, ob Loeschen
-        // oder Eintragen gewonnen hat.
-        if (vw_zugang_loeschen()) {
-            $vw_meldungen[] = vw_t('EINST.ZUGANG_GELOESCHT');
-        } else {
-            $vw_fehler[] = vw_t('EINST.FEHLER_ZUGANG_LOESCHEN');
+    /* Zugangsdaten: dieselbe Pruefung wie beim Zurueckspielen
+     * (vw_zugang_pruefen()). Ein leer zurueckgegebenes Passwort- oder
+     * S-PIN-Feld loescht nichts. Mit dem Haken "Zugangsdaten loeschen" wird
+     * verworfen, was im selben Absenden in den Feldern stand - sonst waere
+     * unklar, ob Loeschen oder Eintragen gewonnen hat. */
+    $vw_loeschen = isset($_POST['zugang_loeschen']);
+    $vw_zf = null;
+    if (!$vw_loeschen) {
+        $vw_zf = vw_zugang_pruefen(isset($_POST['email']) ? $_POST['email'] : '',
+                                   isset($_POST['passwort']) ? $_POST['passwort'] : '',
+                                   isset($_POST['spin']) ? $_POST['spin'] : '');
+        foreach ($vw_zf['fehler'] as $vw_feld => $vw_text) {
+            $vw_fehler[] = $vw_text;
+            $vw_falsch[] = $vw_feld;
         }
-    } elseif ($vw_email !== '' && !filter_var($vw_email, FILTER_VALIDATE_EMAIL)) {
-        $vw_fehler[] = vw_t('EINST.FEHLER_EMAIL');
-    } elseif ($vw_spin !== '' && !preg_match('/^[0-9]{4}$/', $vw_spin)) {
-        // Ist die FORM eines Geheimnisses erkennbar falsch, wird beim Speichern
-        // abgewiesen, statt den Benutzer in eine Fehlermeldung des Anbieters
-        // laufen zu lassen.
-        $vw_fehler[] = vw_t('EINST.FEHLER_SPIN');
+        $vw_zg_alt = vw_zugang();
+        if (!isset($vw_zf['fehler']['email']) && $vw_zf['email'] === '' && $vw_zg_alt['email'] !== '') {
+            $vw_fehler[] = vw_t('EINST.FEHLER_EMAIL_LEER');
+            $vw_falsch[] = 'email';
+        }
+    }
+
+    if ($vw_fehler) {
+        /* NICHTS gespeichert. Passwort und S-PIN reisen nie mit. */
+        $vw_eingaben = vw_eingaben_sammeln('einst', array_merge($vw_zahlfelder,
+            array('heim_breite', 'heim_laenge', 'empf_grenze', 'empf_thema', 'abfahrt_thema',
+                  'email', 'steuerung_ein', 'zugriff_erzwingen', 'eingreifend_ein',
+                  'abfahrt_ein', 'empf_kleiner')), $vw_falsch);
     } else {
-        if (!vw_zugang_speichern($vw_email, $vw_pw, $vw_spin)) {
+        $vw_zug_ok = true;
+        if ($vw_loeschen) {
+            if (vw_zugang_loeschen()) {
+                $vw_meldungen[] = vw_t('EINST.ZUGANG_GELOESCHT');
+            } else {
+                $vw_fehler[] = vw_t('EINST.FEHLER_ZUGANG_LOESCHEN');
+                $vw_teil = true;
+                $vw_zug_ok = false;
+            }
+        } elseif (!vw_zugang_speichern($vw_zf['email'], $vw_zf['passwort'], $vw_zf['spin'])) {
             $vw_fehler[] = vw_t('EINST.FEHLER_ZUGANG_SPEICHERN');
+            $vw_zug_ok = false;
         }
-    }
-    $vw_zg = vw_zugang();
-    if ($vw_zg['laenge'] > 0 && $vw_zg['email'] === '') {
-        $vw_fehler[] = vw_t('EINST.WARN_PW_OHNE_KONTO');
-    }
-
-    if (!$vw_fehler) {
-        if (vw_config_speichern($vw_cfg)) {
-            $vw_meldungen[] = vw_t('EINST.GESPEICHERT');
-        } else {
-            $vw_fehler[] = sprintf(vw_t('EINST.FEHLER_SPEICHERN'), $vw_p['config']);
+        if ($vw_zug_ok) {
+            if (vw_config_speichern($vw_cfg)) {
+                $vw_meldungen[] = vw_t('EINST.GESPEICHERT');
+                /* Ein Hinweis, keine Beanstandung (O10): er verhindert das
+                 * Speichern nicht. */
+                $vw_zg = vw_zugang();
+                if ($vw_zg['laenge'] > 0 && $vw_zg['email'] === '') {
+                    $vw_hinweise[] = vw_t('EINST.WARN_PW_OHNE_KONTO');
+                }
+            } else {
+                $vw_fehler[] = sprintf(vw_t('EINST.FEHLER_SPEICHERN'), $vw_p['config']);
+                // Die Zugangsdaten sind zu diesem Zeitpunkt schon geschrieben.
+                $vw_teil = true;
+            }
         }
     }
     $vw_tab = 'tab-settings';
@@ -408,24 +567,45 @@ if ($vw_post && isset($_POST['speichern'])) {
  * ruehrt ausschliesslich die MQTT-Werte an. */
 if ($vw_post && isset($_POST['save_mqtt'])) {
     $vw_mcfg = vw_config();
+    $vw_falsch = array();
+    $vw_vorher = array((int) $vw_mcfg['mqtt_ein'], (int) $vw_mcfg['mqtt_retain'],
+                       (string) $vw_mcfg['mqtt_topic']);
     $vw_mcfg['mqtt_ein'] = isset($_POST['mqtt_ein']) ? 1 : 0;
     $vw_mcfg['mqtt_retain'] = isset($_POST['mqtt_retain']) ? 1 : 0;
-    $vw_mtopic = trim(preg_replace('/[\x00-\x1F\x7F"\']/', '',
-        (string) (isset($_POST['mqtt_topic']) && is_string($_POST['mqtt_topic'])
-                  ? $_POST['mqtt_topic'] : '')));
-    $vw_mtopic = trim($vw_mtopic, '/');
-    list($vw_mok, $vw_mrein) = vw_wert_pruefen('mqtt_topic', $vw_mtopic);
-    if (!$vw_mok) {
-        $vw_fehler[] = vw_t('EINST.FEHLER_TOPIC');
+    /* NICHTS STILL ENTFERNEN (O4, Durchgang 02.10.2026; Nr. 19). Bis 0.9.26
+     * wurden Anfuehrungszeichen und Steuerzeichen still entfernt und
+     * Schraegstriche am Rand abgeschnitten: aus vw"agen wurde vwagen, aus
+     * /vwagen/ ebenfalls, beide Male mit "gespeichert" (gemessen F4; auch
+     * MQTT-Bericht, Randbefund). Still bleibt nur Leerraum am Rand
+     * (vw_wert_pruefen()). Eine Liste ist eine Beanstandung. */
+    $vw_roh = isset($_POST['mqtt_topic']) ? $_POST['mqtt_topic'] : '';
+    if (!is_string($vw_roh)) {
+        $vw_fehler[] = sprintf(vw_t('EINST.FEHLER_LISTE'), vw_t('EINST.L_MQTT_TOPIC'));
+        $vw_falsch[] = 'mqtt_topic';
     } else {
-        $vw_mcfg['mqtt_topic'] = $vw_mrein;
-    }
-    if (!$vw_fehler) {
-        if (vw_config_speichern($vw_mcfg)) {
-            $vw_meldungen[] = vw_t('EINST.GESPEICHERT');
+        list($vw_mok, $vw_mrein) = vw_wert_pruefen('mqtt_topic', $vw_roh);
+        if (!$vw_mok) {
+            $vw_fehler[] = vw_t('EINST.FEHLER_TOPIC');
+            $vw_falsch[] = 'mqtt_topic';
         } else {
-            $vw_fehler[] = sprintf(vw_t('EINST.FEHLER_SPEICHERN'), $vw_p['config']);
+            $vw_mcfg['mqtt_topic'] = $vw_mrein;
         }
+    }
+    if ($vw_fehler) {
+        $vw_eingaben = vw_eingaben_sammeln('mqtt', array('mqtt_ein', 'mqtt_topic', 'mqtt_retain'),
+                                           $vw_falsch);
+    } elseif (vw_config_speichern($vw_mcfg)) {
+        $vw_meldungen[] = vw_t('EINST.GESPEICHERT');
+        /* M6 (Durchgang 02.10.2026): lagen bisher retained Werte unter einem
+         * Praefix, das jetzt nicht mehr retained beschickt wird, raeumt der
+         * Dienst sie am Broker ab (mit Nachlesen) und merkt sie bis dahin vor -
+         * auch fuer die Deinstallation. Die Seite sagt es. */
+        if ($vw_vorher[0] && $vw_vorher[1]
+            && (!$vw_mcfg['mqtt_ein'] || !$vw_mcfg['mqtt_retain'] || $vw_mcfg['mqtt_topic'] !== $vw_vorher[2])) {
+            $vw_meldungen[] = sprintf(vw_t('MQTT.ABRAEUMEN_VORGEMERKT'), vw_e($vw_vorher[2]));
+        }
+    } else {
+        $vw_fehler[] = sprintf(vw_t('EINST.FEHLER_SPEICHERN'), $vw_p['config']);
     }
     $vw_tab = 'tab-mqtt';
 }
@@ -437,7 +617,8 @@ if ($vw_post && isset($_POST['dienst'])) {
     if ($vw_ok) {
         $vw_meldungen[] = vw_t('EINST.DIENST_' . strtoupper($vw_befehl)) . ' ' . vw_e($vw_ausgabe);
     } else {
-        $vw_fehler[] = vw_e($vw_ausgabe);
+        // O9: eigene Ueberschrift - hier gibt es nichts zu berichtigen.
+        $vw_stoerungen[] = vw_e($vw_ausgabe);
     }
     $vw_tab = 'tab-settings';
 }
@@ -478,17 +659,76 @@ if ($vw_post && isset($_POST['log_leeren'])) {
 
 /* ---------------- Aktionen des Reiters Test ---------------- */
 if ($vw_post && isset($_POST['test'])) {
-    list($vw_stand, $vw_text) = vw_test_aktion((string) $_POST['test']);
+    list($vw_stand, $vw_text) = vw_test_aktion(is_string($_POST['test']) ? $_POST['test'] : '');
     if ($vw_stand === 1) {
         $vw_meldungen[] = vw_e($vw_text);
+    } elseif ($vw_stand === 2) {
+        // O9: eingereiht, Ergebnis unbekannt - eigene Ueberschrift.
+        $vw_unklar[] = vw_e($vw_text);
     } else {
-        $vw_fehler[] = vw_e($vw_text);
+        $vw_stoerungen[] = vw_e($vw_text);
     }
     $vw_tab = 'tab-test';
 }
 if ($vw_post && isset($_POST['selbsttest'])) {
     $vw_testausgabe = vw_selbsttest();
     $vw_tab = 'tab-test';
+}
+
+/* ==================================================================
+ * PRG: JEDER POST ENDET MIT EINER UMLEITUNG (O1, Durchgang 02.10.2026)
+ * ==================================================================
+ *
+ * Regeln/04, Entscheidung 19. Bis 0.9.26 wurde nach jedem POST unmittelbar
+ * gerendert (gemessen F1: HTTP 200 ohne Location): F5 nach einem Schaltknopf
+ * im Reiter Test legte eine zweite Befehlsdatei an (F7), F5 nach "Token neu"
+ * zeigte die Angriffswarnung des Wachpostens (F6). Was der Handler zu sagen
+ * hat, reist in der Einmalmeldung (vw_einmal_*). Die Downloads (Vorlagen,
+ * Sicherung) haben ihre Datei oben schon geliefert. Laesst sich die
+ * Einmalmeldung nicht schreiben, wird wie bisher direkt gezeigt - eine
+ * verlorene Meldung waere schlimmer als ein F5-Risiko. */
+if ($vw_ist_post) {
+    $vw_inhalt = array('tab' => $vw_tab, 'meldungen' => $vw_meldungen,
+                       'fehler' => $vw_fehler, 'stoerungen' => $vw_stoerungen,
+                       'unklar' => $vw_unklar, 'hinweise' => $vw_hinweise,
+                       'lagekasten' => $vw_lagekasten, 'teil' => $vw_teil,
+                       'testausgabe' => $vw_testausgabe, 'eingaben' => $vw_eingaben);
+    if (vw_einmal_schreiben($vw_inhalt)) {
+        header('Location: index.php?form=' . rawurlencode(preg_replace('/^tab-/', '', $vw_tab)), true, 303);
+        exit;
+    }
+} else {
+    $vw_fl = vw_einmal_lesen();
+    if ($vw_fl) {
+        if (isset($vw_fl['tab']) && is_string($vw_fl['tab']) && preg_match($vw_muster, $vw_fl['tab'])) {
+            $vw_tab = $vw_fl['tab'];
+        }
+        foreach (array('meldungen', 'fehler', 'stoerungen', 'unklar', 'hinweise') as $vw_fk) {
+            if (isset($vw_fl[$vw_fk]) && is_array($vw_fl[$vw_fk])) {
+                foreach ($vw_fl[$vw_fk] as $vw_ft) {
+                    if (is_string($vw_ft)) {
+                        ${'vw_' . $vw_fk}[] = $vw_ft;
+                    }
+                }
+            }
+        }
+        if (isset($vw_fl['lagekasten']) && is_array($vw_fl['lagekasten'])) {
+            foreach ($vw_fl['lagekasten'] as $vw_lk) {
+                if (is_array($vw_lk) && count($vw_lk) === 2 && is_string($vw_lk[0]) && is_string($vw_lk[1])
+                    && in_array($vw_lk[0], array('sm-warnung', 'sm-fehler'), true)) {
+                    $vw_lagekasten[] = $vw_lk;
+                }
+            }
+        }
+        $vw_teil = !empty($vw_fl['teil']);
+        if (isset($vw_fl['testausgabe']) && is_string($vw_fl['testausgabe'])) {
+            $vw_testausgabe = $vw_fl['testausgabe'];
+        }
+        if (isset($vw_fl['eingaben']['formular'], $vw_fl['eingaben']['werte'], $vw_fl['eingaben']['falsch'])
+            && is_array($vw_fl['eingaben']['werte']) && is_array($vw_fl['eingaben']['falsch'])) {
+            $vw_eingaben = $vw_fl['eingaben'];
+        }
+    }
 }
 
 /* ==================================================================
@@ -600,15 +840,40 @@ if ($vw_rahmen) {
     background-repeat: no-repeat; background-position: right 10px center;
     padding-right: 32px; cursor: pointer; }
 .sm-tbl select { padding-right: 28px; background-position: right 7px center; }
+/* X-2 (Regeln/04, Durchgang 02.10.2026): ein beanstandetes Feld ist rot
+   gerahmt und traegt aria-invalid. */
+.sm-wrap .sm-beanstandet { border: 2px solid #c62828 !important; background: #fff5f5 !important; }
+.sm-wrap input[type=checkbox].sm-beanstandet { outline: 2px solid #c62828; outline-offset: 2px; }
 
 </style>
 <div class="sm-wrap">
 
+<?php foreach ($vw_lagekasten as $vw_lk) { ?>
+<div class="<?= vw_e($vw_lk[0]) ?>"><?= $vw_lk[1] ?></div>
+<?php } ?>
 <?php foreach ($vw_meldungen as $vw_m) { ?>
 <div class="sm-hinweis"><?= $vw_m ?></div>
 <?php } ?>
+<?php foreach ($vw_hinweise as $vw_h) { ?>
+<div class="sm-warnung"><?= $vw_h ?></div>
+<?php } ?>
+<?php if ($vw_unklar) { ?>
+<div class="sm-warnung"><b><?= vw_e(vw_t('ALLG.ERGEBNIS_UNBEKANNT')) ?></b>
+<ul style="margin:6px 0 0 18px;padding:0;">
+<?php foreach ($vw_unklar as $vw_u) { ?><li><?= $vw_u ?></li><?php } ?>
+</ul></div>
+<?php } ?>
+<?php if ($vw_stoerungen) { ?>
+<div class="sm-fehler"><b><?= vw_e(vw_t('ALLG.STOERUNG')) ?></b>
+<ul style="margin:6px 0 0 18px;padding:0;">
+<?php foreach ($vw_stoerungen as $vw_s) { ?><li><?= $vw_s ?></li><?php } ?>
+</ul></div>
+<?php } ?>
 <?php if ($vw_fehler) { ?>
-<div class="sm-fehler"><b><?= vw_e(vw_t('ALLG.BEANSTANDUNG')) ?></b>
+<!-- Zwei Kopftexte (O2/O10, Durchgang 02.10.2026): seit Nr. 16 wird bei einer
+     Beanstandung nichts gespeichert; "nur zum Teil" gilt nur, wenn danach
+     etwas anderes scheiterte ($vw_teil). -->
+<div class="sm-fehler"><b><?= vw_e(vw_t($vw_teil ? 'ALLG.BEANSTANDUNG_TEIL' : 'ALLG.BEANSTANDUNG')) ?></b>
 <ul style="margin:6px 0 0 18px;padding:0;">
 <?php foreach ($vw_fehler as $vw_f) { ?><li><?= $vw_f ?></li><?php } ?>
 </ul></div>
@@ -657,10 +922,8 @@ if ($vw_rahmen) {
  * braucht seinen Satz. Ein stiller Rueckgriff auf die Zweitschrift ist eine
  * Auskunft, die der Anwender bekommen muss: sie heisst, dass die lebende
  * Datei fehlte oder unbrauchbar war. */
-if ($vw_lage['lage'] !== 'ok') { ?>
-<div class="sm-warnung"><b><?= vw_e(vw_t('ALLG.KONFIGLAGE')) ?></b>
-<?= vw_t('ALLG.KONFIG_' . strtoupper($vw_lage['lage'])) ?></div>
-<?php }
+/* Der Kasten zur Lage steht seit dem Durchgang 02.10.2026 ganz oben und
+ * kommt aus der ERSTEN Lage dieses Seitenaufbaus (O8, $vw_lagekasten). */
 if ($vw_lage['abgewiesen']) { ?>
 <div class="sm-warnung"><b><?= vw_e(vw_t('ALLG.KONFIG_ABGEWIESEN')) ?></b>
 <?php foreach ($vw_lage['abgewiesen'] as $vw_k => $vw_v) { ?>
@@ -772,17 +1035,17 @@ $vw_beschriftung = array(
 <div class="sm-warnung"><?= vw_t('EINST.KONTO_ERKLAERUNG') ?></div>
 <div class="sm-feld">
   <label for="email"><?= vw_e(vw_t('EINST.L_EMAIL')) ?></label>
-  <input data-role="none" type="text" id="email" name="email" value="<?= vw_e($vw_zg['email']) ?>" placeholder="name@example.com">
+  <input data-role="none" type="text" id="email" name="email" value="<?= vw_e(vw_fw('einst', 'email', $vw_zg['email'])) ?>"<?= vw_fm('email') ?> placeholder="name@example.com">
   <div class="sm-hilfe"><?= vw_t('EINST.H_EMAIL') ?></div>
 </div>
 <div class="sm-feld">
   <label for="passwort"><?= vw_e(vw_t('EINST.L_PASSWORT')) ?></label>
-  <input data-role="none" type="password" id="passwort" name="passwort" value="" placeholder="<?= $vw_zg['laenge'] > 0 ? vw_e(sprintf(vw_t('EINST.PW_GESETZT'), $vw_zg['laenge'])) : vw_e(vw_t('EINST.PW_LEER')) ?>">
+  <input data-role="none" type="password" id="passwort" name="passwort" value=""<?= vw_fm('passwort') ?> placeholder="<?= $vw_zg['laenge'] > 0 ? vw_e(sprintf(vw_t('EINST.PW_GESETZT'), $vw_zg['laenge'])) : vw_e(vw_t('EINST.PW_LEER')) ?>">
   <div class="sm-hilfe"><?= vw_t('EINST.H_PASSWORT') ?></div>
 </div>
 <div class="sm-feld">
   <label for="spin"><?= vw_e(vw_t('EINST.L_SPIN')) ?></label>
-  <input data-role="none" type="password" id="spin" name="spin" value="" maxlength="4" placeholder="<?= $vw_zg['spin_laenge'] > 0 ? vw_e(vw_t('EINST.SPIN_GESETZT')) : vw_e(vw_t('EINST.SPIN_LEER')) ?>">
+  <input data-role="none" type="password" id="spin" name="spin" value=""<?= vw_fm('spin') ?> maxlength="4" placeholder="<?= $vw_zg['spin_laenge'] > 0 ? vw_e(vw_t('EINST.SPIN_GESETZT')) : vw_e(vw_t('EINST.SPIN_LEER')) ?>">
   <div class="sm-hilfe"><?= vw_t('EINST.H_SPIN') ?></div>
 </div>
 <div class="sm-hinweis"><?= vw_t('EINST.SITZUNG_ERKLAERUNG') ?></div>
@@ -800,17 +1063,17 @@ $vw_beschriftung = array(
 <div class="sm-warnung"><?= vw_t('EINST.TAKT_WARNUNG') ?></div>
 <div class="sm-feld">
   <label for="intervall"><?= vw_e(vw_t('EINST.L_INTERVALL')) ?></label>
-  <input data-role="none" type="number" id="intervall" name="intervall" value="<?= (int) $vw_cfg['intervall'] ?>" min="180" max="3600">
+  <input data-role="none" type="<?= vw_ftyp('intervall') ?>" id="intervall" name="intervall" value="<?= vw_e(vw_fw('einst', 'intervall', (int) $vw_cfg['intervall'])) ?>"<?= vw_fm('intervall') ?> min="180" max="3600">
   <div class="sm-hilfe"><?= vw_t('EINST.H_INTERVALL') ?></div>
 </div>
 <div class="sm-feld">
   <label for="takt_wartung"><?= vw_e(vw_t('EINST.L_TAKT_WARTUNG')) ?></label>
-  <input data-role="none" type="number" id="takt_wartung" name="takt_wartung" value="<?= (int) $vw_cfg['takt_wartung'] ?>" min="1" max="240">
+  <input data-role="none" type="<?= vw_ftyp('takt_wartung') ?>" id="takt_wartung" name="takt_wartung" value="<?= vw_e(vw_fw('einst', 'takt_wartung', (int) $vw_cfg['takt_wartung'])) ?>"<?= vw_fm('takt_wartung') ?> min="1" max="240">
   <div class="sm-hilfe"><?= vw_t('EINST.H_TAKT_WARTUNG') ?></div>
 </div>
 <div class="sm-feld">
   <label for="verlauf_tage"><?= vw_e(vw_t('EINST.L_VERLAUF_TAGE')) ?></label>
-  <input data-role="none" type="number" id="verlauf_tage" name="verlauf_tage" value="<?= (int) $vw_cfg['verlauf_tage'] ?>" min="1" max="90">
+  <input data-role="none" type="<?= vw_ftyp('verlauf_tage') ?>" id="verlauf_tage" name="verlauf_tage" value="<?= vw_e(vw_fw('einst', 'verlauf_tage', (int) $vw_cfg['verlauf_tage'])) ?>"<?= vw_fm('verlauf_tage') ?> min="1" max="90">
   <div class="sm-hilfe"><?= vw_t('EINST.H_VERLAUF_TAGE') ?></div>
 </div>
 
@@ -818,34 +1081,34 @@ $vw_beschriftung = array(
 <div class="sm-warnung"><?= vw_t('EINST.STEUERUNG_ERKLAERUNG') ?></div>
 <div class="sm-feld">
   <label style="display:inline-flex;align-items:center;gap:8px;">
-    <input data-role="none" type="checkbox" name="steuerung_ein" value="1" <?= !empty($vw_cfg['steuerung_ein']) ? 'checked' : '' ?>>
+    <input data-role="none" type="checkbox" name="steuerung_ein" value="1" <?= vw_fh('einst', 'steuerung_ein', !empty($vw_cfg['steuerung_ein'])) ? 'checked' : '' ?><?= vw_fm('steuerung_ein') ?>>
     <?= vw_e(vw_t('EINST.L_STEUERUNG_EIN')) ?>
   </label>
 </div>
 <div class="sm-feld">
   <label for="temp_min"><?= vw_e(vw_t('EINST.L_TEMP_MIN')) ?></label>
-  <input data-role="none" type="number" id="temp_min" name="temp_min" value="<?= (int) $vw_cfg['temp_min'] ?>" min="10" max="30">
+  <input data-role="none" type="<?= vw_ftyp('temp_min') ?>" id="temp_min" name="temp_min" value="<?= vw_e(vw_fw('einst', 'temp_min', (int) $vw_cfg['temp_min'])) ?>"<?= vw_fm('temp_min') ?> min="10" max="30">
 </div>
 <div class="sm-feld">
   <label for="temp_max"><?= vw_e(vw_t('EINST.L_TEMP_MAX')) ?></label>
-  <input data-role="none" type="number" id="temp_max" name="temp_max" value="<?= (int) $vw_cfg['temp_max'] ?>" min="10" max="30">
+  <input data-role="none" type="<?= vw_ftyp('temp_max') ?>" id="temp_max" name="temp_max" value="<?= vw_e(vw_fw('einst', 'temp_max', (int) $vw_cfg['temp_max'])) ?>"<?= vw_fm('temp_max') ?> min="10" max="30">
   <div class="sm-hilfe"><?= vw_t('EINST.H_TEMP') ?></div>
 </div>
 <div class="sm-feld">
   <label style="display:inline-flex;align-items:center;gap:8px;">
-    <input data-role="none" type="checkbox" name="zugriff_erzwingen" value="1" <?= !empty($vw_cfg['zugriff_erzwingen']) ? 'checked' : '' ?>>
+    <input data-role="none" type="checkbox" name="zugriff_erzwingen" value="1" <?= vw_fh('einst', 'zugriff_erzwingen', !empty($vw_cfg['zugriff_erzwingen'])) ? 'checked' : '' ?><?= vw_fm('zugriff_erzwingen') ?>>
     <?= vw_e(vw_t('EINST.L_ZUGRIFF_ERZWINGEN')) ?>
   </label>
   <div class="sm-hilfe"><?= vw_t('EINST.H_ZUGRIFF_ERZWINGEN') ?></div>
 </div>
 <div class="sm-feld">
   <label for="wartezeit"><?= vw_e(vw_t('EINST.L_WARTEZEIT')) ?></label>
-  <input data-role="none" type="number" id="wartezeit" name="wartezeit" value="<?= (int) $vw_cfg['wartezeit'] ?>" min="0" max="30">
+  <input data-role="none" type="<?= vw_ftyp('wartezeit') ?>" id="wartezeit" name="wartezeit" value="<?= vw_e(vw_fw('einst', 'wartezeit', (int) $vw_cfg['wartezeit'])) ?>"<?= vw_fm('wartezeit') ?> min="0" max="30">
   <div class="sm-hilfe"><?= vw_t('EINST.H_WARTEZEIT') ?></div>
 </div>
 <div class="sm-feld">
   <label for="wartezeit_endpunkt"><?= vw_e(vw_t('EINST.L_WARTEZEIT_ENDPUNKT')) ?></label>
-  <input data-role="none" type="number" id="wartezeit_endpunkt" name="wartezeit_endpunkt" value="<?= (int) $vw_cfg['wartezeit_endpunkt'] ?>" min="0" max="15">
+  <input data-role="none" type="<?= vw_ftyp('wartezeit_endpunkt') ?>" id="wartezeit_endpunkt" name="wartezeit_endpunkt" value="<?= vw_e(vw_fw('einst', 'wartezeit_endpunkt', (int) $vw_cfg['wartezeit_endpunkt'])) ?>"<?= vw_fm('wartezeit_endpunkt') ?> min="0" max="15">
   <div class="sm-hilfe"><?= vw_t('EINST.H_WARTEZEIT_ENDPUNKT') ?></div>
 </div>
 
@@ -853,7 +1116,7 @@ $vw_beschriftung = array(
 <div class="sm-warnung"><?= vw_t('EINST.EINGREIFEND_ERKLAERUNG') ?></div>
 <div class="sm-feld">
   <label style="display:inline-flex;align-items:center;gap:8px;">
-    <input data-role="none" type="checkbox" name="eingreifend_ein" value="1" <?= !empty($vw_cfg['eingreifend_ein']) ? 'checked' : '' ?>>
+    <input data-role="none" type="checkbox" name="eingreifend_ein" value="1" <?= vw_fh('einst', 'eingreifend_ein', !empty($vw_cfg['eingreifend_ein'])) ? 'checked' : '' ?><?= vw_fm('eingreifend_ein') ?>>
     <?= vw_e(vw_t('EINST.L_EINGREIFEND_EIN')) ?>
   </label>
   <div class="sm-hilfe"><?= vw_t('EINST.H_EINGREIFEND_EIN') ?></div>
@@ -866,17 +1129,17 @@ $vw_beschriftung = array(
 <div class="sm-warnung"><?= vw_t('EINST.BREMSE_ERKLAERUNG') ?></div>
 <div class="sm-feld">
   <label for="abstand_abruf"><?= vw_e(vw_t('EINST.L_ABSTAND_ABRUF')) ?></label>
-  <input data-role="none" type="number" id="abstand_abruf" name="abstand_abruf" value="<?= (int) $vw_cfg['abstand_abruf'] ?>" min="0" max="3600">
+  <input data-role="none" type="<?= vw_ftyp('abstand_abruf') ?>" id="abstand_abruf" name="abstand_abruf" value="<?= vw_e(vw_fw('einst', 'abstand_abruf', (int) $vw_cfg['abstand_abruf'])) ?>"<?= vw_fm('abstand_abruf') ?> min="0" max="3600">
   <div class="sm-hilfe"><?= vw_t('EINST.H_ABSTAND_ABRUF') ?></div>
 </div>
 <div class="sm-feld">
   <label for="befehle_stunde"><?= vw_e(vw_t('EINST.L_BEFEHLE_STUNDE')) ?></label>
-  <input data-role="none" type="number" id="befehle_stunde" name="befehle_stunde" value="<?= (int) $vw_cfg['befehle_stunde'] ?>" min="1" max="240">
+  <input data-role="none" type="<?= vw_ftyp('befehle_stunde') ?>" id="befehle_stunde" name="befehle_stunde" value="<?= vw_e(vw_fw('einst', 'befehle_stunde', (int) $vw_cfg['befehle_stunde'])) ?>"<?= vw_fm('befehle_stunde') ?> min="1" max="240">
   <div class="sm-hilfe"><?= vw_t('EINST.H_BEFEHLE_STUNDE') ?></div>
 </div>
 <div class="sm-feld">
   <label for="entprellung"><?= vw_e(vw_t('EINST.L_ENTPRELLUNG')) ?></label>
-  <input data-role="none" type="number" id="entprellung" name="entprellung" value="<?= (int) $vw_cfg['entprellung'] ?>" min="0" max="600">
+  <input data-role="none" type="<?= vw_ftyp('entprellung') ?>" id="entprellung" name="entprellung" value="<?= vw_e(vw_fw('einst', 'entprellung', (int) $vw_cfg['entprellung'])) ?>"<?= vw_fm('entprellung') ?> min="0" max="600">
   <div class="sm-hilfe"><?= vw_t('EINST.H_ENTPRELLUNG') ?></div>
 </div>
 
@@ -884,16 +1147,16 @@ $vw_beschriftung = array(
 <div class="sm-hinweis"><?= vw_t('EINST.HEIMAT_ERKLAERUNG') ?></div>
 <div class="sm-feld">
   <label for="heim_breite"><?= vw_e(vw_t('EINST.L_HEIM_BREITE')) ?></label>
-  <input data-role="none" type="text" id="heim_breite" name="heim_breite" value="<?= vw_e($vw_cfg['heim_breite']) ?>" placeholder="51.318339">
+  <input data-role="none" type="text" id="heim_breite" name="heim_breite" value="<?= vw_e(vw_fw('einst', 'heim_breite', $vw_cfg['heim_breite'])) ?>"<?= vw_fm('heim_breite') ?> placeholder="51.318339">
 </div>
 <div class="sm-feld">
   <label for="heim_laenge"><?= vw_e(vw_t('EINST.L_HEIM_LAENGE')) ?></label>
-  <input data-role="none" type="text" id="heim_laenge" name="heim_laenge" value="<?= vw_e($vw_cfg['heim_laenge']) ?>" placeholder="9.489601">
+  <input data-role="none" type="text" id="heim_laenge" name="heim_laenge" value="<?= vw_e(vw_fw('einst', 'heim_laenge', $vw_cfg['heim_laenge'])) ?>"<?= vw_fm('heim_laenge') ?> placeholder="9.489601">
   <div class="sm-hilfe"><?= vw_t('EINST.H_HEIM_KOORDINATEN') ?></div>
 </div>
 <div class="sm-feld">
   <label for="heim_radius"><?= vw_e(vw_t('EINST.L_HEIM_RADIUS')) ?></label>
-  <input data-role="none" type="number" id="heim_radius" name="heim_radius" value="<?= (int) $vw_cfg['heim_radius'] ?>" min="10" max="5000">
+  <input data-role="none" type="<?= vw_ftyp('heim_radius') ?>" id="heim_radius" name="heim_radius" value="<?= vw_e(vw_fw('einst', 'heim_radius', (int) $vw_cfg['heim_radius'])) ?>"<?= vw_fm('heim_radius') ?> min="10" max="5000">
   <div class="sm-hilfe"><?= vw_t('EINST.H_HEIM_RADIUS') ?></div>
 </div>
 
@@ -904,16 +1167,16 @@ $vw_beschriftung = array(
 <?php } ?>
 <div class="sm-feld">
   <label for="empf_thema"><?= vw_e(vw_t('EINST.L_EMPF_THEMA')) ?></label>
-  <input data-role="none" type="text" id="empf_thema" name="empf_thema" value="<?= vw_e($vw_cfg['empf_thema']) ?>" placeholder="awattar/jetzt/preis">
+  <input data-role="none" type="text" id="empf_thema" name="empf_thema" value="<?= vw_e(vw_fw('einst', 'empf_thema', $vw_cfg['empf_thema'])) ?>"<?= vw_fm('empf_thema') ?> placeholder="awattar/jetzt/preis">
   <div class="sm-hilfe"><?= vw_t('EINST.H_EMPF_THEMA') ?></div>
 </div>
 <div class="sm-feld">
   <label for="empf_grenze"><?= vw_e(vw_t('EINST.L_EMPF_GRENZE')) ?></label>
-  <input data-role="none" type="text" id="empf_grenze" name="empf_grenze" value="<?= vw_e($vw_cfg['empf_grenze']) ?>" placeholder="12.5">
+  <input data-role="none" type="text" id="empf_grenze" name="empf_grenze" value="<?= vw_e(vw_fw('einst', 'empf_grenze', $vw_cfg['empf_grenze'])) ?>"<?= vw_fm('empf_grenze') ?> placeholder="12.5">
 </div>
 <div class="sm-feld">
   <label style="display:inline-flex;align-items:center;gap:8px;">
-    <input data-role="none" type="checkbox" name="empf_kleiner" value="1" <?= !empty($vw_cfg['empf_kleiner']) ? 'checked' : '' ?>>
+    <input data-role="none" type="checkbox" name="empf_kleiner" value="1" <?= vw_fh('einst', 'empf_kleiner', !empty($vw_cfg['empf_kleiner'])) ? 'checked' : '' ?><?= vw_fm('empf_kleiner') ?>>
     <?= vw_e(vw_t('EINST.L_EMPF_KLEINER')) ?>
   </label>
   <div class="sm-hilfe"><?= vw_t('EINST.H_EMPF_KLEINER') ?></div>
@@ -923,22 +1186,22 @@ $vw_beschriftung = array(
 <div class="sm-hinweis"><?= vw_t('EINST.ABFAHRT_ERKLAERUNG') ?></div>
 <div class="sm-feld">
   <label style="display:inline-flex;align-items:center;gap:8px;">
-    <input data-role="none" type="checkbox" name="abfahrt_ein" value="1" <?= !empty($vw_cfg['abfahrt_ein']) ? 'checked' : '' ?>>
+    <input data-role="none" type="checkbox" name="abfahrt_ein" value="1" <?= vw_fh('einst', 'abfahrt_ein', !empty($vw_cfg['abfahrt_ein'])) ? 'checked' : '' ?><?= vw_fm('abfahrt_ein') ?>>
     <?= vw_e(vw_t('EINST.L_ABFAHRT_EIN')) ?>
   </label>
 </div>
 <div class="sm-feld">
   <label for="abfahrt_thema"><?= vw_e(vw_t('EINST.L_ABFAHRT_THEMA')) ?></label>
-  <input data-role="none" type="text" id="abfahrt_thema" name="abfahrt_thema" value="<?= vw_e($vw_cfg['abfahrt_thema']) ?>" placeholder="abfahrt/ABFAHRT_IN">
+  <input data-role="none" type="text" id="abfahrt_thema" name="abfahrt_thema" value="<?= vw_e(vw_fw('einst', 'abfahrt_thema', $vw_cfg['abfahrt_thema'])) ?>"<?= vw_fm('abfahrt_thema') ?> placeholder="abfahrt/ABFAHRT_IN">
   <div class="sm-hilfe"><?= vw_t('EINST.H_ABFAHRT_THEMA') ?></div>
 </div>
 <div class="sm-feld">
   <label for="abfahrt_vorlauf"><?= vw_e(vw_t('EINST.L_ABFAHRT_VORLAUF')) ?></label>
-  <input data-role="none" type="number" id="abfahrt_vorlauf" name="abfahrt_vorlauf" value="<?= (int) $vw_cfg['abfahrt_vorlauf'] ?>" min="5" max="180">
+  <input data-role="none" type="<?= vw_ftyp('abfahrt_vorlauf') ?>" id="abfahrt_vorlauf" name="abfahrt_vorlauf" value="<?= vw_e(vw_fw('einst', 'abfahrt_vorlauf', (int) $vw_cfg['abfahrt_vorlauf'])) ?>"<?= vw_fm('abfahrt_vorlauf') ?> min="5" max="180">
 </div>
 <div class="sm-feld">
   <label for="abfahrt_temp"><?= vw_e(vw_t('EINST.L_ABFAHRT_TEMP')) ?></label>
-  <input data-role="none" type="number" id="abfahrt_temp" name="abfahrt_temp" value="<?= (int) $vw_cfg['abfahrt_temp'] ?>" min="10" max="30">
+  <input data-role="none" type="<?= vw_ftyp('abfahrt_temp') ?>" id="abfahrt_temp" name="abfahrt_temp" value="<?= vw_e(vw_fw('einst', 'abfahrt_temp', (int) $vw_cfg['abfahrt_temp'])) ?>"<?= vw_fm('abfahrt_temp') ?> min="10" max="30">
   <div class="sm-hilfe"><?= vw_t('EINST.H_ABFAHRT_TEMP') ?></div>
 </div>
 
@@ -1003,18 +1266,18 @@ $vw_beschriftung = array(
 <?= vw_formfeld($vw_cfg) ?>
 <div class="sm-feld">
   <label style="display:inline-flex;align-items:center;gap:8px;">
-    <input data-role="none" type="checkbox" name="mqtt_ein" value="1" <?= !empty($vw_cfg['mqtt_ein']) ? 'checked' : '' ?>>
+    <input data-role="none" type="checkbox" name="mqtt_ein" value="1" <?= vw_fh('mqtt', 'mqtt_ein', !empty($vw_cfg['mqtt_ein'])) ? 'checked' : '' ?>>
     <?= vw_e(vw_t('EINST.L_MQTT_EIN')) ?>
   </label>
 </div>
 <div class="sm-feld">
   <label for="mqtt_topic"><?= vw_e(vw_t('EINST.L_MQTT_TOPIC')) ?></label>
-  <input data-role="none" type="text" id="mqtt_topic" name="mqtt_topic" value="<?= vw_e($vw_cfg['mqtt_topic']) ?>" placeholder="volkswagen">
+  <input data-role="none" type="text" id="mqtt_topic" name="mqtt_topic" value="<?= vw_e(vw_fw('mqtt', 'mqtt_topic', $vw_cfg['mqtt_topic'])) ?>"<?= vw_fm('mqtt_topic') ?> placeholder="volkswagen">
   <div class="sm-hilfe"><?= vw_t('EINST.H_MQTT_TOPIC') ?></div>
 </div>
 <div class="sm-feld">
   <label style="display:inline-flex;align-items:center;gap:8px;">
-    <input data-role="none" type="checkbox" name="mqtt_retain" value="1" <?= !empty($vw_cfg['mqtt_retain']) ? 'checked' : '' ?>>
+    <input data-role="none" type="checkbox" name="mqtt_retain" value="1" <?= vw_fh('mqtt', 'mqtt_retain', !empty($vw_cfg['mqtt_retain'])) ? 'checked' : '' ?>>
     <?= vw_e(vw_t('EINST.L_MQTT_RETAIN')) ?>
   </label>
   <div class="sm-hilfe"><?= vw_t('EINST.H_MQTT_RETAIN') ?></div>
@@ -1084,7 +1347,8 @@ $vw_text_t = count($vw_themen) - $vw_zahl_t;
 <?php foreach ($vw_themen as $vw_thema => $vw_info) { ?>
 <tr><td><span class="sm-mono"><?= vw_e($vw_cfg['mqtt_topic'] . '/' . $vw_thema) ?></span></td>
     <td><?= empty($vw_info['text']) ? $vw_info['e'] : vw_e(vw_t('MQTT.T_TEXTWERT')) ?></td>
-    <td><?= vw_e(vw_t(empty($vw_info['r']) ? 'MQTT.T_FLUECHTIG' : 'MQTT.T_BEHALTEN')) ?></td>
+    <td><?= vw_e(vw_t(empty($vw_info['r']) ? 'MQTT.T_FLUECHTIG'
+        : (!empty($vw_cfg['mqtt_retain']) ? 'MQTT.T_BEHALTEN' : 'MQTT.T_BEHALTEN_AUS'))) ?></td>
     <td><?= vw_t($vw_info['s']) ?></td></tr>
 <?php } ?>
 </table>
@@ -1468,7 +1732,7 @@ function vw_bausteine()
 <p class="sm-hilfe"><?= vw_t('TEST.EINLEITUNG') ?></p>
 <table class="sm-tbl">
 <tr><th style="width:36px;">&nbsp;</th><th><?= vw_e(vw_t('TEST.T_FRAGE')) ?></th><th><?= vw_e(vw_t('TEST.T_BEFUND')) ?></th></tr>
-<?php foreach (vw_pruefungen() as $vw_z) { ?>
+<?php foreach (vw_pruefungen($vw_tab === 'tab-test') as $vw_z) { ?>
 <tr><td style="text-align:center;"><?php
     if ($vw_z['stand'] === 1) { echo '<span class="sm-an">&#10004;</span>'; }
     elseif ($vw_z['stand'] === 0) { echo '<span class="sm-aus">&#10008;</span>'; }
@@ -1514,7 +1778,7 @@ function vw_bausteine()
 <?= vw_formfeld($vw_cfg) ?>
 <div class="sm-feld">
   <label for="test_fahrzeug"><?= vw_e(vw_t('TEST.L_FAHRZEUG')) ?></label>
-  <input data-role="none" type="number" id="test_fahrzeug" name="test_fahrzeug" value="1" min="1" max="99">
+  <input data-role="none" type="number" id="test_fahrzeug" name="test_fahrzeug" value="<?= $vw_fahrzeuge ? (int) min(array_map('intval', array_keys($vw_fahrzeuge))) : 1 ?>" min="1" max="99">
 </div>
 <div class="sm-feld">
   <label for="test_temp"><?= vw_e(vw_t('TEST.L_TEMP')) ?></label>

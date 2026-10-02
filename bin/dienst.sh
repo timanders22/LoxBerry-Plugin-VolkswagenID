@@ -174,6 +174,32 @@ SKRIPT_R=$(readlink -f "$SKRIPT" 2>/dev/null)
 # eigene. Die Suche ueber /proc sieht nur dessen Prozesse an.
 DIENST_UID=$(id -u loxberry 2>/dev/null || id -u)
 
+# ---------- Die Startsperre (C3, Durchgang 02.10.2026) ----------
+#
+# flock auf DIESE Datei (aufgeloest), Deskriptor 9. Knopf in der Oberflaeche,
+# Minutenwaechter und postinstall.sh rufen dasselbe Skript - wer die Sperre
+# nicht bekommt, startet nichts. Bis 0.9.26 gab es keine: zwei gleichzeitige
+# Waechterlaeufe (cron.01min zweimal in derselben Sekunde, Uhrsprung beim
+# Boot) ergaben in 3 von 4 Laeufen zwei Dienste, zwei "start" in drei von
+# drei Runden (gemessen, Codebericht Nr. 3, Installerbericht Nr. 5).
+# Der Dienst erbt den Deskriptor NICHT ('9>&-' an der nohup-Zeile): sonst
+# hielte er die Sperre, solange er laeuft (Gedaechtnis "Sperre vererbt sich
+# an Kinder"). Ohne flock bleibt es beim bisherigen Weg.
+# $1: 0 = nicht warten (Start), sonst Sekunden (Anhalten).
+VW_SPERRE=0
+sperre_nehmen() {
+    [ "$VW_SPERRE" = 1 ] && return 0
+    command -v flock >/dev/null 2>&1 || return 0
+    exec 9<"$(readlink -f "$0")" || return 0
+    if [ "${1:-0}" = 0 ]; then
+        flock -n 9 || return 1
+    else
+        flock -w "$1" 9 || return 1
+    fi
+    VW_SPERRE=1
+    return 0
+}
+
 # ---------- Laeuft gerade eine Aktualisierung dieses Plugins? ----------
 #
 # preupgrade.sh legt data/plugins/<ordner>.upgrade_laeuft als Erstes an,
@@ -319,6 +345,10 @@ starten() {
         echo "Eine Aktualisierung dieses Plugins laeuft - es wird nichts gestartet."
         return 0
     fi
+    if ! sperre_nehmen 0; then
+        echo "Ein anderer Aufruf startet oder haelt den Dienst gerade an - es wird nichts doppelt gestartet."
+        return 0
+    fi
     LAUFEND=$(dienste)
     if [ -n "$LAUFEND" ]; then
         ERSTE=$(printf '%s\n' "$LAUFEND" | head -n 1)
@@ -361,7 +391,7 @@ starten() {
     # dort schreibt allein der Handler des Programms. Beim Start gekappt, damit
     # sie nur die Ausgabe EINES Laufes sammelt und nicht unbegrenzt waechst.
     : > "$STARTLOG"
-    nohup "$PY" "$SKRIPT" >> "$STARTLOG" 2>&1 &
+    nohup "$PY" "$SKRIPT" >> "$STARTLOG" 2>&1 9>&- &
     echo $! > "$PID"
     sleep 1
     if laeuft; then
@@ -383,6 +413,12 @@ starten() {
 }
 
 anhalten() {
+    # Auf einen laufenden Start wird gewartet (er haelt die Sperre wenige
+    # Sekunden), dann gilt die Sperre auch fuer das Anhalten (C3).
+    if ! sperre_nehmen 45; then
+        echo "FEHLER: Ein anderer Aufruf haelt die Startsperre seit 45 s - es wurde nichts angehalten."
+        return 1
+    fi
     rm -f "$SOLL"
     # ALLE eigenen Dienste, nicht nur den aus der PID-Datei.
     ZIEL=$(dienste)
