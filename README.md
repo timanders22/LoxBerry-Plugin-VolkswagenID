@@ -20,6 +20,15 @@ Plug-in-Hybrid führt das Plugin beide.
 > gegen Attrappen, sondern gegen **echte Objekte der Bibliothek**. Deshalb
 > 0.9.x und nicht 1.0.0, und deshalb sind schreibende Befehle ab Werk gesperrt.
 
+## Neu in 0.9.30
+
+Kopf wie alle Hausplugins: Statusübersicht über den Reitern, Zusammenfassung oben im ersten Reiter.
+
+* **Zusammenfassung** des Plugins in einem grünen Kasten oben im Reiter Einstellungen; die Warnkästen
+  (zu altes Python, abgewiesene Einstellungen) stehen darunter.
+* Die Statusübersicht über den Reitern gab es schon; sie bleibt, wie sie ist.
+* Nur Oberfläche; gerendert unter PHP 7.4, 8.4 und 8.5, nicht am Gerät angesehen.
+
 ## Neu in 0.9.29
 
 Ansagen über die gemeinsame Sprachausgabe der Plugins dieses Hauses (Nr. 36). Gemessen unter PHP 7.4 und 8.5

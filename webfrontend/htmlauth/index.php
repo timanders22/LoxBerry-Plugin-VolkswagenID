@@ -1032,6 +1032,7 @@ $vw_beschriftung = array(
 
 <!-- ================= Reiter: Einstellungen ================= -->
 <div class="sm-seite<?= $vw_tab === 'tab-settings' ? ' sm-active' : '' ?>" id="tab-settings">
+<div class="sm-hinweis"><?= vw_t('EINST.WAS_IST_DAS') ?></div>
 
 <?php if ($vw_pyv !== '' && version_compare($vw_pyv, '3.9.0', '<')) { ?>
 <div class="sm-fehler"><?= vw_t('EINST.PYTHON_ZU_ALT') ?></div>
