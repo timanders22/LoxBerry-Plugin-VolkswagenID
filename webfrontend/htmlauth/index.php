@@ -513,12 +513,33 @@ if ($vw_post && isset($_POST['speichern'])) {
         }
     }
 
+    /* Nr. 36 b (Stufe 2, seit 0.9.29): Sprachausgabe und Anlaesse. Jede Beanstandung verhindert
+     * das Speichern (Nr. 16); kein Sprechtoken steht in einer Meldung, ein leeres Tokenfeld heisst
+     * "behalten", der Haken loescht, beides zugleich ist ein Widerspruch. */
+    $vw_anlass_felder = array();
+    foreach (vw_ansage_anlaesse() as $vw_a) {
+        $vw_cfg[$vw_a[0]] = isset($_POST[$vw_a[0]]) ? 1 : 0;
+        $vw_anlass_felder[] = $vw_a[0];
+    }
+    $vw_tmangel = array();
+    $vw_tbean = array();
+    $vw_cfg['tts'] = ansage_formular_lesen($_POST, vw_tts(), $vw_tmangel, $vw_tbean, vw_ansage_opt(),
+                                           vw_ansage_k());
+    foreach ($vw_tmangel as $vw_tm) {
+        $vw_fehler[] = vw_e($vw_tm['text']);
+    }
+    foreach ($vw_tbean as $vw_tb) {
+        $vw_falsch[] = $vw_tb;
+    }
+
     if ($vw_fehler) {
-        /* NICHTS gespeichert. Passwort und S-PIN reisen nie mit. */
+        /* NICHTS gespeichert. Passwort, S-PIN und Sprechtoken reisen nie mit
+         * (ansage_x2_felder() nennt die Token nicht). */
         $vw_eingaben = vw_eingaben_sammeln('einst', array_merge($vw_zahlfelder,
             array('heim_breite', 'heim_laenge', 'empf_grenze', 'empf_thema', 'abfahrt_thema',
                   'email', 'steuerung_ein', 'zugriff_erzwingen', 'eingreifend_ein',
-                  'abfahrt_ein', 'empf_kleiner')), $vw_falsch);
+                  'abfahrt_ein', 'empf_kleiner'), $vw_anlass_felder,
+            ansage_x2_felder(vw_ansage_opt())), $vw_falsch);
     } else {
         $vw_zug_ok = true;
         if ($vw_loeschen) {
@@ -667,6 +688,25 @@ if ($vw_post && isset($_POST['test'])) {
         $vw_unklar[] = vw_e($vw_text);
     } else {
         $vw_stoerungen[] = vw_e($vw_text);
+    }
+    $vw_tab = 'tab-test';
+}
+/* ---------------- Testansage (Nr. 36 b, seit 0.9.29) ----------------
+ * Spricht den Pruefsatz des Moduls ueber die eingestellte Ausgabeart - unabhaengig
+ * von den Anlaessen. Ins Protokoll nur die Kurzform ohne Text und Token. F5 nach dem
+ * Knopf spricht nicht erneut: der PRG-Block unten leitet um. */
+if ($vw_post && isset($_POST['ansage_test'])) {
+    $vw_ak = vw_ansage_k();
+    $vw_ar = ansage_testansage(vw_tts(), $vw_ak);
+    vw_log_zeile('Testansage: ' . ansage_kurz($vw_ar));
+    if ($vw_ar['stand'] === 1) {
+        $vw_meldungen[] = vw_e(vw_t('TEST.M_ANSAGE_TEST_OK'));
+    } elseif ($vw_ar['stand'] === -1) {
+        $vw_hinweise[] = vw_e(sprintf(vw_t('TEST.M_ANSAGE_TEST_NICHTS'),
+                                      ansage_kennung_text($vw_ar['kennung'], $vw_ak)));
+    } else {
+        $vw_stoerungen[] = vw_e(sprintf(vw_t('TEST.M_ANSAGE_TEST_FEHL'),
+                                        ansage_kennung_text($vw_ar['kennung'], $vw_ak)));
     }
     $vw_tab = 'tab-test';
 }
@@ -1217,6 +1257,24 @@ if ($vw_k1_saetze) { ?>
   <div class="sm-hilfe"><?= vw_t('EINST.H_ABFAHRT_TEMP') ?></div>
 </div>
 
+<h2><?= vw_e(vw_t('EINST.H_ANSAGE')) ?></h2>
+<div class="sm-hinweis"><?= vw_t('EINST.ANSAGE_ERKLAERUNG') ?></div>
+<?= ansage_formular_html(vw_tts(), array(
+    'w' => function ($n, $g) { return vw_fw('einst', $n, $g); },
+    'm' => function ($n) { return vw_fm($n); },
+    'c' => function ($n, $g) { return vw_fh('einst', $n, $g); },
+    'modi' => vw_ansage_modi()), vw_ansage_k()) ?>
+<h3><?= vw_e(vw_t('EINST.H_ANSAGE_ANLAESSE')) ?></h3>
+<?php foreach (vw_ansage_anlaesse() as $vw_a) { ?>
+<div class="sm-feld">
+  <label style="display:inline-flex;align-items:center;gap:8px;">
+    <input data-role="none" type="checkbox" name="<?= vw_e($vw_a[0]) ?>" value="1" <?= vw_fh('einst', $vw_a[0], !empty($vw_cfg[$vw_a[0]])) ? 'checked' : '' ?><?= vw_fm($vw_a[0]) ?>>
+    <?= vw_e(vw_t($vw_a[1])) ?>
+  </label>
+</div>
+<?php } ?>
+<div class="sm-hilfe"><?= vw_t('EINST.H_ANSAGE_ANLAESSE_HILFE') ?></div>
+
 <?php /* MQTT stand hier bis zu dieser Fassung. Es wohnt jetzt
          vollstaendig im Reiter MQTT - eine Sache, eine Stelle. */ ?>
 
@@ -1249,6 +1307,7 @@ if ($vw_k1_saetze) { ?>
 <h2><?= vw_t('EINST.H_SICHERUNG') ?></h2>
 <div class="sm-hinweis"><?= vw_t('EINST.SICH_ERKLAERUNG') ?></div>
 <div class="sm-warnung"><?= vw_t('EINST.SICH_WARNUNG') ?></div>
+<div class="sm-hinweis"><?= vw_t('EINST.SICH_OHNE_SPRECHTOKEN') ?></div>
 <?php
 /* X-3 (Nachzug G1, 02.10.2026): wuerde die eigene Sicherung beim
    Zurueckspielen abgewiesen, sagt es die Seite VOR dem Sichern - mit
@@ -1793,6 +1852,16 @@ function vw_bausteine()
 <?php if ($vw_testausgabe !== '') { ?>
 <div class="sm-pre"><?= vw_e($vw_testausgabe) ?></div>
 <?php } ?>
+
+<h3><?= vw_e(vw_t('TEST.H_ANSAGE')) ?></h3>
+<p class="sm-hilfe"><?= vw_e(vw_t('TEST.ANSAGE_TEST_TEXT')) ?></p>
+<div class="sm-knopfreihe">
+  <form action="index.php" method="post">
+    <input data-role="none" type="hidden" name="activetab" value="tab-test">
+    <?= vw_formfeld($vw_cfg) ?>
+    <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="ansage_test" value="1"><?= vw_e(vw_t('TEST.K_ANSAGE_TEST')) ?></button>
+  </form>
+</div>
 
 <h3><?= vw_e(vw_t('TEST.H_SCHALTEN')) ?></h3>
 <div class="sm-warnung"><?= vw_t('TEST.SCHALTEN_WARNUNG') ?></div>

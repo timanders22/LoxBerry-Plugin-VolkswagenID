@@ -350,6 +350,10 @@ function vw_pruefungen($netz = true)
     // Sind die Schluessel da, die erst zur Laufzeit entstehen?
     $zeilen[] = vw_dynamische_schluessel_zeile();
 
+    // Nr. 36 b (seit 0.9.29): die Sprachausgabe. Alexa-NG/Chromecast werden nur bei offenem
+    // Reiter Test gefragt (selftest=1, spricht nicht); der Music Server nie.
+    $zeilen[] = vw_ansage_zeile($netz);
+
     // Zum Schluss: wie viele Striche stehen in dieser Liste? Ein Strich ist
     // ausdruecklich kein Haken - wer ihn beim Ueberfliegen wie einen
     // einsammelt, hat eine Pruefung weniger, als er glaubt.
@@ -778,6 +782,23 @@ function vw_reiter_lesen()
     preg_match_all('/data-ziel="tab-([a-z0-9]+)"/', $t, $y);
     $aus['leiste_fest'] = $y[1];
     return $aus;
+}
+
+/** Die Zeile der Sprachausgabe: Ausgabeart, letzte Ansage und die eingeschalteten Anlaesse. */
+function vw_ansage_zeile($netz)
+{
+    $cfg = vw_config();
+    list($st, $html) = ansage_pruefzeile(vw_tts(), (bool) $netz, vw_ansage_k());
+    $an = array();
+    foreach (vw_ansage_anlaesse() as $a) {
+        if (!empty($cfg[$a[0]])) {
+            $an[] = vw_e(vw_t($a[1]));
+        }
+    }
+    $html .= ' ' . sprintf(vw_t('TEST.A_ANSAGE_ANLAESSE'), count($an),
+                           $an ? implode('; ', $an) : vw_e(vw_t('TEST.A_ANSAGE_KEINE')));
+    // -2 (aus, nicht gefragt) ist hier ein Hinweis, kein Haken.
+    return vw_pruefzeile($st === -2 ? -1 : $st, vw_t('TEST.F_ANSAGE'), $html);
 }
 
 /**

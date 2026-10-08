@@ -20,6 +20,24 @@ Plug-in-Hybrid führt das Plugin beide.
 > gegen Attrappen, sondern gegen **echte Objekte der Bibliothek**. Deshalb
 > 0.9.x und nicht 1.0.0, und deshalb sind schreibende Befehle ab Werk gesperrt.
 
+## Neu in 0.9.29
+
+Ansagen über die gemeinsame Sprachausgabe der Plugins dieses Hauses (Nr. 36). Gemessen unter PHP 7.4 und 8.5
+gegen Attrappen (Music Server, Alexa-NG); nicht am Gerät, nicht an einem echten Lautsprecher.
+
+* **Neu: das Plugin sagt einzelne Ereignisse an (ab Werk aus).** Reiter Einstellungen, Abschnitt
+  „Sprachausgabe“: Loxone Music Server, MusicServer4Home, eine eigene Adressvorlage, Alexa-NG oder
+  Google-Lautsprecher (Chromecast 4 Lox NG). Anlässe, jeder einzeln abwählbar: Ladung beendet, Ladung unter
+  der Ladegrenze beendet, Fahrzeug steht offen oder unverriegelt, Licht an, Klimatisierung beendet, keine
+  Daten mehr. Angesagt wird nur ein Wechsel, derselbe Anlass je Fahrzeug höchstens einmal je Stunde; nach
+  einem Neustart des Dienstes spricht die erste Abfrage nie. MQTT und Loxone bleiben unverändert.
+* Adresse des Music Servers und Adressvorlage müssen im Heimnetz liegen.
+* Testansage per Knopf im Reiter Test; die Zeile „Sprachausgabe“ zeigt Ausgabeart, letzte Ansage und die
+  eingeschalteten Anlässe.
+* Die Sprechtoken für Alexa-NG und Chromecast 4 Lox NG stehen nie in der Seite, im Protokoll oder in einer
+  Sicherung; eine Sicherungsdatei, die eines trägt, wird abgewiesen. Eine Sicherung von 0.9.28 lässt sich
+  weiter zurückspielen.
+
 ## Neu in 0.9.28
 
 Ungültige gespeicherte Werte werden gemeldet statt still ersetzt (Verbesserungsliste VW-k1, Nr. 19).

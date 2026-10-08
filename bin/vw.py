@@ -31,6 +31,7 @@ import os
 import re
 import signal
 import socket
+import subprocess
 import sys
 import threading
 import time
@@ -260,6 +261,14 @@ VORGABEN = {
     "abfahrt_thema": "",
     "abfahrt_vorlauf": 20,
     "abfahrt_temp": 21,
+    # Nr. 36 b (seit 0.9.29): Ansageanlaesse - dieselben Schluessel und Werte wie in
+    # vw_vorgaben(). Der Block tts gehoert der Bruecke (bin/vw_ansage.php).
+    "ansage_laden_fertig": 1,
+    "ansage_laden_abbruch": 1,
+    "ansage_offen": 1,
+    "ansage_licht": 1,
+    "ansage_klima": 1,
+    "ansage_ausfall": 1,
 }
 
 # Grenzen je Einstellung - dieselben Zahlen wie in vw_regeln() der Bibliothek.
@@ -280,7 +289,9 @@ GRENZEN_GANZ = {
     "abfahrt_temp": (10, 30),
 }
 GRENZEN_SCHALT = ("mqtt_ein", "mqtt_retain", "steuerung_ein", "eingreifend_ein",
-                  "zugriff_erzwingen", "empf_kleiner", "abfahrt_ein")
+                  "zugriff_erzwingen", "empf_kleiner", "abfahrt_ein",
+                  "ansage_laden_fertig", "ansage_laden_abbruch", "ansage_offen",
+                  "ansage_licht", "ansage_klima", "ansage_ausfall")
 # Kommazahlen und Themen - dieselben Regeln wie in vw_regeln() (C7).
 GRENZEN_ZAHL = {
     "heim_breite": (-90, 90),
@@ -2833,6 +2844,181 @@ class Zeitgrenze:
         return False
 
 
+# ---------------------------------------------------------------------------
+# Sprachausgabe (Nr. 36 b, Stufe 2, seit 0.9.29)
+#
+# Der Dienst sagt einzelne Ereignisse an - ueber die gemeinsame Sprachausgabe
+# der Plugins dieses Hauses (webfrontend/html/sprachausgabe.php). Die gibt es
+# nur in PHP; gesprochen wird deshalb ueber die Bruecke bin/vw_ansage.php. Der
+# Auftrag geht ueber die STANDARDEINGABE, nie ueber die Kommandozeile (die
+# sieht jeder in der Prozessliste), und er traegt keinen Text: den Satz baut
+# die Bruecke aus der Sprachdatei. Ob und wohin gesprochen wird, entscheidet
+# die Bruecke aus dem Block tts der Konfiguration (ab Werk aus). Der Dienst
+# sieht dort nur nach, ob die Ausgabe aus ist - dann ruft er gar nicht erst.
+#
+# Angesagt wird nur ein WECHSEL, nie ein Wert im Takt:
+#   laden_fertig   laedt 1 -> 0, Ladestand nicht nachweislich unter der Ladegrenze
+#   laden_abbruch  laedt 1 -> 0 und Ladestand mehr als 1 Punkt unter der Ladegrenze,
+#                  oder Ladezustand "error"
+#   offen          nicht in Fahrt und unverriegelt, Tuer oder Fenster offen - im
+#                  zweiten Abruf in Folge (wie die Einschaltverzoegerung der
+#                  Baustein-Liste, Baustein 15)
+#   licht          nicht in Fahrt und Licht an - im zweiten Abruf in Folge
+#   klima          Klimatisierung 1 -> 0, nicht waehrend der Fahrt
+#   ausfall        der dritte gescheiterte Abruf in Folge (die Grenze von OK=0),
+#                  erst nachdem seit dem Start wenigstens einer gelungen ist
+# Die erste Beobachtung eines Fahrzeugs nach dem Start setzt nur den
+# Ausgangsstand: ein Neustart spricht nie. Jeder Anlass hat einen eigenen Haken
+# (ansage_<anlass>) und eine Wiederholsperre je Anlass und Fahrzeug
+# (ANSAGE_SPERRE_S), die einen Neustart des Dienstes ueberlebt. MQTT, Loxone
+# und das Abbild laufen davor und unabhaengig davon.
+# ---------------------------------------------------------------------------
+SKRIPT_ANSAGE = SELF / "vw_ansage.php"
+DATEI_ANSAGE_SPERRE = PDATA / "ansage_sperre.json"
+ANSAGE_ANLAESSE = ("laden_fertig", "laden_abbruch", "offen", "licht", "klima", "ausfall")
+ANSAGE_SPERRE_S = 3600     # derselbe Anlass fuer dasselbe Fahrzeug hoechstens einmal je Stunde
+ANSAGE_FRIST_S = 25        # Bruecke: PHP-Start plus hoechstens 10 s Sprechfrist des Moduls
+ANSAGE_FOLGE = 2           # offen, licht: so viele Abrufe in Folge
+ANSAGE_AUSFALL_FOLGE = 3   # dieselbe Grenze wie OK=0 (3x Takt)
+_ANSAGE_STAND: dict = {}   # je Fahrzeugnummer der zuletzt gesehene Stand - nur im Speicher
+_ANSAGE_DIENST = {"ok_gesehen": False, "fehler_folge": 0}
+
+
+def _ansage_in_fahrt(f: dict) -> bool:
+    return f.get("zustand") in (2, 3)
+
+
+def ansage_ereignisse(nr: str, f: dict) -> list:
+    """Die Anlaesse eines Fahrzeugs aus dem Vergleich mit dem zuletzt gesehenen
+    Stand. Nur ein frisches Abbild (ok=1) kommt hierher. Rueckgabe: Liste von
+    (anlass, daten) - daten ohne Text, nur Name, Ladestand und Ladegrenze."""
+    alt = _ANSAGE_STAND.get(nr)
+    vorher = alt or {}
+    offen_jetzt = (not _ansage_in_fahrt(f)) and (
+        f.get("verriegelt") == 0 or f.get("tueren_offen") == 1 or f.get("fenster_offen") == 1)
+    licht_jetzt = (not _ansage_in_fahrt(f)) and f.get("licht_an") == 1
+    neu = {
+        # Ein unbekannter Zustand (None) laesst den bekannten stehen - wie fortschreiben().
+        "laedt": f.get("laedt") if f.get("laedt") is not None else vorher.get("laedt"),
+        "klima": f.get("klima_an") if f.get("klima_an") is not None else vorher.get("klima"),
+        # Die erste Beobachtung zaehlt als schon gemeldet: ein Fahrzeug, das beim Start
+        # offen steht, wird nicht angesagt.
+        "offen": (vorher.get("offen", 0) + 1 if alt is not None else ANSAGE_FOLGE) if offen_jetzt else 0,
+        "licht": (vorher.get("licht", 0) + 1 if alt is not None else ANSAGE_FOLGE) if licht_jetzt else 0,
+    }
+    _ANSAGE_STAND[nr] = neu
+    if alt is None:
+        return []
+    name = str(f.get("name") or f.get("modell") or "")[:60]
+    aus = []
+    if vorher.get("laedt") == 1 and neu["laedt"] == 0:
+        soc, grenze = f.get("soc"), f.get("ladegrenze")
+        try:
+            unter = soc is not None and grenze is not None and float(soc) < float(grenze) - 1
+        except (TypeError, ValueError):
+            unter = False
+        stoerung = str(f.get("ladezustand_text") or "").lower() == "error"
+        if unter or stoerung:
+            aus.append(("laden_abbruch", {"name": name,
+                                          "soc": soc if unter else None,
+                                          "grenze": grenze if unter else None}))
+        else:
+            aus.append(("laden_fertig", {"name": name, "soc": soc}))
+    if neu["offen"] == ANSAGE_FOLGE:
+        aus.append(("offen", {"name": name}))
+    if neu["licht"] == ANSAGE_FOLGE:
+        aus.append(("licht", {"name": name}))
+    if vorher.get("klima") == 1 and neu["klima"] == 0 and not _ansage_in_fahrt(f):
+        aus.append(("klima", {"name": name}))
+    return aus
+
+
+def ansage_ausfall(ok: int, fehler_folge: int) -> bool:
+    """Ist das der Abruf, mit dem die Daten als ausgefallen gelten?"""
+    d = _ANSAGE_DIENST
+    vorher = d["fehler_folge"]
+    d["fehler_folge"] = fehler_folge
+    if ok:
+        d["ok_gesehen"] = True
+        return False
+    return bool(d["ok_gesehen"]) and vorher < ANSAGE_AUSFALL_FOLGE <= fehler_folge
+
+
+def _ansage_aus() -> bool:
+    """Ist die Ausgabe aus? Nur der Modus wird angesehen; geprueft wird der Block
+    in der Bruecke. Fehlt er oder ist er unlesbar, gilt er als aus (Vorgabe)."""
+    roh, _lage = _config_roh()
+    t = roh.get("tts") if isinstance(roh, dict) else None
+    return not isinstance(t, dict) or t.get("mode", "aus") == "aus"
+
+
+def _ansage_sperre(schluessel: str, jetzt: int) -> bool:
+    """Gesperrt? Sonst wird die Sperre gesetzt (und abgelaufene Eintraege fallen weg)."""
+    s = json_lesen(DATEI_ANSAGE_SPERRE)
+    t = s.get(schluessel)
+    if isinstance(t, (int, float)) and not isinstance(t, bool) and 0 <= jetzt - t < ANSAGE_SPERRE_S:
+        return True
+    s = {k: v for k, v in s.items()
+         if isinstance(v, (int, float)) and not isinstance(v, bool) and 0 <= jetzt - v < ANSAGE_SPERRE_S}
+    s[schluessel] = jetzt
+    json_schreiben(DATEI_ANSAGE_SPERRE, s)
+    return False
+
+
+def ansage_senden(anlass: str, nr: str, daten: dict, cfg: dict) -> None:
+    """Einen Anlass ueber die Bruecke ansagen. Ins Protokoll kommen Anlass,
+    Fahrzeugnummer und das Ergebnis (Stand, Art, HTTP, Zeichenzahl, Kennung) -
+    nie der Text, nie ein Token."""
+    if anlass not in ANSAGE_ANLAESSE or not cfg.get("ansage_" + anlass):
+        return
+    if _ansage_aus():
+        return
+    jetzt = int(time.time())
+    if _ansage_sperre(anlass + ":" + str(nr), jetzt):
+        _LOG.info("Ansage %s (Fahrzeug %s) unterdrueckt - hoechstens eine je %d s.",
+                  anlass, nr, ANSAGE_SPERRE_S)
+        return
+    auftrag = {"anlass": anlass, "nr": ganz(nr, 0), "name": str(daten.get("name") or "")}
+    for k in ("soc", "grenze"):
+        v = daten.get(k)
+        auftrag[k] = v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+    try:
+        e = subprocess.run(["php", str(SKRIPT_ANSAGE), PNAME],
+                           input=json.dumps(auftrag, ensure_ascii=False).encode("utf-8"),
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                           timeout=ANSAGE_FRIST_S, check=False)
+    except (OSError, subprocess.SubprocessError) as err:
+        melde_gebremst("ansage_ruf", "Ansage %s (Fahrzeug %s): die Bruecke vw_ansage.php war "
+                                     "nicht aufrufbar (%s)." % (anlass, nr, type(err).__name__), 3600)
+        return
+    zeilen = e.stdout.decode("ascii", "replace").strip().splitlines()
+    zeile = zeilen[-1] if zeilen else ""
+    f = {}
+    if zeile.startswith("ANSAGE;"):
+        for teil in zeile.split(";")[1:]:
+            if "=" in teil:
+                k, v = teil.split("=", 1)
+                f[k] = re.sub(r"[^A-Za-z0-9_.:,|/\-]", "?", v)[:120]
+    _LOG.log(logging.INFO if e.returncode in (0, 3) else logging.WARNING,
+             "Ansage %s (Fahrzeug %s): rc=%d stand=%s art=%s http=%s zeichen=%s kennung=%s",
+             anlass, nr, e.returncode, f.get("STAND", "?"), f.get("ART", "?"),
+             f.get("HTTP", "?"), f.get("ZEICHEN", "?"), f.get("KENNUNG", "?"))
+
+
+def ansagen(cfg: dict, fahrzeuge: dict, ok: int, fehler_folge: int) -> None:
+    """Nach jedem Abruf: Anlaesse erkennen und ansagen."""
+    if ansage_ausfall(ok, fehler_folge):
+        ansage_senden("ausfall", "0", {}, cfg)
+    for nr in sorted(fahrzeuge, key=lambda n: ganz(n, 0)):
+        f = fahrzeuge[nr]
+        # Ein ausgefallenes Fahrzeug traegt die Werte des letzten Erfolgs - daraus
+        # entsteht kein Wechsel.
+        if not isinstance(f, dict) or not f.get("ok"):
+            continue
+        for anlass, daten in ansage_ereignisse(nr, f):
+            ansage_senden(anlass, nr, daten, cfg)
+
+
 def stand_vorbelegen() -> dict:
     """Der letzte gute Stand aus loxone.json (C4, Durchgang 02.10.2026).
 
@@ -3014,6 +3200,12 @@ def dienst(einmal: bool = False) -> int:
                               horcher_grund=_HORCHER.grund,
                               anzahl_fahrzeuge=len(stand["fahrzeuge"]))
             rechte_sichern()
+            # Nr. 36 b: Ansagen - nach Abbild, MQTT und Zustand, damit eine haengende
+            # Ausgabe keinen Meldeweg aufhaelt.
+            try:
+                ansagen(cfg, fahrzeuge, ok, fehler_folge)
+            except Exception as err:  # noqa: BLE001
+                melde_gebremst("ansage", f"Ansage: {fehlertext(err)}", 3600)
             zyklus += 1
             if einmal:
                 return 0 if ok else 1

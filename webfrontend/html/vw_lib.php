@@ -24,6 +24,10 @@ if (!function_exists('vw_e')) {
     }
 }
 
+/* Gemeinsame Sprachausgabe (Abschrift von Werkzeuge/gemeinsam/sprachausgabe.php, Nr. 36 b, seit
+ * 0.9.29). Liegt neben dieser Datei; sie schuetzt sich selbst gegen doppeltes Laden. */
+require_once __DIR__ . '/sprachausgabe.php';
+
 
 /* Den LoxBerry-Wurzelordner ohne festen Systempfad bestimmen.
  *
@@ -190,6 +194,15 @@ function vw_vorgaben()
         'abfahrt_thema'     => '',
         'abfahrt_vorlauf'   => 20,
         'abfahrt_temp'      => 21,
+        // Nr. 36 b (seit 0.9.29): Ansageanlaesse, je einzeln abwaehlbar. Gesprochen wird erst,
+        // wenn unter tts eine Ausgabeart gewaehlt ist - ab Werk 'aus'.
+        'ansage_laden_fertig'  => 1,
+        'ansage_laden_abbruch' => 1,
+        'ansage_offen'         => 1,
+        'ansage_licht'         => 1,
+        'ansage_klima'         => 1,
+        'ansage_ausfall'       => 1,
+        'tts'               => ansage_vorgaben('aus'),
         'aktionstoken'      => '',
         'wartezeit'         => 8,
         'wartezeit_endpunkt' => 3,
@@ -237,6 +250,14 @@ function vw_regeln()
         'abfahrt_thema'      => array('text', '#^[A-Za-z0-9_\-/]*$#', 128),
         'abfahrt_vorlauf'    => array('ganz', 5, 180),
         'abfahrt_temp'       => array('ganz', 10, 30),
+        'ansage_laden_fertig'  => array('schalt'),
+        'ansage_laden_abbruch' => array('schalt'),
+        'ansage_offen'         => array('schalt'),
+        'ansage_licht'         => array('schalt'),
+        'ansage_klima'         => array('schalt'),
+        'ansage_ausfall'       => array('schalt'),
+        /* 'tts' steht hier nicht: der Block wird mit den Regeln des gemeinsamen Moduls geprueft
+         * (ansage_wert_pruefen(), vw_config_lesen(), vw_sicherung_lesen()). */
         /* Das Aktionstoken: bewusst WEIT gefasst.
          *
          * vw_token_erzeugen() bildet nur Kleinbuchstaben und Ziffern - aber
@@ -425,10 +446,14 @@ function vw_abgewiesen_saetze($lage)
             case 'TEMP':
                 $grund = vw_t('EINST.GRUND_TEMP');
                 break;
+            case 'TTS':
+                $grund = ansage_kennung_text(isset($g[1]) ? (string) $g[1] : '', vw_ansage_k());
+                break;
             default:
                 $grund = vw_t('EINST.GRUND_FORM');
         }
-        $v = array_key_exists($k, $vorgaben) ? (string) $vorgaben[$k] : '';
+        $v = !array_key_exists($k, $vorgaben) ? ''
+           : (is_array($vorgaben[$k]) ? vw_t('EINST.VORGABE_TTS') : (string) $vorgaben[$k]);
         $aus[] = sprintf(vw_t('EINST.WERT_UNGUELTIG'), $k, $grund,
                          $v === '' ? vw_t('EINST.VORGABE_LEER') : $v);
     }
@@ -548,6 +573,21 @@ function vw_config_lesen($erzeugen = true)
     foreach ($cfg as $k => $v) {
         if (!array_key_exists($k, $vorgaben)) {
             $fremd[] = $k;
+            continue;
+        }
+        if ($k === 'tts') {
+            /* Nr. 36 b (seit 0.9.29): der Block der Sprachausgabe nach den Regeln des Moduls
+             * (Heimnetz, Token-Form, Ausgabearten ohne audioserver). Fehlende Eintraege bekommen
+             * ihre Vorgabe. Ein unzulaessiger Block wird gemeldet wie jeder andere Wert - nie
+             * mit seinem Inhalt (er kann Sprechtoken tragen). */
+            $vw_tg = '';
+            $vw_tp = ansage_wert_pruefen($v, $vw_tg, vw_ansage_modi());
+            if ($vw_tp !== null) {
+                list($fertig['tts']) = ansage_vervollstaendigen($vw_tp, 'aus');
+            } else {
+                $abgewiesen['tts'] = gettype($v);
+                $gruende['tts'] = array('TTS', $vw_tg);
+            }
             continue;
         }
         list($ok, $rein) = vw_wert_pruefen($k, $v);
@@ -2465,6 +2505,104 @@ function vw_t($schluessel)
 }
 
 
+/* ==================================================================
+ * Sprachausgabe (Nr. 36 b, Stufe 2, seit 0.9.29)
+ *
+ * Der Dienst bin/vw.py erkennt die Anlaesse und ruft bin/vw_ansage.php; dort
+ * entsteht der Satz aus der Sprachdatei, gesprochen wird mit der gemeinsamen
+ * Sprachausgabe (sprachausgabe.php). Ab Werk ist die Ausgabe aus.
+ * ================================================================== */
+
+/** Erlaubte Ausgabearten: alle des Moduls ausser 'audioserver' (die Linie gibt keinen Text an Loxone). */
+function vw_ansage_modi()
+{
+    return array('aus', 'musicserver', 'ms4h', 'custom', 'alexang', 'cc4lox');
+}
+
+/** Optionen fuer Formular-Baustein und Formular-Lesen. */
+function vw_ansage_opt()
+{
+    return array('modi' => vw_ansage_modi());
+}
+
+/**
+ * Die Anlaesse: Name => array(Konfigschluessel, Beschriftung, Satz). Dieselbe
+ * Liste wie ANSAGE_ANLAESSE in bin/vw.py; die Bruecke nimmt nur diese Namen an.
+ */
+function vw_ansage_anlaesse()
+{
+    return array(
+        'laden_fertig'  => array('ansage_laden_fertig', 'EINST.L_ANSAGE_LADEN_FERTIG', 'VW_ANSAGE.S_LADEN_FERTIG'),
+        'laden_abbruch' => array('ansage_laden_abbruch', 'EINST.L_ANSAGE_LADEN_ABBRUCH', 'VW_ANSAGE.S_LADEN_ABBRUCH'),
+        'offen'         => array('ansage_offen', 'EINST.L_ANSAGE_OFFEN', 'VW_ANSAGE.S_OFFEN'),
+        'licht'         => array('ansage_licht', 'EINST.L_ANSAGE_LICHT', 'VW_ANSAGE.S_LICHT'),
+        'klima'         => array('ansage_klima', 'EINST.L_ANSAGE_KLIMA', 'VW_ANSAGE.S_KLIMA'),
+        'ausfall'       => array('ansage_ausfall', 'EINST.L_ANSAGE_AUSFALL', 'VW_ANSAGE.S_AUSFALL'),
+    );
+}
+
+/** Die Schluessel, die mit 0.9.29 dazukamen - eine aeltere Sicherung kennt sie nicht. */
+function vw_ansage_neue_schluessel()
+{
+    $s = array('tts');
+    foreach (vw_ansage_anlaesse() as $a) {
+        $s[] = $a[0];
+    }
+    return $s;
+}
+
+/** Der Block tts, vervollstaendigt (ab Werk 'aus'). $erzeugen = false schreibt nichts (Bruecke). */
+function vw_tts($erzeugen = true)
+{
+    $c = vw_config($erzeugen);
+    list($t) = ansage_vervollstaendigen(isset($c['tts']) && is_array($c['tts']) ? $c['tts'] : array(), 'aus');
+    return $t;
+}
+
+/** Der Kontext des Moduls: Webport, Kopfzeile, Ordner fuer <art>_letzte.json, Texte. */
+function vw_ansage_k()
+{
+    $p = vw_paths();
+    return array(
+        'port'   => ansage_webport(($p['home'] !== '' ? $p['home'] : dirname(dirname(__DIR__)))
+                                   . '/config/system/general.json'),
+        'kopf'   => array('User-Agent: LoxBerry VolkswagenID'),
+        'ordner' => @is_dir($p['datadir']) ? $p['datadir'] : '',
+        't'      => function ($s) { return vw_t($s); },
+        /* Zu dieser Kennung hat das Modul (1.0.2) keinen Satz in [ANSAGE]; linieneigen wie Intercom
+         * 2.2.18, bis der Modulschluessel mit einer ergaenzenden Fassung kommt (Entwurf, Stufe 2). */
+        'schluessel' => array('K_TTS_EINTRAG' => 'EINST.SICH_TTS_EINTRAG'),
+    );
+}
+
+/**
+ * Der Satz zu einem Anlass, aus der Sprachdatei. $name ist der Fahrzeugname
+ * aus dem Konto; fehlt er, heisst es "Fahrzeug <nr>". Ladestand und
+ * Ladegrenze nur, wenn sie bekannt sind.
+ */
+function vw_ansage_satz($anlass, $nr, $name, $soc = null, $grenze = null)
+{
+    $a = vw_ansage_anlaesse();
+    if (!isset($a[$anlass])) {
+        return '';
+    }
+    $wer = ($name !== '') ? $name : sprintf(vw_t('VW_ANSAGE.FAHRZEUG_NR'), (int) $nr);
+    if ($anlass === 'ausfall') {
+        return vw_t('VW_ANSAGE.S_AUSFALL');
+    }
+    if ($anlass === 'laden_fertig') {
+        $s = sprintf(vw_t('VW_ANSAGE.S_LADEN_FERTIG'), $wer);
+        return $soc === null ? $s : $s . ' ' . sprintf(vw_t('VW_ANSAGE.S_LADESTAND'), (int) $soc);
+    }
+    if ($anlass === 'laden_abbruch') {
+        if ($soc === null || $grenze === null) {
+            return sprintf(vw_t('VW_ANSAGE.S_LADEN_STOERUNG'), $wer);
+        }
+        return sprintf(vw_t('VW_ANSAGE.S_LADEN_ABBRUCH'), $wer, (int) $soc, (int) $grenze);
+    }
+    return sprintf(vw_t($a[$anlass][2]), $wer);
+}
+
 /**
  * Eine Sicherungsdatei einlesen - und dabei NICHTS durchgehen lassen.
  *
@@ -2529,6 +2667,32 @@ function vw_sicherung_lesen($roh)
                             'spin' => $zf['spin']);
             continue;
         }
+        if ($k === 'tts') {
+            /* Nr. 36 b (seit 0.9.29): eine Sicherung dieses Plugins traegt nie ein Sprechtoken -
+             * traegt die Datei eines (auch als Liste, Zahl oder null), stammt sie nicht aus
+             * "Einstellungen sichern" und wird abgewiesen; die geltenden Sprechtoken bleiben.
+             * Ausgabeart, Adresse und Vorlage werden wie im Formular geprueft (Heimnetz). */
+            $vw_tm = ansage_sicherung_mangel($w);
+            if ($vw_tm) {
+                $mangel[] = sprintf(vw_t('EINST.SICH_TTS_TOKEN'),
+                                    htmlspecialchars(implode(', ', $vw_tm), ENT_QUOTES, 'UTF-8'));
+                $namen[] = 'tts';
+                continue;
+            }
+            $vw_tg = '';
+            $vw_tp = ansage_wert_pruefen($w, $vw_tg, vw_ansage_modi());
+            if ($vw_tp === null) {
+                $mangel[] = sprintf(vw_t('EINST.SICH_TTS'),
+                    htmlspecialchars(ansage_kennung_text($vw_tg, vw_ansage_k()), ENT_QUOTES, 'UTF-8'));
+                $namen[] = 'tts';
+                continue;
+            }
+            $vw_tj = vw_tts();
+            list($vw_tv) = ansage_vervollstaendigen($vw_tp + $vw_tj, 'aus');
+            $neu['tts'] = ansage_sicherung_tokens_behalten($vw_tv, $vw_tj);
+            $anzahl++;
+            continue;
+        }
         if (!in_array($k, $bekannt, true)) {
             $mangel[] = sprintf(vw_t('EINST.SICH_FREMD'),
                                  htmlspecialchars((string) $k, ENT_QUOTES, 'UTF-8'));
@@ -2585,10 +2749,23 @@ function vw_sicherung_lesen($roh)
      * Der Hausstandard sagt: eine halb gueltige Datei aendert gar nichts.
      * Eine Datei, der die Haelfte fehlt, ist halb gueltig. */
     $fehlend = array();
+    $vw_ohne_ansage = false;
     foreach ($bekannt as $k) {
         if (!array_key_exists($k, $daten)) {
+            /* Nr. 36 b: eine Sicherung von 0.9.28 oder frueher kennt die Sprachausgabe noch
+             * nicht. Sie bleibt zurueckspielbar; die Sprachausgabe behaelt ihren jetzigen Stand,
+             * und die Seite sagt es. */
+            if (in_array($k, vw_ansage_neue_schluessel(), true)) {
+                $vw_jetzt = vw_config();
+                $neu[$k] = $vw_jetzt[$k];
+                $vw_ohne_ansage = true;
+                continue;
+            }
             $fehlend[] = $k;
         }
+    }
+    if ($vw_ohne_ansage) {
+        $hinweise[] = vw_t('EINST.SICH_OHNE_ANSAGE');
     }
     if ($fehlend) {
         $mangel[] = sprintf(vw_t('EINST.SICH_FEHLEND'), count($fehlend),
@@ -2678,12 +2855,17 @@ function vw_sicherung_schreiben($pruefen = true)
     $aus = array(
         '_hinweis' => 'Einstellungen des LoxBerry-Plugins Volkswagen ID. '
                     . 'Enthaelt das Aktionstoken und die Zugangsdaten des Volkswagen-Kontos '
-                    . 'dieser Anlage - wie ein Passwort behandeln.',
+                    . 'dieser Anlage - wie ein Passwort behandeln. Die Sprechtoken der '
+                    . 'Sprachausgabe sind nie enthalten.',
         '_stand'   => date('Y-m-d H:i:s'),
         '_fassung' => vw_fassung(),
     );
     foreach (array_keys(vw_vorgaben()) as $k) {
         $aus[$k] = isset($cfg[$k]) ? $cfg[$k] : '';
+    }
+    /* Nr. 36 b: die Sprechtoken der Sprachausgabe gehen nie in eine Sicherung (Entwurf 5). */
+    if (isset($aus['tts']) && is_array($aus['tts'])) {
+        $aus['tts'] = ansage_sicherung_bereinigen($aus['tts']);
     }
     /* DIE ZUGANGSDATEN GEHOEREN HINEIN (O6, Durchgang 02.10.2026; CLAUDE.md
      * Abschnitt 9, Regeln/05). Bis 0.9.26 fehlten sie, obwohl der Hinweis am
