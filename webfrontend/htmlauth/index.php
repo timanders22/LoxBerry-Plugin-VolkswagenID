@@ -1663,6 +1663,10 @@ foreach (vw_nur_lesend() as $vw_nl => $vw_nlt) { ?>
  * Je Zeile: Nummer, Typ, Name, Parameter, woran die Eingaenge kommen.
  * Typ, Name und Parameter stehen als Sprachschluessel drin, die Eingangsspalte
  * ist symbolisch und damit sprachfrei.
+ *
+ * X-10 (0.9.31): die Eingangsspalte in der Schreibweise von
+ * Werkzeuge/leitungen_setzen.py - "#N" (Ausgang von Zeile N auf den ersten
+ * Eingang), "I1 = #N, I2 = #M"; bis 0.9.30 stand dort "I &larr; #N".
  */
 function vw_bausteine()
 {
@@ -1679,33 +1683,33 @@ function vw_bausteine()
         array(10, 'BAUSTEIN.T_VE',      'BAUSTEIN.N10', 'BAUSTEIN.P10', '&mdash;'),
         array(11, 'BAUSTEIN.T_VE',      'BAUSTEIN.N11', 'BAUSTEIN.P11', '&mdash;'),
         array(12, 'BAUSTEIN.T_VE',      'BAUSTEIN.N12', 'BAUSTEIN.P12', '&mdash;'),
-        array(13, 'BAUSTEIN.T_NICHT',   'BAUSTEIN.N13', '',             'I &larr; #5'),
+        array(13, 'BAUSTEIN.T_NICHT',   'BAUSTEIN.N13', '',             '#5'),
         /* Regel A4 (Regeln/04; Nachzug 02.10.2026): ein UND/ODER hat zwei Eingaenge, an jedem
          * genau eine Quelle. Bisher hingen an #14 vier Quellen an zwei Eingaengen; jetzt drei
          * ODER, und jede spaetere Zeile rueckt um zwei. Die Sprachschluessel N15 ff. behalten
          * ihre Namen - die angezeigte Nummer ist die erste Spalte. */
-        array(14, 'BAUSTEIN.T_ODER',    'BAUSTEIN.N14A', '',            'I1 &larr; #13, I2 &larr; #6'),
-        array(15, 'BAUSTEIN.T_ODER',    'BAUSTEIN.N14B', '',            'I1 &larr; #7, I2 &larr; #8'),
-        array(16, 'BAUSTEIN.T_ODER',    'BAUSTEIN.N14', '',             'I1 &larr; #14, I2 &larr; #15'),
-        array(17, 'BAUSTEIN.T_EVZ',     'BAUSTEIN.N15', 'BAUSTEIN.P15', 'I &larr; #16'),
-        array(18, 'BAUSTEIN.T_BENACHR', 'BAUSTEIN.N16', 'BAUSTEIN.P16', 'I &larr; #17'),
-        array(19, 'BAUSTEIN.T_SWS',     'BAUSTEIN.N17', 'BAUSTEIN.P17', 'I &larr; #1'),
-        array(20, 'BAUSTEIN.T_SWS',     'BAUSTEIN.N18', 'BAUSTEIN.P18', 'I &larr; #2'),
-        array(21, 'BAUSTEIN.T_ODER',    'BAUSTEIN.N19', '',             'I1 &larr; #19, I2 &larr; #20'),
-        array(22, 'BAUSTEIN.T_BENACHR', 'BAUSTEIN.N20', 'BAUSTEIN.P20', 'I &larr; #21'),
-        array(23, 'BAUSTEIN.T_SWS',     'BAUSTEIN.N21', 'BAUSTEIN.P21', 'I &larr; #10'),
-        array(24, 'BAUSTEIN.T_BENACHR', 'BAUSTEIN.N22', 'BAUSTEIN.P22', 'I &larr; #23'),
-        array(25, 'BAUSTEIN.T_SWS',     'BAUSTEIN.N23', 'BAUSTEIN.P23', 'I &larr; #12'),
-        array(26, 'BAUSTEIN.T_BENACHR', 'BAUSTEIN.N24', 'BAUSTEIN.P24', 'I &larr; #25'),
-        array(27, 'BAUSTEIN.T_SWS',     'BAUSTEIN.N25', 'BAUSTEIN.P25', 'I &larr; #11'),
-        array(28, 'BAUSTEIN.T_BENACHR', 'BAUSTEIN.N26', 'BAUSTEIN.P26', 'I &larr; #27'),
-        array(29, 'BAUSTEIN.T_STATUS',  'BAUSTEIN.N27', 'BAUSTEIN.P27', 'I1 &larr; #1, I2 &larr; #3, I3 &larr; #5'),
+        array(14, 'BAUSTEIN.T_ODER',    'BAUSTEIN.N14A', '',            'I1 = #13, I2 = #6'),
+        array(15, 'BAUSTEIN.T_ODER',    'BAUSTEIN.N14B', '',            'I1 = #7, I2 = #8'),
+        array(16, 'BAUSTEIN.T_ODER',    'BAUSTEIN.N14', '',             'I1 = #14, I2 = #15'),
+        array(17, 'BAUSTEIN.T_EVZ',     'BAUSTEIN.N15', 'BAUSTEIN.P15', '#16'),
+        array(18, 'BAUSTEIN.T_BENACHR', 'BAUSTEIN.N16', 'BAUSTEIN.P16', '#17'),
+        array(19, 'BAUSTEIN.T_SWS',     'BAUSTEIN.N17', 'BAUSTEIN.P17', '#1'),
+        array(20, 'BAUSTEIN.T_SWS',     'BAUSTEIN.N18', 'BAUSTEIN.P18', '#2'),
+        array(21, 'BAUSTEIN.T_ODER',    'BAUSTEIN.N19', '',             'I1 = #19, I2 = #20'),
+        array(22, 'BAUSTEIN.T_BENACHR', 'BAUSTEIN.N20', 'BAUSTEIN.P20', '#21'),
+        array(23, 'BAUSTEIN.T_SWS',     'BAUSTEIN.N21', 'BAUSTEIN.P21', '#10'),
+        array(24, 'BAUSTEIN.T_BENACHR', 'BAUSTEIN.N22', 'BAUSTEIN.P22', '#23'),
+        array(25, 'BAUSTEIN.T_SWS',     'BAUSTEIN.N23', 'BAUSTEIN.P23', '#12'),
+        array(26, 'BAUSTEIN.T_BENACHR', 'BAUSTEIN.N24', 'BAUSTEIN.P24', '#25'),
+        array(27, 'BAUSTEIN.T_SWS',     'BAUSTEIN.N25', 'BAUSTEIN.P25', '#11'),
+        array(28, 'BAUSTEIN.T_BENACHR', 'BAUSTEIN.N26', 'BAUSTEIN.P26', '#27'),
+        array(29, 'BAUSTEIN.T_STATUS',  'BAUSTEIN.N27', 'BAUSTEIN.P27', 'I1 = #1, I2 = #3, I3 = #5'),
         array(30, 'BAUSTEIN.T_WOCHE',   'BAUSTEIN.N28', 'BAUSTEIN.P28', '&mdash;'),
         array(31, 'BAUSTEIN.T_TASTER',  'BAUSTEIN.N29', 'BAUSTEIN.P29', '&mdash;'),
-        array(32, 'BAUSTEIN.T_UND',     'BAUSTEIN.N30', 'BAUSTEIN.P30', 'I1 &larr; #30, I2 &larr; ' . vw_t('BAUSTEIN.ANWESEND')),
-        array(33, 'BAUSTEIN.T_ODER',    'BAUSTEIN.N31', '',             'I1 &larr; #31, I2 &larr; #32'),
-        array(34, 'BAUSTEIN.T_IMPULS',  'BAUSTEIN.N32', 'BAUSTEIN.P32', 'I &larr; #33'),
-        array(35, 'BAUSTEIN.T_VA',      'BAUSTEIN.N33', 'BAUSTEIN.P33', 'I &larr; #34'),
+        array(32, 'BAUSTEIN.T_UND',     'BAUSTEIN.N30', 'BAUSTEIN.P30', 'I1 = #30, I2 = ' . vw_t('BAUSTEIN.ANWESEND')),
+        array(33, 'BAUSTEIN.T_ODER',    'BAUSTEIN.N31', '',             'I1 = #31, I2 = #32'),
+        array(34, 'BAUSTEIN.T_IMPULS',  'BAUSTEIN.N32', 'BAUSTEIN.P32', '#33'),
+        array(35, 'BAUSTEIN.T_VA',      'BAUSTEIN.N33', 'BAUSTEIN.P33', '#34'),
         array(36, 'BAUSTEIN.T_VA',      'BAUSTEIN.N34', 'BAUSTEIN.P34', vw_t('BAUSTEIN.MANUELL')),
     );
 }
