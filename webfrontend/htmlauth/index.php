@@ -885,6 +885,16 @@ if ($vw_rahmen) {
 .sm-wrap .sm-beanstandet { border: 2px solid #c62828 !important; background: #fff5f5 !important; }
 .sm-wrap input[type=checkbox].sm-beanstandet { outline: 2px solid #c62828; outline-offset: 2px; }
 
+/* Welle Bild 17 (0.9.32): vier Seiten aus dem Musterprojekt in Schritt 8 - Bild, Ueberschrift, Schritte und
+   Hinweise je Seite (wie Weissware 0.9.42). */
+.sm-bild { margin: 12px 0; }
+.sm-bild img { max-width: 100%; height: auto; border: 1px solid #ccc; border-radius: 4px; background: #fff; }
+.sm-bild figcaption { font-size: .9em; color: #555; margin-top: 4px; }
+.sm-wrap h4.sm-h4 { color: #4f7d17; font-size: 0.98em; font-weight: 700; margin: 22px 0 4px;
+    padding-top: 10px; border-top: 1px solid #e0e0e0; }
+.sm-schritte { margin: 6px 0 0 18px; padding: 0; }
+.sm-schritte li { margin: 3px 0; }
+
 </style>
 <div class="sm-wrap">
 
@@ -1618,7 +1628,7 @@ $vw_nummern = $vw_fahrzeuge ? array_keys($vw_fahrzeuge) : array('1');
 <tr><th><?= vw_e(vw_t('LOX.T_BEFEHL')) ?></th><th><?= vw_e(vw_t('LOX.T_ADRESSE')) ?></th></tr>
 <?php foreach (vw_schalter() as $vw_sn => $vw_ss) { ?>
 <tr><td><?= vw_t($vw_ss) ?></td>
-    <td><span class="sm-mono">/plugins/<?= vw_e($vw_p['plugin']) ?>/index.php?token=<?= vw_e($vw_token) ?>&amp;aktion=einstellung&amp;fahrzeug=1&amp;name=<?= vw_e($vw_sn) ?>&amp;wert=&lt;v&gt;</span></td></tr>
+    <td><span class="sm-mono">/plugins/<?= vw_e($vw_p['plugin']) ?>/index.php?token=<?= vw_e($vw_token) ?>&amp;aktion=einstellung&amp;fahrzeug=1&amp;name=<?= vw_e($vw_sn) ?>&amp;wert=&lt;v.0&gt;</span></td></tr>
 <?php } ?>
 </table>
 <div class="sm-hinweis"><?= vw_t('LOX.SS_UNGEMESSEN') ?></div>
@@ -1654,78 +1664,255 @@ foreach (vw_nur_lesend() as $vw_nl => $vw_nlt) { ?>
 
 <?php
 /**
- * Die komplette Baustein-Liste. Pflicht im Hausstandard.
+ * Die Baustein-Listen fuer Schritt 8 (Welle Bild 17, 0.9.32; Hausherr 11.10.2026: Vollausstattung, ein
+ * absoluter Laie soll das Maximum leicht uebernehmen koennen; Entwurf Welle 17 vw, Entscheidungen 1, 15, 16).
+ * Vier Seiten aus dem LoxBerry-Plugins Musterprojekt, dort in Loxone Config gebaut und verbunden
+ * (Musterprojekt/baustein_listen.txt, Abschnitte "VolkswagenID" 32, "VolkswagenID Laden" 36, "VolkswagenID
+ * Klima und Befehle" 29 und "VolkswagenID Fahrzeug" 35 Zeilen, wortgleich). Je Tabellenzeile EIN
+ * Sprachschluessel BAUSTEIN.Z<seite>_<nn> = "Typ | Name | Parameter | Eingaenge" ohne Auszeichnung; jede Zelle
+ * und jeder Satz wird maskiert ausgegeben. Zeilen mit einem Prozentzeichen ("20 % ein") stehen in der
+ * Sprachdatei mit "%%" und laufen durch sprintf() ohne Argument - sonst laese sprachplatzhalter_pruefen "% e"
+ * als Umwandlung. Die Namen gelten fuer Fahrzeug 1, so wie die Vorlagen sie anlegen (vw_vorlage(),
+ * vw_vorlage_vo(), Titel fest deutsch).
  *
- * Anspruch: Wer die Tabelle von oben nach unten abarbeitet, hat die Funktion
- * nachgebaut, ohne nachzudenken. Loxone Config fuehrt alle Bausteine in der
- * Baustein-Suche (F5).
+ * Bis 0.9.31 stand hier vw_bausteine() mit 36 Zeilen auf einer Seite. Sie nannte VW_1_KABEL und VW_1_INSPTAGE,
+ * die keine Vorlage anlegt (B1), schickte ueber einen freilaufenden Impulsgeber einen Digitalimpuls an den
+ * analogen Klimabefehl (B2), meldete "offen" bei jeder Fahrt (B3) und hing Schwellwertschalter direkt an
+ * Benachrichtigungen (B4).
  *
- * Je Zeile: Nummer, Typ, Name, Parameter, woran die Eingaenge kommen.
- * Typ, Name und Parameter stehen als Sprachschluessel drin, die Eingangsspalte
- * ist symbolisch und damit sprachfrei.
- *
- * X-10 (0.9.31): die Eingangsspalte in der Schreibweise von
- * Werkzeuge/leitungen_setzen.py - "#N" (Ausgang von Zeile N auf den ersten
- * Eingang), "I1 = #N, I2 = #M"; bis 0.9.30 stand dort "I &larr; #N".
+ * Rueckgabe: je Seite 'kopf' (Name der Musterseite), 'bild', 'schritte' und 'hinweise' (Saetze), 'zeilen'
+ * (je ein Text mit vier Zellen) - alles reiner Text.
  */
-function vw_bausteine()
+function vw_bausteinseiten()
 {
     return array(
-        array(1,  'BAUSTEIN.T_VE',      'BAUSTEIN.N01', 'BAUSTEIN.P01', '&mdash;'),
-        array(2,  'BAUSTEIN.T_VE',      'BAUSTEIN.N02', 'BAUSTEIN.P02', '&mdash;'),
-        array(3,  'BAUSTEIN.T_VE',      'BAUSTEIN.N03', 'BAUSTEIN.P03', '&mdash;'),
-        array(4,  'BAUSTEIN.T_VE',      'BAUSTEIN.N04', 'BAUSTEIN.P04', '&mdash;'),
-        array(5,  'BAUSTEIN.T_VE',      'BAUSTEIN.N05', 'BAUSTEIN.P05', '&mdash;'),
-        array(6,  'BAUSTEIN.T_VE',      'BAUSTEIN.N06', 'BAUSTEIN.P06', '&mdash;'),
-        array(7,  'BAUSTEIN.T_VE',      'BAUSTEIN.N07', 'BAUSTEIN.P07', '&mdash;'),
-        array(8,  'BAUSTEIN.T_VE',      'BAUSTEIN.N08', 'BAUSTEIN.P08', '&mdash;'),
-        array(9,  'BAUSTEIN.T_VE',      'BAUSTEIN.N09', 'BAUSTEIN.P09', '&mdash;'),
-        array(10, 'BAUSTEIN.T_VE',      'BAUSTEIN.N10', 'BAUSTEIN.P10', '&mdash;'),
-        array(11, 'BAUSTEIN.T_VE',      'BAUSTEIN.N11', 'BAUSTEIN.P11', '&mdash;'),
-        array(12, 'BAUSTEIN.T_VE',      'BAUSTEIN.N12', 'BAUSTEIN.P12', '&mdash;'),
-        array(13, 'BAUSTEIN.T_NICHT',   'BAUSTEIN.N13', '',             '#5'),
-        /* Regel A4 (Regeln/04; Nachzug 02.10.2026): ein UND/ODER hat zwei Eingaenge, an jedem
-         * genau eine Quelle. Bisher hingen an #14 vier Quellen an zwei Eingaengen; jetzt drei
-         * ODER, und jede spaetere Zeile rueckt um zwei. Die Sprachschluessel N15 ff. behalten
-         * ihre Namen - die angezeigte Nummer ist die erste Spalte. */
-        array(14, 'BAUSTEIN.T_ODER',    'BAUSTEIN.N14A', '',            'I1 = #13, I2 = #6'),
-        array(15, 'BAUSTEIN.T_ODER',    'BAUSTEIN.N14B', '',            'I1 = #7, I2 = #8'),
-        array(16, 'BAUSTEIN.T_ODER',    'BAUSTEIN.N14', '',             'I1 = #14, I2 = #15'),
-        array(17, 'BAUSTEIN.T_EVZ',     'BAUSTEIN.N15', 'BAUSTEIN.P15', '#16'),
-        array(18, 'BAUSTEIN.T_BENACHR', 'BAUSTEIN.N16', 'BAUSTEIN.P16', '#17'),
-        array(19, 'BAUSTEIN.T_SWS',     'BAUSTEIN.N17', 'BAUSTEIN.P17', '#1'),
-        array(20, 'BAUSTEIN.T_SWS',     'BAUSTEIN.N18', 'BAUSTEIN.P18', '#2'),
-        array(21, 'BAUSTEIN.T_ODER',    'BAUSTEIN.N19', '',             'I1 = #19, I2 = #20'),
-        array(22, 'BAUSTEIN.T_BENACHR', 'BAUSTEIN.N20', 'BAUSTEIN.P20', '#21'),
-        array(23, 'BAUSTEIN.T_SWS',     'BAUSTEIN.N21', 'BAUSTEIN.P21', '#10'),
-        array(24, 'BAUSTEIN.T_BENACHR', 'BAUSTEIN.N22', 'BAUSTEIN.P22', '#23'),
-        array(25, 'BAUSTEIN.T_SWS',     'BAUSTEIN.N23', 'BAUSTEIN.P23', '#12'),
-        array(26, 'BAUSTEIN.T_BENACHR', 'BAUSTEIN.N24', 'BAUSTEIN.P24', '#25'),
-        array(27, 'BAUSTEIN.T_SWS',     'BAUSTEIN.N25', 'BAUSTEIN.P25', '#11'),
-        array(28, 'BAUSTEIN.T_BENACHR', 'BAUSTEIN.N26', 'BAUSTEIN.P26', '#27'),
-        array(29, 'BAUSTEIN.T_STATUS',  'BAUSTEIN.N27', 'BAUSTEIN.P27', 'I1 = #1, I2 = #3, I3 = #5'),
-        array(30, 'BAUSTEIN.T_WOCHE',   'BAUSTEIN.N28', 'BAUSTEIN.P28', '&mdash;'),
-        array(31, 'BAUSTEIN.T_TASTER',  'BAUSTEIN.N29', 'BAUSTEIN.P29', '&mdash;'),
-        array(32, 'BAUSTEIN.T_UND',     'BAUSTEIN.N30', 'BAUSTEIN.P30', 'I1 = #30, I2 = ' . vw_t('BAUSTEIN.ANWESEND')),
-        array(33, 'BAUSTEIN.T_ODER',    'BAUSTEIN.N31', '',             'I1 = #31, I2 = #32'),
-        array(34, 'BAUSTEIN.T_IMPULS',  'BAUSTEIN.N32', 'BAUSTEIN.P32', '#33'),
-        array(35, 'BAUSTEIN.T_VA',      'BAUSTEIN.N33', 'BAUSTEIN.P33', '#34'),
-        array(36, 'BAUSTEIN.T_VA',      'BAUSTEIN.N34', 'BAUSTEIN.P34', vw_t('BAUSTEIN.MANUELL')),
+        array('kopf' => 'VolkswagenID', 'bild' => 'einbindung_loxone.png',
+              'schritte' => array(
+                  sprintf(vw_t('BAUSTEIN.S1_SCHRITT1'), vw_t('REITER.EINSTELLUNGEN'), vw_t('EINST.K_START'), vw_t('EINST.H_HEIMAT'), vw_t('REITER.TEST'), vw_t('TEST.K_STATUS')),
+                  sprintf(vw_t('BAUSTEIN.S1_SCHRITT2'), vw_t('REITER.LOXONE'), vw_t('LOX.SV_TITEL'), vw_t('LOX.ART_STATUS'), vw_t('LOX.ART_LADEN'), vw_t('LOX.ART_WARTUNG'), vw_t('LOX.ART_VERBRAUCH'), vw_t('LOX.ART_BEFEHLE')),
+                  vw_t('BAUSTEIN.S1_SCHRITT3'),
+                  vw_t('BAUSTEIN.S1_SCHRITT4'),
+                  vw_t('BAUSTEIN.S1_SCHRITT5'),
+                  vw_t('BAUSTEIN.S1_SCHRITT6')),
+              'zeilen' => array(
+                  vw_t('BAUSTEIN.Z1_01'),
+                  vw_t('BAUSTEIN.Z1_02'),
+                  vw_t('BAUSTEIN.Z1_03'),
+                  vw_t('BAUSTEIN.Z1_04'),
+                  vw_t('BAUSTEIN.Z1_05'),
+                  vw_t('BAUSTEIN.Z1_06'),
+                  sprintf(vw_t('BAUSTEIN.Z1_07')),
+                  sprintf(vw_t('BAUSTEIN.Z1_08')),
+                  vw_t('BAUSTEIN.Z1_09'),
+                  vw_t('BAUSTEIN.Z1_10'),
+                  vw_t('BAUSTEIN.Z1_11'),
+                  vw_t('BAUSTEIN.Z1_12'),
+                  vw_t('BAUSTEIN.Z1_13'),
+                  vw_t('BAUSTEIN.Z1_14'),
+                  vw_t('BAUSTEIN.Z1_15'),
+                  vw_t('BAUSTEIN.Z1_16'),
+                  vw_t('BAUSTEIN.Z1_17'),
+                  vw_t('BAUSTEIN.Z1_18'),
+                  vw_t('BAUSTEIN.Z1_19'),
+                  vw_t('BAUSTEIN.Z1_20'),
+                  vw_t('BAUSTEIN.Z1_21'),
+                  sprintf(vw_t('BAUSTEIN.Z1_22')),
+                  vw_t('BAUSTEIN.Z1_23'),
+                  vw_t('BAUSTEIN.Z1_24'),
+                  vw_t('BAUSTEIN.Z1_25'),
+                  vw_t('BAUSTEIN.Z1_26'),
+                  vw_t('BAUSTEIN.Z1_27'),
+                  sprintf(vw_t('BAUSTEIN.Z1_28')),
+                  sprintf(vw_t('BAUSTEIN.Z1_29')),
+                  vw_t('BAUSTEIN.Z1_30'),
+                  vw_t('BAUSTEIN.Z1_31'),
+                  vw_t('BAUSTEIN.Z1_32')),
+              'hinweise' => array(
+                  vw_t('BAUSTEIN.S1_H1'),
+                  vw_t('BAUSTEIN.S1_H2'),
+                  vw_t('BAUSTEIN.S1_H3'),
+                  vw_t('BAUSTEIN.S1_H4'),
+                  vw_t('BAUSTEIN.S1_H5'),
+                  sprintf(vw_t('BAUSTEIN.S1_H6'), vw_t('REITER.LOXONE')),
+                  sprintf(vw_t('BAUSTEIN.S1_H7'), vw_t('LOX.K_TOKEN_NEU')))),
+        array('kopf' => 'VolkswagenID Laden', 'bild' => 'einbindung_loxone_laden.png',
+              'schritte' => array(
+                  sprintf(vw_t('BAUSTEIN.S2_SCHRITT1'), vw_t('REITER.EINSTELLUNGEN'), vw_t('EINST.L_STEUERUNG_EIN')),
+                  vw_t('BAUSTEIN.S2_SCHRITT2'),
+                  vw_t('BAUSTEIN.S2_SCHRITT3'),
+                  vw_t('BAUSTEIN.S2_SCHRITT4'),
+                  vw_t('BAUSTEIN.S2_SCHRITT5')),
+              'zeilen' => array(
+                  sprintf(vw_t('BAUSTEIN.Z2_01')),
+                  vw_t('BAUSTEIN.Z2_02'),
+                  vw_t('BAUSTEIN.Z2_03'),
+                  vw_t('BAUSTEIN.Z2_04'),
+                  sprintf(vw_t('BAUSTEIN.Z2_05')),
+                  vw_t('BAUSTEIN.Z2_06'),
+                  vw_t('BAUSTEIN.Z2_07'),
+                  vw_t('BAUSTEIN.Z2_08'),
+                  vw_t('BAUSTEIN.Z2_09'),
+                  vw_t('BAUSTEIN.Z2_10'),
+                  vw_t('BAUSTEIN.Z2_11'),
+                  vw_t('BAUSTEIN.Z2_12'),
+                  vw_t('BAUSTEIN.Z2_13'),
+                  vw_t('BAUSTEIN.Z2_14'),
+                  vw_t('BAUSTEIN.Z2_15'),
+                  vw_t('BAUSTEIN.Z2_16'),
+                  vw_t('BAUSTEIN.Z2_17'),
+                  vw_t('BAUSTEIN.Z2_18'),
+                  vw_t('BAUSTEIN.Z2_19'),
+                  sprintf(vw_t('BAUSTEIN.Z2_20')),
+                  sprintf(vw_t('BAUSTEIN.Z2_21')),
+                  vw_t('BAUSTEIN.Z2_22'),
+                  sprintf(vw_t('BAUSTEIN.Z2_23')),
+                  vw_t('BAUSTEIN.Z2_24'),
+                  sprintf(vw_t('BAUSTEIN.Z2_25')),
+                  vw_t('BAUSTEIN.Z2_26'),
+                  vw_t('BAUSTEIN.Z2_27'),
+                  vw_t('BAUSTEIN.Z2_28'),
+                  vw_t('BAUSTEIN.Z2_29'),
+                  vw_t('BAUSTEIN.Z2_30'),
+                  vw_t('BAUSTEIN.Z2_31'),
+                  vw_t('BAUSTEIN.Z2_32'),
+                  vw_t('BAUSTEIN.Z2_33'),
+                  vw_t('BAUSTEIN.Z2_34'),
+                  vw_t('BAUSTEIN.Z2_35'),
+                  vw_t('BAUSTEIN.Z2_36')),
+              'hinweise' => array(
+                  sprintf(vw_t('BAUSTEIN.S2_H1'), vw_t('EINST.H_EMPFEHLUNG')),
+                  vw_t('BAUSTEIN.S2_H2'),
+                  vw_t('BAUSTEIN.S2_H3'),
+                  vw_t('BAUSTEIN.S2_H4'),
+                  sprintf(vw_t('BAUSTEIN.S2_H5'), vw_t('REITER.TEST')),
+                  vw_t('BAUSTEIN.S2_H6'))),
+        array('kopf' => 'VolkswagenID Klima und Befehle', 'bild' => 'einbindung_loxone_klima_befehle.png',
+              'schritte' => array(
+                  sprintf(vw_t('BAUSTEIN.S3_SCHRITT1'), vw_t('EINST.L_STEUERUNG_EIN')),
+                  vw_t('BAUSTEIN.S3_SCHRITT2'),
+                  vw_t('BAUSTEIN.S3_SCHRITT3'),
+                  vw_t('BAUSTEIN.S3_SCHRITT4'),
+                  vw_t('BAUSTEIN.S3_SCHRITT5')),
+              'zeilen' => array(
+                  vw_t('BAUSTEIN.Z3_01'),
+                  vw_t('BAUSTEIN.Z3_02'),
+                  vw_t('BAUSTEIN.Z3_03'),
+                  vw_t('BAUSTEIN.Z3_04'),
+                  vw_t('BAUSTEIN.Z3_05'),
+                  vw_t('BAUSTEIN.Z3_06'),
+                  vw_t('BAUSTEIN.Z3_07'),
+                  vw_t('BAUSTEIN.Z3_08'),
+                  vw_t('BAUSTEIN.Z3_09'),
+                  vw_t('BAUSTEIN.Z3_10'),
+                  vw_t('BAUSTEIN.Z3_11'),
+                  vw_t('BAUSTEIN.Z3_12'),
+                  vw_t('BAUSTEIN.Z3_13'),
+                  vw_t('BAUSTEIN.Z3_14'),
+                  vw_t('BAUSTEIN.Z3_15'),
+                  vw_t('BAUSTEIN.Z3_16'),
+                  vw_t('BAUSTEIN.Z3_17'),
+                  vw_t('BAUSTEIN.Z3_18'),
+                  vw_t('BAUSTEIN.Z3_19'),
+                  vw_t('BAUSTEIN.Z3_20'),
+                  vw_t('BAUSTEIN.Z3_21'),
+                  vw_t('BAUSTEIN.Z3_22'),
+                  vw_t('BAUSTEIN.Z3_23'),
+                  vw_t('BAUSTEIN.Z3_24'),
+                  vw_t('BAUSTEIN.Z3_25'),
+                  vw_t('BAUSTEIN.Z3_26'),
+                  vw_t('BAUSTEIN.Z3_27'),
+                  vw_t('BAUSTEIN.Z3_28'),
+                  vw_t('BAUSTEIN.Z3_29')),
+              'hinweise' => array(
+                  vw_t('BAUSTEIN.S3_H1'),
+                  sprintf(vw_t('BAUSTEIN.S3_H2'), vw_t('EINST.H_ABFAHRT')),
+                  vw_t('BAUSTEIN.S3_H3'),
+                  vw_t('BAUSTEIN.S3_H4'),
+                  sprintf(vw_t('BAUSTEIN.S3_H5'), vw_t('EINST.L_EINGREIFEND_EIN')),
+                  sprintf(vw_t('BAUSTEIN.S3_H6'), vw_t('REITER.EINSTELLUNGEN')))),
+        array('kopf' => 'VolkswagenID Fahrzeug', 'bild' => 'einbindung_loxone_fahrzeug.png',
+              'schritte' => array(
+                  vw_t('BAUSTEIN.S4_SCHRITT1'),
+                  vw_t('BAUSTEIN.S4_SCHRITT2'),
+                  vw_t('BAUSTEIN.S4_SCHRITT3'),
+                  vw_t('BAUSTEIN.S4_SCHRITT4'),
+                  vw_t('BAUSTEIN.S4_SCHRITT5')),
+              'zeilen' => array(
+                  vw_t('BAUSTEIN.Z4_01'),
+                  vw_t('BAUSTEIN.Z4_02'),
+                  vw_t('BAUSTEIN.Z4_03'),
+                  vw_t('BAUSTEIN.Z4_04'),
+                  vw_t('BAUSTEIN.Z4_05'),
+                  vw_t('BAUSTEIN.Z4_06'),
+                  vw_t('BAUSTEIN.Z4_07'),
+                  vw_t('BAUSTEIN.Z4_08'),
+                  vw_t('BAUSTEIN.Z4_09'),
+                  vw_t('BAUSTEIN.Z4_10'),
+                  vw_t('BAUSTEIN.Z4_11'),
+                  vw_t('BAUSTEIN.Z4_12'),
+                  vw_t('BAUSTEIN.Z4_13'),
+                  vw_t('BAUSTEIN.Z4_14'),
+                  vw_t('BAUSTEIN.Z4_15'),
+                  vw_t('BAUSTEIN.Z4_16'),
+                  vw_t('BAUSTEIN.Z4_17'),
+                  vw_t('BAUSTEIN.Z4_18'),
+                  vw_t('BAUSTEIN.Z4_19'),
+                  sprintf(vw_t('BAUSTEIN.Z4_20')),
+                  vw_t('BAUSTEIN.Z4_21'),
+                  vw_t('BAUSTEIN.Z4_22'),
+                  vw_t('BAUSTEIN.Z4_23'),
+                  vw_t('BAUSTEIN.Z4_24'),
+                  vw_t('BAUSTEIN.Z4_25'),
+                  vw_t('BAUSTEIN.Z4_26'),
+                  vw_t('BAUSTEIN.Z4_27'),
+                  vw_t('BAUSTEIN.Z4_28'),
+                  vw_t('BAUSTEIN.Z4_29'),
+                  vw_t('BAUSTEIN.Z4_30'),
+                  vw_t('BAUSTEIN.Z4_31'),
+                  vw_t('BAUSTEIN.Z4_32'),
+                  vw_t('BAUSTEIN.Z4_33'),
+                  vw_t('BAUSTEIN.Z4_34'),
+                  sprintf(vw_t('BAUSTEIN.Z4_35'))),
+              'hinweise' => array(
+                  vw_t('BAUSTEIN.S4_H1'),
+                  vw_t('BAUSTEIN.S4_H2'),
+                  vw_t('BAUSTEIN.S4_H3'),
+                  vw_t('BAUSTEIN.S4_H4'))),
     );
 }
 ?>
 
 <div class="sm-step"><b><?= vw_e(vw_t('LOX.S8_TITEL')) ?></b><br>
 <?= vw_t('LOX.S8_TEXT') ?>
+<?php foreach (vw_bausteinseiten() as $vw_bs) { ?>
+<h4 class="sm-h4"><?= vw_e($vw_bs['kopf']) ?></h4>
+<div class="sm-hinweis"><b><?= vw_e(vw_t('BAUSTEIN.SCHRITTE_TITEL')) ?></b>
+<ol class="sm-schritte">
+<?php foreach ($vw_bs['schritte'] as $vw_bx) { ?>
+<li><?= vw_e($vw_bx) ?></li>
+<?php } ?>
+</ol></div>
 <table class="sm-tbl">
 <tr><th>#</th><th><?= vw_e(vw_t('LOX.T_BAUSTEIN')) ?></th><th><?= vw_e(vw_t('LOX.T_NAMENSVORSCHLAG')) ?></th>
     <th><?= vw_e(vw_t('LOX.T_PARAMETER')) ?></th><th><?= vw_e(vw_t('LOX.T_EINGAENGE')) ?></th></tr>
-<?php foreach (vw_bausteine() as $vw_b) { ?>
-<tr><td><?= (int) $vw_b[0] ?></td><td><?= vw_t($vw_b[1]) ?></td><td><?= vw_t($vw_b[2]) ?></td>
-    <td><?= $vw_b[3] !== '' ? vw_t($vw_b[3]) : '&mdash;' ?></td><td><?= $vw_b[4] ?></td></tr>
+<?php foreach ($vw_bs['zeilen'] as $vw_bzi => $vw_bz) {
+    $vw_bc = array_pad(explode(' | ', $vw_bz, 4), 4, ''); ?>
+<tr><td><?= (int) $vw_bzi + 1 ?></td><td><?= vw_e($vw_bc[0]) ?></td><td><?= vw_e($vw_bc[1]) ?></td>
+    <td><?= vw_e($vw_bc[2]) ?></td><td><?= vw_e($vw_bc[3]) ?></td></tr>
 <?php } ?>
 </table>
-<?= vw_t('LOX.S8_ERLAEUTERUNG') ?>
+<div class="sm-warnung"><b><?= vw_e(vw_t('BAUSTEIN.HINWEISE_TITEL')) ?></b>
+<ul class="sm-schritte">
+<?php foreach ($vw_bs['hinweise'] as $vw_bx) { ?>
+<li><?= vw_e($vw_bx) ?></li>
+<?php } ?>
+</ul></div>
+<figure class="sm-bild">
+<img src="<?= vw_e($vw_bs['bild']) ?>" alt="<?= vw_e(vw_t('LOX.BILD_ALT')) ?>" loading="lazy">
+<figcaption><?= vw_e(sprintf(vw_t('LOX.BILD_UNTERSCHRIFT'), $vw_bs['kopf'])) ?></figcaption>
+</figure>
+<div class="sm-hilfe"><?= vw_t('LOX.MUSTERPROJEKT') ?></div>
+<?php } ?>
 </div>
 
 <div class="sm-step"><b><?= vw_e(vw_t('LOX.S9_TITEL')) ?></b><br>

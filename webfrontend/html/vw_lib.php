@@ -2065,7 +2065,8 @@ function vw_verbrauch_felder()
  * Je Eintrag:
  *   schluessel   Sprachschluessel fuer die Bezeichnung
  *   gegen        der Ausbefehl, mit dem zusammen ein EIN/AUS-Ausgang entsteht
- *   param        zusaetzlicher Adressteil, '<v>' wird von Loxone ersetzt
+ *   param        zusaetzlicher Adressteil, '<v.1>'/'<v.0>' ersetzt Loxone durch den Wert mit einer
+ *                bzw. keiner Nachkommastelle (seit 0.9.32; bis 0.9.31 das blanke '<v>')
  *   eingreifend  1 = braucht den zweiten Haken (bewegt oder oeffnet das Fahrzeug)
  *   spin         1 = ohne hinterlegte S-PIN nicht moeglich
  */
@@ -2078,17 +2079,25 @@ function vw_schalter_erster()
 
 function vw_befehle()
 {
+    /* Welle Bild 17 (0.9.32, Entwurf Welle 17 vw, E13 und O2):
+     *   - Die analogen Befehle tragen das Format im Platzhalter: <v.1> fuer die Temperatur (der Endpunkt nimmt
+     *     halbe Grad, Muster ^[0-9]{1,2}([.,][05])?$), <v.0> fuer Prozent, Ampere und die Ja/Nein-Einstellung
+     *     (ganze Zahlen). Bis 0.9.31 stand dort das blanke <v>; wie Config es formatiert, ist nicht gemessen.
+     *   - klima_start hat keinen Gegenbefehl mehr. Im Musterprojekt liefert eine Formel die Zieltemperatur,
+     *     solange angefordert, sonst -1 (vom Endpunkt abgewiesen) - ob Config bei 0 den Aus-Befehl schickt,
+     *     ist offen. Die Ausgangsvorlage legt deshalb "Klimatisierung ein" (analog, nur Ein) und
+     *     "Klimatisierung aus" (klima_stop, nur Ein) als zwei Ausgaenge an. Der Endpunkt kennt beide seit
+     *     jeher; ein bestehender gekoppelter Ausgang arbeitet unveraendert weiter. */
     return array(
-        'klima_start'    => array('s' => 'VW_BEF.KLIMA_START',  'gegen' => 'klima_stop',
-                                  'param' => '&temp=<v>', 'analog' => 1),
+        'klima_start'    => array('s' => 'VW_BEF.KLIMA_START',  'param' => '&temp=<v.1>', 'analog' => 1),
         'klima_stop'     => array('s' => 'VW_BEF.KLIMA_STOP'),
-        'zieltemperatur' => array('s' => 'VW_BEF.ZIELTEMP',     'param' => '&temp=<v>',
+        'zieltemperatur' => array('s' => 'VW_BEF.ZIELTEMP',     'param' => '&temp=<v.1>',
                                   'analog' => 1),
         'laden_start'    => array('s' => 'VW_BEF.LADEN_START',  'gegen' => 'laden_stop'),
         'laden_stop'     => array('s' => 'VW_BEF.LADEN_STOP'),
-        'ladegrenze'     => array('s' => 'VW_BEF.LADEGRENZE',   'param' => '&prozent=<v>',
+        'ladegrenze'     => array('s' => 'VW_BEF.LADEGRENZE',   'param' => '&prozent=<v.0>',
                                   'analog' => 1),
-        'ladestrom'      => array('s' => 'VW_BEF.LADESTROM',    'param' => '&ampere=<v>',
+        'ladestrom'      => array('s' => 'VW_BEF.LADESTROM',    'param' => '&ampere=<v.0>',
                                   'analog' => 1),
         'scheibe_ein'    => array('s' => 'VW_BEF.SCHEIBE_EIN',  'gegen' => 'scheibe_aus'),
         'scheibe_aus'    => array('s' => 'VW_BEF.SCHEIBE_AUS'),
@@ -2105,7 +2114,7 @@ function vw_befehle()
          * Tabelle auf einen Namen gelaufen, den der Endpunkt abweist. Die
          * vollstaendige Liste steht im Reiter Loxone darunter. */
         'einstellung'    => array('s' => 'VW_BEF.EINSTELLUNG',
-                                  'param' => '&name=' . vw_schalter_erster() . '&wert=<v>',
+                                  'param' => '&name=' . vw_schalter_erster() . '&wert=<v.0>',
                                   'analog' => 1),
     );
 }
@@ -2178,6 +2187,49 @@ function vw_host()
     return isset($_SERVER['HTTP_HOST']) && $_SERVER['HTTP_HOST'] !== ''
         ? preg_replace('/[^A-Za-z0-9\.\-:]/', '', (string) $_SERVER['HTTP_HOST'])
         : (gethostname() ?: 'loxberry');
+}
+
+/**
+ * Der feste deutsche Titel einer Vorlage oder eines Vorlagenbefehls.
+ *
+ * Welle Bild 17 (0.9.32, Entwurf Welle 17 vw, E12; Sprachregel 13.10.2026, Regeln/07): Behaelter- und
+ * Befehlstitel der erzeugten Vorlagen stehen fest deutsch im Code, nur die Kommentare bleiben uebersetzt. Bis
+ * 0.9.31 kamen sie aus der Sprachdatei, und eine englische Oberflaeche legte "Volkswagen 1 Charging" und
+ * "VW 1 Start charging / Stop charging" an - Baustein-Liste, Bild und Musterprojekt passten dann nicht mehr.
+ * Die Werte sind die bisherigen deutschen Texte der Schluessel (im Bauskript gegen den Erzeuger geprueft); die
+ * Schluessel selbst bleiben fuer die Oberflaeche. Bestehende Projekte behalten ihre Bausteine, Suchtexte und
+ * Adressen aendern sich nicht. Ein unbekannter Schluessel faellt auf die Sprachdatei zurueck.
+ */
+function vw_titel_de($schluessel)
+{
+    $titel = array(
+        'LOX.ART_STATUS' => 'Status',
+        'LOX.ART_LADEN' => 'Laden',
+        'LOX.ART_WARTUNG' => 'Wartung',
+        'LOX.ART_POSITION' => 'Position',
+        'LOX.ART_VERBRAUCH' => 'Verbrauch',
+        'LOX.ART_BEFEHLE' => 'Befehle',
+        'VW_BEF.KLIMA_START' => 'Klimatisierung ein',
+        'VW_BEF.KLIMA_STOP' => 'Klimatisierung aus',
+        'VW_BEF.ZIELTEMP' => 'Zieltemperatur setzen',
+        'VW_BEF.LADEN_START' => 'Laden starten',
+        'VW_BEF.LADEN_STOP' => 'Laden anhalten',
+        'VW_BEF.LADEGRENZE' => 'Ladegrenze setzen',
+        'VW_BEF.LADESTROM' => 'Ladestrom setzen',
+        'VW_BEF.SCHEIBE_EIN' => 'Scheibenheizung ein',
+        'VW_BEF.SCHEIBE_AUS' => 'Scheibenheizung aus',
+        'VW_BEF.WECKEN' => 'Fahrzeug wecken',
+        'VW_BEF.ABRUF' => 'Sofort abrufen',
+        'VW_BEF.ENTRIEGELN' => 'Entriegeln',
+        'VW_BEF.VERRIEGELN' => 'Verriegeln',
+        'VW_BEF.BLINKEN' => 'Lichthupe',
+        'VW_BEF.HUPEN' => 'Hupe und Lichthupe',
+        'VW_SCHALT.KLIMA_ENTRIEGELN' => 'Klimatisierung beim Entriegeln',
+        'VW_SCHALT.STECKER_AUTO' => 'Stecker nach dem Laden entriegeln',
+        'VW_SCHALT.KLIMA_OHNE_NETZ' => 'Klimatisierung auch ohne Netzstrom',
+    );
+    return isset($titel[$schluessel]) ? $titel[$schluessel]
+        : trim(strip_tags(html_entity_decode(vw_t($schluessel), ENT_QUOTES, 'UTF-8')));
 }
 
 /**
@@ -2275,7 +2327,8 @@ function vw_vorlage($nummer = 1, $art = 'status')
     return array(
         'volkswagen_fahrzeug' . (int) $nummer . '_' . $art . '.xml',
         vw_xml_virtual_in_http(array(
-            'title'   => 'Volkswagen ' . (int) $nummer . ' ' . vw_t('LOX.ART_' . strtoupper($art)),
+            // Welle Bild 17 (0.9.32, E12): Behaeltertitel fest deutsch, siehe vw_titel_de().
+            'title'   => 'Volkswagen ' . (int) $nummer . ' ' . vw_titel_de('LOX.ART_' . strtoupper($art)),
             'address' => $adresse,
             /* Die Wartungsdaten holt der Dienst nur jeden N-ten Takt
              * (takt_wartung, ab Werk 12). Ein Miniserver, der sie im
@@ -2293,9 +2346,12 @@ function vw_vorlage($nummer = 1, $art = 'status')
 /**
  * Die Ausgangsvorlage: alle schaltenden Befehle als virtuelle Ausgaenge.
  *
- * Zusammengehoerende Befehle werden zu EINEM Ausgang: 'klima_start' bekommt
- * 'klima_stop' als Ausbefehl. Das ist die Form, die in Loxone einen Schalter
- * ergibt statt zweier Taster.
+ * Zusammengehoerende Befehle werden zu EINEM Ausgang: 'laden_start' bekommt
+ * 'laden_stop' als Ausbefehl. Das ist die Form, die in Loxone einen Schalter
+ * ergibt statt zweier Taster. Seit 0.9.32 (Welle Bild 17, O2) gehoert
+ * 'klima_start' nicht mehr dazu: "Klimatisierung ein" ist analog und hat
+ * keinen Ausbefehl, "Klimatisierung aus" ist ein eigener Ausgang (siehe
+ * vw_befehle()). Titel fest deutsch (vw_titel_de(), E12).
  *
  * Eingreifende Befehle - Ver- und Entriegeln, Hupe, Lichthupe - kommen nur in
  * die Datei, wenn der zweite Haken gesetzt ist. Ein Ausgang, der eine gesperrte
@@ -2325,14 +2381,14 @@ function vw_vorlage_vo($nummer = 1)
              . ($name === 'abruf' ? '' : '&fahrzeug=' . (int) $nummer)
              . (isset($b['param']) ? $b['param'] : '');
         $aus = '';
-        $titel = vw_t($b['s']);
+        $titel = vw_titel_de($b['s']);
         if (isset($b['gegen']) && isset($alle[$b['gegen']])) {
             $g = $alle[$b['gegen']];
             if (empty($g['eingreifend']) || !empty($cfg['eingreifend_ein'])) {
                 $aus = $basis . '&aktion=' . $b['gegen'] . '&fahrzeug=' . (int) $nummer
                      . (isset($g['param']) ? $g['param'] : '');
                 $verbraucht[$b['gegen']] = true;
-                $titel = vw_t($b['s']) . ' / ' . vw_t($g['s']);
+                $titel = vw_titel_de($b['s']) . ' / ' . vw_titel_de($g['s']);
             }
         }
         /* Die Ja/Nein-Einstellung ist KEIN einzelner Ausgang.
@@ -2347,12 +2403,11 @@ function vw_vorlage_vo($nummer = 1)
         if ($name === 'einstellung') {
             foreach (vw_schalter() as $vw_sn => $vw_ss) {
                 $cmds[] = array(
-                    'title'   => 'VW ' . (int) $nummer . ' ' . trim(strip_tags(
-                                     html_entity_decode(vw_t($vw_ss), ENT_QUOTES, 'UTF-8'))),
+                    'title'   => 'VW ' . (int) $nummer . ' ' . vw_titel_de($vw_ss),
                     'comment' => trim(strip_tags(html_entity_decode(
                                      vw_t($b['s'] . '_H'), ENT_QUOTES, 'UTF-8'))),
                     'on'      => $basis . '&aktion=einstellung&fahrzeug=' . (int) $nummer
-                               . '&name=' . $vw_sn . '&wert=<v>',
+                               . '&name=' . $vw_sn . '&wert=<v.0>',
                     'off'     => '',
                     'analog'  => true,
                 );
@@ -2372,7 +2427,7 @@ function vw_vorlage_vo($nummer = 1)
     return array(
         'volkswagen_fahrzeug' . (int) $nummer . '_befehle.xml',
         vw_xml_virtual_out(array(
-            'title'   => 'Volkswagen ' . (int) $nummer . ' ' . vw_t('LOX.ART_BEFEHLE'),
+            'title'   => 'Volkswagen ' . (int) $nummer . ' ' . vw_titel_de('LOX.ART_BEFEHLE'),
             'address' => 'http://' . $host,
             'comment' => trim(strip_tags(html_entity_decode(
                              vw_t('LOX.VO_COMMENT'), ENT_QUOTES, 'UTF-8'))),

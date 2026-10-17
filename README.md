@@ -20,6 +20,42 @@ Plug-in-Hybrid führt das Plugin beide.
 > gegen Attrappen, sondern gegen **echte Objekte der Bibliothek**. Deshalb
 > 0.9.x und nicht 1.0.0, und deshalb sind schreibende Befehle ab Werk gesperrt.
 
+## Neu in 0.9.32
+
+Einbindung in Loxone in Vollausstattung: vier Seiten aus dem gemeinsamen Musterprojekt mit vier Bildern und
+Schritt-für-Schritt-Anleitung; Befehlsvorlage mit eigenem Befehl „Klimatisierung aus“ und Platzhaltern mit festem
+Format.
+
+* **Reiter „Einbindung in Loxone“, Schritt 8:** Statt der bisherigen Liste mit 36 Zeilen stehen dort die vier
+  Seiten des [LoxBerry-Plugins Musterprojekts](https://github.com/timanders22/LoxBerry-Plugins-Musterprojekt), je mit
+  Kasten „So übernehmen Sie diese Seite“, Tabelle, Hinweisen und Bild: „VolkswagenID“ (32 Zeilen: Lebenszeichen
+  über den Laufzähler `ZAEHLER` mit einer Analogwertvalidierung, Störmeldung nach 10 Minuten, Meldung bei knappem
+  Ladestand oder knapper Reichweite ohne Ladekabel, Ladung beendet), „VolkswagenID Laden“ (36 Zeilen: Ladewerte,
+  Ladebilanz, Ladegrenze, Ladestrom, Laden nach Empfehlung nur zu Hause oder von Hand), „VolkswagenID Klima und
+  Befehle“ (29 Zeilen: „Klima jetzt“ und Vorklimatisieren Montag bis Freitag 06:40–07:00 nur bei Anwesenheit,
+  „Klima aus“, Scheibenheizung, die drei Ja/Nein-Einstellungen, Wecken, Abruf) und „VolkswagenID Fahrzeug“
+  (35 Zeilen: Türen, Fenster, Licht, Standort, Kilometer, Wartung; Meldungen „Fahrzeug offen“ nur am abgestellten
+  Auto und „Service fällig“).
+* **Wer die alte Liste gebaut hat:** Sie nannte zwei Eingänge, die keine Vorlage anlegt (`VW_1_KABEL` statt
+  `VW_1_LD_KABEL`, `VW_1_INSPTAGE` statt `VW_1_WA_INSPTAGE`). Der Impulsgeber vor „Klima ein“ lief frei und gab
+  dem analogen Klimabefehl einen Digitalimpuls statt einer Temperatur – die Vorheizung konnte nicht wirken.
+  „Fahrzeug offen“ kam auch während jeder Fahrt, die Schwellwertschalter hingen direkt an den Benachrichtigungen
+  (sie geben bei jeder Abfrage einen kurzen Impuls), der Tankwert 0 eines Elektroautos blockierte „Ladestand
+  niedrig“, und ein stehender LoxBerry fiel nicht auf. Die neuen Seiten vermeiden das.
+* **Befehlsvorlage:** „VW 1 Klimatisierung ein“ ist ein analoger Befehl ohne Aus-Befehl (`&temp=<v.1>`),
+  „VW 1 Klimatisierung aus“ ein eigener Befehl; bis 0.9.31 waren beide ein gekoppelter Ausgang „Klimatisierung
+  ein / Klimatisierung aus“. Die analogen Befehle tragen das Format im Platzhalter: `<v.1>` für die Temperatur,
+  `<v.0>` für Ladegrenze, Ladestrom und die drei Ja/Nein-Einstellungen. Wer die neue Form nutzen will, liest die
+  Befehlsvorlage neu ein; ein bestehender Ausgang arbeitet unverändert weiter (der Endpunkt ist gleich).
+* **Vorlagentitel fest deutsch:** Behälter und Befehle heißen auch bei englischer Oberfläche „Volkswagen 1
+  Laden“, „VW 1 Laden starten / Laden anhalten“ …, wie Liste, Bild und Musterprojekt. Suchtexte und Adressen
+  bleiben, bestehende Projekte behalten ihre Bausteine; die Kommentare bleiben übersetzt.
+* **Texte berichtigt:** Schritt 1 nennt HTTP als Weg des Musterprojekts (MQTT ist ab Werk aus), Schritt 4 vier
+  weitere Eingänge samt Verbrauch, Schritt 5 die Platzhalter `<v.1>`/`<v.0>` und den eigenen Aus-Befehl, Schritt 7
+  die Ausfallerkennung über den Laufzähler mit Tmc 3900 Sekunden statt einer Schwelle auf `ALTER`.
+* Kein Verhalten des Dienstes oder des Endpunkts geändert. Gerendert unter PHP 7.4, 8.4 und 8.5, nicht am Gerät
+  angesehen.
+
 ## Neu in 0.9.31
 
 Baustein-Liste in der Schreibweise des Leitungswerkzeugs, gemeinsame Sprachausgabe 1.1.2.
@@ -823,6 +859,14 @@ gibt es den Knopf *Anmeldung neu erzwingen*.
 Das S-PIN-Feld wird nur für Ver- und Entriegeln gebraucht, und das steht
 hinter dem zweiten Haken (siehe oben). Wer diese Befehle nicht nutzt, lässt
 es leer.
+
+## Einbindung in Loxone
+
+Der Reiter *Einbindung in Loxone* führt in neun Schritten durch die Einbindung über HTTP, mit allen Vorlagen
+zum Einlesen und in Schritt 8 den **Baustein-Listen** der vier Seiten zum Nachbauen. Fertig verbunden stehen die
+Bausteine auf den Seiten „VolkswagenID“, „VolkswagenID Laden“, „VolkswagenID Klima und Befehle“ und
+„VolkswagenID Fahrzeug“ im [LoxBerry-Plugins Musterprojekt](https://github.com/timanders22/LoxBerry-Plugins-Musterprojekt) –
+die ganze Projektdatei mit allen Plugin-Seiten und Vorlagen.
 
 ## Endpunkte für Loxone
 
