@@ -129,6 +129,15 @@ function vw_eingaben_sammeln($formular, $felder, $falsch)
 {
     $werte = array();
     foreach ($felder as $f) {
+        $zt = explode('.', $f);
+        if (count($zt) === 2) {     // Welle Mehrfach-Ziele (0.9.33): die Tabelle kommt als name[N], reist als name.N
+            if (isset($_POST[$zt[0]]) && is_array($_POST[$zt[0]]) && isset($_POST[$zt[0]][$zt[1]])
+                && is_string($_POST[$zt[0]][$zt[1]]) && strlen($_POST[$zt[0]][$zt[1]]) <= 2100
+                && preg_match('//u', $_POST[$zt[0]][$zt[1]])) {
+                $werte[$f] = $_POST[$zt[0]][$zt[1]];
+            }
+            continue;
+        }
         if (isset($_POST[$f]) && is_string($_POST[$f]) && strlen($_POST[$f]) <= 2100
             && preg_match('//u', $_POST[$f])) {
             $werte[$f] = $_POST[$f];
@@ -259,6 +268,19 @@ if (isset($_POST['activetab']) && is_string($_POST['activetab'])
 /* ---------------- Vorlagen herunterladen ----------------
  * Fuenf Eingangsarten, dazu die Ausgangsvorlage und die MQTT-Vorlage. Bis
  * 0.9.9 gab es nur den Status-Eingang fuer Fahrzeug 1. */
+/* Gruppe 41 (G2): Vorlage "Befehle ueber MQTT" aus der Befehlsbruecke (bb_vorlage(), CRLF). */
+if ($vw_post && isset($_POST['vorlage_befehle'])) {
+    list($vw_name, $vw_inhalt) = vw_vorlage_befehle();
+    if ($vw_inhalt !== '') {
+        header('Content-Type: application/xml; charset=utf-8');
+        header('Content-Disposition: attachment; filename="' . $vw_name . '"');
+        header('Content-Length: ' . strlen($vw_inhalt));
+        echo $vw_inhalt;
+        exit;
+    }
+    $vw_fehler[] = vw_t('BEFEHL.T_NICHT_DA');
+    $vw_tab = 'tab-mqtt';
+}
 if ($vw_post && isset($_POST['vorlage'])) {
     $vw_nr = isset($_POST['vorlage_nr']) && preg_match('/^[0-9]{1,2}$/', (string) $_POST['vorlage_nr'])
            ? (int) $_POST['vorlage_nr'] : 1;
@@ -480,12 +502,13 @@ if ($vw_post && isset($_POST['speichern'])) {
     }
     /* Eine Grenze ohne Thema wirkt nicht, ein Thema ohne Grenze auch nicht. */
     if (!in_array('empf_thema', $vw_falsch, true) && !in_array('empf_grenze', $vw_falsch, true)
-        && ($vw_cfg['empf_thema'] === '') !== ($vw_cfg['empf_grenze'] === '')) {
+        && ($vw_cfg['empf_thema'] === '') !== ($vw_cfg['empf_grenze'] === '')
+        && !($vw_cfg['ladeempf_quelle'] === 'haus' && $vw_cfg['empf_grenze'] !== '')) {
         $vw_fehler[] = vw_t('EINST.FEHLER_EMPF_PAAR');
         $vw_falsch[] = 'empf_thema';
         $vw_falsch[] = 'empf_grenze';
     }
-    if ($vw_cfg['abfahrt_ein'] && $vw_cfg['abfahrt_thema'] === ''
+    if ($vw_cfg['abfahrt_ein'] && $vw_cfg['abfahrt_thema'] === '' && empty($vw_cfg['haus_abfahrt_ein'])
         && !in_array('abfahrt_thema', $vw_falsch, true)) {
         $vw_fehler[] = vw_t('EINST.FEHLER_ABFAHRT_THEMA');
         $vw_falsch[] = 'abfahrt_thema';
@@ -523,13 +546,14 @@ if ($vw_post && isset($_POST['speichern'])) {
     }
     $vw_tmangel = array();
     $vw_tbean = array();
-    $vw_cfg['tts'] = ansage_formular_lesen($_POST, vw_tts(), $vw_tmangel, $vw_tbean, vw_ansage_opt(),
-                                           vw_ansage_k());
+    $vw_thinw = array();     // Welle Mehrfach-Ziele (Sprachmodul 1.2.1): Hinweise des Moduls, die das Speichern nicht verhindern
+    $vw_cfg['tts'] = ansage_formular_lesen($_POST, vw_tts(), $vw_tmangel, $vw_tbean,
+        array('modi' => vw_ansage_modi(), 'ziele' => vw_mit_zielen()), vw_ansage_k(), $vw_thinw);
     foreach ($vw_tmangel as $vw_tm) {
         $vw_fehler[] = vw_e($vw_tm['text']);
     }
     foreach ($vw_tbean as $vw_tb) {
-        $vw_falsch[] = $vw_tb;
+        $vw_falsch[] = vw_ziele_x2_name($vw_tb);     // X-2 (0.9.33: name[N] der Tabelle -> name.N)
     }
 
     if ($vw_fehler) {
@@ -539,7 +563,7 @@ if ($vw_post && isset($_POST['speichern'])) {
             array('heim_breite', 'heim_laenge', 'empf_grenze', 'empf_thema', 'abfahrt_thema',
                   'email', 'steuerung_ein', 'zugriff_erzwingen', 'eingreifend_ein',
                   'abfahrt_ein', 'empf_kleiner'), $vw_anlass_felder,
-            ansage_x2_felder(vw_ansage_opt())), $vw_falsch);
+            ansage_x2_felder(vw_ansage_opt()), vw_ziele_x2_felder()), $vw_falsch);
     } else {
         $vw_zug_ok = true;
         if ($vw_loeschen) {
@@ -557,6 +581,7 @@ if ($vw_post && isset($_POST['speichern'])) {
         if ($vw_zug_ok) {
             if (vw_config_speichern($vw_cfg)) {
                 $vw_meldungen[] = vw_t('EINST.GESPEICHERT');
+                foreach ($vw_thinw as $vw_th) { $vw_hinweise[] = $vw_th['text']; }     // Welle Mehrfach-Ziele: erst nach dem Speichern
                 /* Ein Hinweis, keine Beanstandung (O10): er verhindert das
                  * Speichern nicht. */
                 $vw_zg = vw_zugang();
@@ -632,6 +657,94 @@ if ($vw_post && isset($_POST['save_mqtt'])) {
 }
 
 /* ---------------- Dienst starten, anhalten, neu starten ---------------- */
+/* ---------------- Befehle ueber MQTT und HTTP-Endpunkt (Gruppe 41, eigenes Formular) ----------------
+ * befehle_mqtt_ein (G2, E4), befehle_mqtt_steuern (zweiter Haken fuer eingreifende Befehle, E5; wirkt nur mit
+ * eingreifend_ein) und endpunkt_ein (G3). Nach dem Speichern wird die Bruecke gestartet bzw. angehalten; ihr
+ * Waechter in cron.01min haelt den Zustand danach. */
+if ($vw_post && isset($_POST['save_befehle'])) {
+    $vw_bcfg = vw_config();
+    $vw_bcfg['befehle_mqtt_ein'] = isset($_POST['befehle_mqtt_ein']) ? 1 : 0;
+    $vw_bcfg['befehle_mqtt_steuern'] = isset($_POST['befehle_mqtt_steuern']) ? 1 : 0;
+    $vw_bcfg['endpunkt_ein'] = isset($_POST['endpunkt_ein']) ? 1 : 0;
+    if (vw_config_speichern($vw_bcfg)) {
+        $vw_meldungen[] = vw_t('EINST.GESPEICHERT');
+        vw_log_zeile('Befehle ueber MQTT ' . ($vw_bcfg['befehle_mqtt_ein'] ? 'an' : 'aus')
+            . ', eingreifende ueber MQTT ' . ($vw_bcfg['befehle_mqtt_steuern'] ? 'an' : 'aus')
+            . ', HTTP-Endpunkt ' . ($vw_bcfg['endpunkt_ein'] ? 'an' : 'aus') . '.');
+        list($vw_brc, $vw_bwas, $vw_baus) = vw_bruecke_schalten($vw_bcfg);
+        if ($vw_bwas !== '' && $vw_brc !== null && (int) $vw_brc !== 0) {
+            $vw_fehler[] = sprintf(vw_t('BEFEHL.M_SCHALTEN_FEHL'), vw_e($vw_bwas),
+                vw_e(trim(is_array($vw_baus) ? implode(' ', $vw_baus) : (string) $vw_baus)));
+        }
+    } else {
+        $vw_fehler[] = sprintf(vw_t('EINST.FEHLER_SPEICHERN'), $vw_p['config']);
+    }
+    $vw_tab = 'tab-mqtt';
+}
+
+/* ---------------- Hausform: Abfahrt, Anwesenheit, Ankunft, Strompreis, SignalBot (Gruppe 41, G4-G8) ----------------
+ * Eigenes Formular im Reiter Einstellungen. Dieselben Regeln wie vw_regeln(); eine Beanstandung speichert nichts,
+ * die Eingaben bleiben stehen (X-2). */
+if ($vw_post && isset($_POST['save_g41'])) {
+    $vw_gcfg = vw_config();
+    $vw_falsch = array();
+    foreach (array('haus_abfahrt_ein', 'vorklima_anwesend_ein', 'vorklima_wetter_ein', 'ankunft_ein', 'haus_strompreis_ein', 'signal_ein', 'signal_laden_fertig', 'signal_laden_abbruch', 'signal_offen', 'signal_ausfall', 'signal_vorklima') as $vw_feld) {
+        $vw_gcfg[$vw_feld] = isset($_POST[$vw_feld]) ? 1 : 0;
+    }
+    foreach (array('abfahrt_fahrzeug', 'vorklima_kalt_unter', 'vorklima_heiss_ueber', 'ankunft_quelle', 'ladeempf_quelle', 'signal_praefix') as $vw_feld) {
+        $vw_name = vw_t('EINST.L_' . strtoupper($vw_feld));
+        $vw_roh = isset($_POST[$vw_feld]) ? $_POST[$vw_feld] : '';
+        if (!is_string($vw_roh)) {
+            $vw_fehler[] = sprintf(vw_t('EINST.FEHLER_LISTE'), $vw_name);
+            $vw_falsch[] = $vw_feld;
+            continue;
+        }
+        list($vw_ok4, $vw_rein4) = vw_wert_pruefen($vw_feld, trim($vw_roh));
+        // 'jemand' und 'zaehler' sind unter haus/anwesenheit/ keine Personen (Regeln/07 Nr. 15).
+        if ($vw_ok4 && $vw_feld === 'ankunft_quelle' && preg_match('/(^|,)person:(jemand|zaehler)(,|$)/', (string) $vw_rein4)) {
+            $vw_ok4 = false;
+        }
+        if ($vw_ok4) {
+            $vw_gcfg[$vw_feld] = $vw_rein4;
+        } else {
+            $vw_fehler[] = sprintf(vw_t('EINST.FEHLER_WERT'), $vw_name);
+            $vw_falsch[] = $vw_feld;
+        }
+    }
+    if (!array_intersect(array('vorklima_kalt_unter', 'vorklima_heiss_ueber'), $vw_falsch)
+        && (int) $vw_gcfg['vorklima_kalt_unter'] >= (int) $vw_gcfg['vorklima_heiss_ueber']) {
+        $vw_fehler[] = vw_t('EINST.FEHLER_KALT_HEISS');
+        $vw_falsch[] = 'vorklima_kalt_unter';
+        $vw_falsch[] = 'vorklima_heiss_ueber';
+    }
+    if ($vw_gcfg['ankunft_ein'] && trim((string) $vw_gcfg['ankunft_quelle']) === '' && !in_array('ankunft_quelle', $vw_falsch, true)) {
+        $vw_fehler[] = vw_t('EINST.FEHLER_ANKUNFT_LEER');
+        $vw_falsch[] = 'ankunft_quelle';
+    }
+    if ($vw_fehler) {
+        $vw_eingaben = vw_eingaben_sammeln('g41', array_merge(array('haus_abfahrt_ein', 'vorklima_anwesend_ein', 'vorklima_wetter_ein', 'ankunft_ein', 'haus_strompreis_ein', 'signal_ein', 'signal_laden_fertig', 'signal_laden_abbruch', 'signal_offen', 'signal_ausfall', 'signal_vorklima'), array('abfahrt_fahrzeug', 'vorklima_kalt_unter', 'vorklima_heiss_ueber', 'ankunft_quelle', 'ladeempf_quelle', 'signal_praefix')), $vw_falsch);
+    } elseif (vw_config_speichern($vw_gcfg)) {
+        $vw_meldungen[] = vw_t('EINST.GESPEICHERT');
+    } else {
+        $vw_fehler[] = sprintf(vw_t('EINST.FEHLER_SPEICHERN'), $vw_p['config']);
+    }
+    $vw_tab = 'tab-settings';
+}
+
+/* ---------------- Testmeldung an SignalBot (Gruppe 41, Zusatz; ab Werk wirkungslos) ---------------- */
+if ($vw_post && isset($_POST['signal_test'])) {
+    list($vw_sl, $vw_st) = vw_signal_test();
+    vw_log_zeile('Testmeldung an SignalBot: ' . $vw_sl . '.');
+    if ($vw_sl === 'angenommen') {
+        $vw_meldungen[] = vw_e($vw_st);
+    } elseif ($vw_sl === 'aus') {
+        $vw_hinweise[] = vw_e($vw_st);
+    } else {
+        $vw_fehler[] = vw_e($vw_st);
+    }
+    $vw_tab = 'tab-settings';
+}
+
 if ($vw_post && isset($_POST['dienst'])) {
     $vw_befehl = (string) $_POST['dienst'];
     list($vw_ok, $vw_ausgabe) = vw_dienst($vw_befehl);
@@ -695,18 +808,27 @@ if ($vw_post && isset($_POST['test'])) {
  * Spricht den Pruefsatz des Moduls ueber die eingestellte Ausgabeart - unabhaengig
  * von den Anlaessen. Ins Protokoll nur die Kurzform ohne Text und Token. F5 nach dem
  * Knopf spricht nicht erneut: der PRG-Block unten leitet um. */
-if ($vw_post && isset($_POST['ansage_test'])) {
-    $vw_ak = vw_ansage_k();
-    $vw_ar = ansage_testansage(vw_tts(), $vw_ak);
-    vw_log_zeile('Testansage: ' . ansage_kurz($vw_ar));
-    if ($vw_ar['stand'] === 1) {
+/* Welle Mehrfach-Ziele (Sprachmodul 1.2.1): die Knoepfe "Testansage an Ziel n" schicken ansage_test_ziel=n - es spricht
+ * nur dieses Ziel; der bisherige Knopf spricht an alle Ziele gleichzeitig. Eine unbrauchbare Nummer spricht nichts. */
+if ($vw_post && (isset($_POST['ansage_test']) || isset($_POST['ansage_test_ziel']))) {
+    $vw_tk = vw_ansage_k();
+    $vw_tnur = (isset($_POST['ansage_test_ziel']) && vw_mit_zielen()) ? ansage_test_ziel($_POST) : 0;
+    if (isset($_POST['ansage_test_ziel']) && $vw_tnur === 0) {
+        $vw_tr = array('stand' => 0, 'kennung' => 'ZIEL_UNBEKANNT|-', 'art' => '-', 'http' => 0, 'zeile' => '', 'zeichen' => 0);
+    } elseif ($vw_tnur >= 1) {
+        $vw_tr = ansage_testansage(vw_tts(), $vw_tk, $vw_tnur);
+    } else {
+        $vw_tr = ansage_testansage(vw_tts(), $vw_tk);
+    }
+    vw_log('Testansage' . ($vw_tnur >= 1 ? ' an Ziel ' . $vw_tnur : '') . ': ' . ansage_kurz($vw_tr));
+    if ($vw_tr['stand'] === 1) {
         $vw_meldungen[] = vw_e(vw_t('TEST.M_ANSAGE_TEST_OK'));
-    } elseif ($vw_ar['stand'] === -1) {
+    } elseif ($vw_tr['stand'] === -1) {
         $vw_hinweise[] = vw_e(sprintf(vw_t('TEST.M_ANSAGE_TEST_NICHTS'),
-                                      ansage_kennung_text($vw_ar['kennung'], $vw_ak)));
+                                      ansage_kennung_text($vw_tr['kennung'], $vw_tk)));
     } else {
         $vw_stoerungen[] = vw_e(sprintf(vw_t('TEST.M_ANSAGE_TEST_FEHL'),
-                                        ansage_kennung_text($vw_ar['kennung'], $vw_ak)));
+                                        ansage_kennung_text($vw_tr['kennung'], $vw_tk)));
     }
     $vw_tab = 'tab-test';
 }
@@ -943,9 +1065,16 @@ if ($vw_rahmen) {
     <b><?= count($vw_fahrzeuge) ?></b>
     <span class="sm-hilfe"><?= $vw_libv !== '' ? vw_e($vw_libv) : vw_e(vw_t('ALLG.LIB_FEHLT')) ?></span>
   </div>
-  <div class="sm-kachel">MQTT-Gateway
-    <b class="<?= $vw_mqtt['autostart'] ? 'sm-an' : 'sm-aus' ?>"><?= $vw_mqtt['autostart'] ? vw_e(vw_t('ALLG.EIN')) : vw_e(vw_t('ALLG.AUS')) ?></b>
-    <span class="sm-hilfe"><?= vw_e(vw_t('ALLG.GATEWAY')) ?><?= (int) $vw_mqtt['fassung'] > 0 ? ' V' . (int) $vw_mqtt['fassung'] : '' ?></span>
+  <!-- B6 (Gruppe 41, 0.9.33): Hausform wie alle anderen Linien (Gedaechtnis "MQTT-Kachel: Hausform"):
+       gross, ob DIESES Plugin veroeffentlicht (mqtt_ein); klein Autostart und Fassung des Gateways.
+       Bis 0.9.32 zeigte die Kachel gross den Autostart des Gateways - ob das Plugin sendet, stand nirgends
+       oben. Bei Autostart aus bleibt die Warnung im Reiter MQTT. -->
+  <div class="sm-kachel">MQTT
+    <b class="<?= !empty($vw_cfg['mqtt_ein']) ? 'sm-an' : 'sm-aus' ?>"><?= !empty($vw_cfg['mqtt_ein']) ? vw_e(vw_t('ALLG.EIN')) : vw_e(vw_t('ALLG.AUS')) ?></b>
+    <span class="sm-hilfe"><?= vw_e(sprintf(vw_t('ALLG.KACHEL_MQTT_HILFE'),
+        !$vw_mqtt['gefunden'] ? vw_t('ALLG.NICHT_FESTSTELLBAR') : ($vw_mqtt['autostart'] ? vw_t('ALLG.EIN') : vw_t('ALLG.AUS')),
+        (!$vw_mqtt['gefunden'] || (int) $vw_mqtt['fassung'] <= 0) ? vw_t('ALLG.NICHT_FESTSTELLBAR')
+        : 'V' . (int) $vw_mqtt['fassung'])) ?></span>
   </div>
   <?php
   /* Das Lebenszeichen. Es haengt NICHT am Abbild: ein Abruf kann
@@ -1272,9 +1401,12 @@ if ($vw_k1_saetze) { ?>
 <div class="sm-hinweis"><?= vw_t('EINST.ANSAGE_ERKLAERUNG') ?></div>
 <?= ansage_formular_html(vw_tts(), array(
     'w' => function ($n, $g) { return vw_fw('einst', $n, $g); },
-    'm' => function ($n) { return vw_fm($n); },
+    'm' => function ($n) { return vw_fm(vw_ziele_x2_name($n)); },     // 0.9.33: name[N] -> name.N
     'c' => function ($n, $g) { return vw_fh('einst', $n, $g); },
-    'modi' => vw_ansage_modi()), vw_ansage_k()) ?>
+    'modi' => vw_ansage_modi(),
+/* Welle Mehrfach-Ziele (Sprachmodul 1.2.1): Tabelle der weiteren Ausgabeziele; nach einer Beanstandung traegt sie das Eingetippte. */
+'ziele' => vw_mit_zielen(),
+'ziele_post' => (vw_fa('einst') && isset($vw_eingaben['werte']) && is_array($vw_eingaben['werte'])) ? vw_ziele_x2_post($vw_eingaben['werte']) : null), vw_ansage_k()); ?>
 <h3><?= vw_e(vw_t('EINST.H_ANSAGE_ANLAESSE')) ?></h3>
 <?php foreach (vw_ansage_anlaesse() as $vw_a) { ?>
 <div class="sm-feld">
@@ -1293,6 +1425,139 @@ if ($vw_k1_saetze) { ?>
   <button data-role="none" class="sm-btn sm-b-aktion" type="submit"><?= vw_e(vw_t('ALLG.SPEICHERN')) ?></button>
 </div>
 </form>
+
+<!-- Gruppe 41 (0.9.33): Hausform - Vorklimatisierung nach MG-Regeln, Haus-Themen, Ankunft, Strompreis,
+     SignalBot. Eigenes Formular; alles ab Werk aus. -->
+<h2><?= vw_e(vw_t('EINST.H_G41')) ?></h2>
+<p class="sm-hilfe"><?= vw_t('EINST.G41_ERKLAERUNG') ?></p>
+<?php $vw_regeln_g41 = vw_regeln(); ?>
+<form action="index.php" method="post" autocomplete="off">
+<input data-role="none" type="hidden" name="save_g41" value="1">
+<input data-role="none" type="hidden" name="activetab" value="tab-settings">
+<div class="sm-feld">
+  <label for="abfahrt_fahrzeug"><?= vw_e(vw_t('EINST.L_ABFAHRT_FAHRZEUG')) ?></label>
+  <input data-role="none" type="<?= vw_ftyp('abfahrt_fahrzeug') ?>" id="abfahrt_fahrzeug" name="abfahrt_fahrzeug" value="<?= vw_e(vw_fw('g41', 'abfahrt_fahrzeug', (int) $vw_cfg['abfahrt_fahrzeug'])) ?>"<?= vw_fm('abfahrt_fahrzeug') ?> min="<?= (int) $vw_regeln_g41['abfahrt_fahrzeug'][1] ?>" max="<?= (int) $vw_regeln_g41['abfahrt_fahrzeug'][2] ?>">
+  <div class="sm-hilfe"><?= vw_t('EINST.H_ABFAHRT_FAHRZEUG') ?></div>
+</div>
+<h3><?= vw_e(vw_t('EINST.H_HAUS')) ?></h3>
+<div class="sm-warnung"><?= vw_t('EINST.HAUS_EINE_QUELLE') ?></div>
+<div class="sm-feld">
+  <label style="display:inline-flex;align-items:center;gap:8px;">
+    <input data-role="none" type="checkbox" name="haus_abfahrt_ein" value="1" <?= vw_fh('g41', 'haus_abfahrt_ein', !empty($vw_cfg['haus_abfahrt_ein'])) ? 'checked' : '' ?><?= vw_fm('haus_abfahrt_ein') ?>>
+    <?= vw_e(vw_t('EINST.L_HAUS_ABFAHRT_EIN')) ?>
+  </label>
+  <div class="sm-hilfe"><?= vw_t('EINST.H_HAUS_ABFAHRT_EIN') ?></div>
+</div>
+<div class="sm-feld">
+  <label style="display:inline-flex;align-items:center;gap:8px;">
+    <input data-role="none" type="checkbox" name="vorklima_anwesend_ein" value="1" <?= vw_fh('g41', 'vorklima_anwesend_ein', !empty($vw_cfg['vorklima_anwesend_ein'])) ? 'checked' : '' ?><?= vw_fm('vorklima_anwesend_ein') ?>>
+    <?= vw_e(vw_t('EINST.L_VORKLIMA_ANWESEND_EIN')) ?>
+  </label>
+  <div class="sm-hilfe"><?= vw_t('EINST.H_VORKLIMA_ANWESEND_EIN') ?></div>
+</div>
+<div class="sm-feld">
+  <label style="display:inline-flex;align-items:center;gap:8px;">
+    <input data-role="none" type="checkbox" name="vorklima_wetter_ein" value="1" <?= vw_fh('g41', 'vorklima_wetter_ein', !empty($vw_cfg['vorklima_wetter_ein'])) ? 'checked' : '' ?><?= vw_fm('vorklima_wetter_ein') ?>>
+    <?= vw_e(vw_t('EINST.L_VORKLIMA_WETTER_EIN')) ?>
+  </label>
+  <div class="sm-hilfe"><?= vw_t('EINST.H_VORKLIMA_WETTER_EIN') ?></div>
+</div>
+<div class="sm-feld">
+  <label for="vorklima_kalt_unter"><?= vw_e(vw_t('EINST.L_VORKLIMA_KALT_UNTER')) ?></label>
+  <input data-role="none" type="<?= vw_ftyp('vorklima_kalt_unter') ?>" id="vorklima_kalt_unter" name="vorklima_kalt_unter" value="<?= vw_e(vw_fw('g41', 'vorklima_kalt_unter', (int) $vw_cfg['vorklima_kalt_unter'])) ?>"<?= vw_fm('vorklima_kalt_unter') ?> min="<?= (int) $vw_regeln_g41['vorklima_kalt_unter'][1] ?>" max="<?= (int) $vw_regeln_g41['vorklima_kalt_unter'][2] ?>">
+</div>
+<div class="sm-feld">
+  <label for="vorklima_heiss_ueber"><?= vw_e(vw_t('EINST.L_VORKLIMA_HEISS_UEBER')) ?></label>
+  <input data-role="none" type="<?= vw_ftyp('vorklima_heiss_ueber') ?>" id="vorklima_heiss_ueber" name="vorklima_heiss_ueber" value="<?= vw_e(vw_fw('g41', 'vorklima_heiss_ueber', (int) $vw_cfg['vorklima_heiss_ueber'])) ?>"<?= vw_fm('vorklima_heiss_ueber') ?> min="<?= (int) $vw_regeln_g41['vorklima_heiss_ueber'][1] ?>" max="<?= (int) $vw_regeln_g41['vorklima_heiss_ueber'][2] ?>">
+</div>
+<h3><?= vw_e(vw_t('EINST.H_ANKUNFT')) ?></h3>
+<div class="sm-feld">
+  <label style="display:inline-flex;align-items:center;gap:8px;">
+    <input data-role="none" type="checkbox" name="ankunft_ein" value="1" <?= vw_fh('g41', 'ankunft_ein', !empty($vw_cfg['ankunft_ein'])) ? 'checked' : '' ?><?= vw_fm('ankunft_ein') ?>>
+    <?= vw_e(vw_t('EINST.L_ANKUNFT_EIN')) ?>
+  </label>
+  <div class="sm-hilfe"><?= vw_t('EINST.H_ANKUNFT_EIN') ?></div>
+</div>
+<div class="sm-feld">
+  <label for="ankunft_quelle"><?= vw_e(vw_t('EINST.L_ANKUNFT_QUELLE')) ?></label>
+  <input data-role="none" type="text" id="ankunft_quelle" name="ankunft_quelle" value="<?= vw_e(vw_fw('g41', 'ankunft_quelle', (string) $vw_cfg['ankunft_quelle'])) ?>"<?= vw_fm('ankunft_quelle') ?> placeholder="tag:schluessel_anna,person:anna">
+  <div class="sm-hilfe"><?= vw_t('EINST.H_ANKUNFT_QUELLE') ?></div>
+</div>
+<h3><?= vw_e(vw_t('EINST.H_STROMPREIS')) ?></h3>
+<div class="sm-feld">
+  <label style="display:inline-flex;align-items:center;gap:8px;">
+    <input data-role="none" type="checkbox" name="haus_strompreis_ein" value="1" <?= vw_fh('g41', 'haus_strompreis_ein', !empty($vw_cfg['haus_strompreis_ein'])) ? 'checked' : '' ?><?= vw_fm('haus_strompreis_ein') ?>>
+    <?= vw_e(vw_t('EINST.L_HAUS_STROMPREIS_EIN')) ?>
+  </label>
+  <div class="sm-hilfe"><?= vw_t('EINST.H_HAUS_STROMPREIS_EIN') ?></div>
+</div>
+<div class="sm-feld">
+  <label for="ladeempf_quelle"><?= vw_e(vw_t('EINST.L_LADEEMPF_QUELLE')) ?></label>
+  <select data-role="none" id="ladeempf_quelle" name="ladeempf_quelle"<?= vw_fm('ladeempf_quelle') ?>>
+<?php foreach (array('thema' => 'EINST.O_LADEEMPF_THEMA', 'haus' => 'EINST.O_LADEEMPF_HAUS') as $vw_q => $vw_qt) { ?>
+    <option value="<?= $vw_q ?>"<?= vw_fw('g41', 'ladeempf_quelle', (string) $vw_cfg['ladeempf_quelle']) === $vw_q ? ' selected' : '' ?>><?= vw_e(vw_t($vw_qt)) ?></option>
+<?php } ?>
+  </select>
+  <div class="sm-hilfe"><?= vw_t('EINST.H_LADEEMPF_QUELLE') ?></div>
+</div>
+<h3><?= vw_e(vw_t('EINST.H_SIGNAL')) ?></h3>
+<p class="sm-hilfe"><?= vw_t('EINST.SIGNAL_ERKLAERUNG') ?></p>
+<div class="sm-feld">
+  <label style="display:inline-flex;align-items:center;gap:8px;">
+    <input data-role="none" type="checkbox" name="signal_ein" value="1" <?= vw_fh('g41', 'signal_ein', !empty($vw_cfg['signal_ein'])) ? 'checked' : '' ?><?= vw_fm('signal_ein') ?>>
+    <?= vw_e(vw_t('EINST.L_SIGNAL_EIN')) ?>
+  </label>
+  <div class="sm-hilfe"><?= vw_t('EINST.H_SIGNAL_EIN') ?></div>
+</div>
+<div class="sm-feld">
+  <label for="signal_praefix"><?= vw_e(vw_t('EINST.L_SIGNAL_PRAEFIX')) ?></label>
+  <input data-role="none" type="text" id="signal_praefix" name="signal_praefix" value="<?= vw_e(vw_fw('g41', 'signal_praefix', (string) $vw_cfg['signal_praefix'])) ?>"<?= vw_fm('signal_praefix') ?> placeholder="signalbot">
+  <div class="sm-hilfe"><?= vw_t('EINST.H_SIGNAL_PRAEFIX') ?></div>
+</div>
+<div class="sm-feld">
+  <label style="display:inline-flex;align-items:center;gap:8px;">
+    <input data-role="none" type="checkbox" name="signal_laden_fertig" value="1" <?= vw_fh('g41', 'signal_laden_fertig', !empty($vw_cfg['signal_laden_fertig'])) ? 'checked' : '' ?><?= vw_fm('signal_laden_fertig') ?>>
+    <?= vw_e(vw_t('EINST.L_SIGNAL_LADEN_FERTIG')) ?>
+  </label>
+</div>
+<div class="sm-feld">
+  <label style="display:inline-flex;align-items:center;gap:8px;">
+    <input data-role="none" type="checkbox" name="signal_laden_abbruch" value="1" <?= vw_fh('g41', 'signal_laden_abbruch', !empty($vw_cfg['signal_laden_abbruch'])) ? 'checked' : '' ?><?= vw_fm('signal_laden_abbruch') ?>>
+    <?= vw_e(vw_t('EINST.L_SIGNAL_LADEN_ABBRUCH')) ?>
+  </label>
+</div>
+<div class="sm-feld">
+  <label style="display:inline-flex;align-items:center;gap:8px;">
+    <input data-role="none" type="checkbox" name="signal_offen" value="1" <?= vw_fh('g41', 'signal_offen', !empty($vw_cfg['signal_offen'])) ? 'checked' : '' ?><?= vw_fm('signal_offen') ?>>
+    <?= vw_e(vw_t('EINST.L_SIGNAL_OFFEN')) ?>
+  </label>
+</div>
+<div class="sm-feld">
+  <label style="display:inline-flex;align-items:center;gap:8px;">
+    <input data-role="none" type="checkbox" name="signal_ausfall" value="1" <?= vw_fh('g41', 'signal_ausfall', !empty($vw_cfg['signal_ausfall'])) ? 'checked' : '' ?><?= vw_fm('signal_ausfall') ?>>
+    <?= vw_e(vw_t('EINST.L_SIGNAL_AUSFALL')) ?>
+  </label>
+</div>
+<div class="sm-feld">
+  <label style="display:inline-flex;align-items:center;gap:8px;">
+    <input data-role="none" type="checkbox" name="signal_vorklima" value="1" <?= vw_fh('g41', 'signal_vorklima', !empty($vw_cfg['signal_vorklima'])) ? 'checked' : '' ?><?= vw_fm('signal_vorklima') ?>>
+    <?= vw_e(vw_t('EINST.L_SIGNAL_VORKLIMA')) ?>
+  </label>
+</div>
+<?= vw_formfeld($vw_cfg) ?>
+<div class="sm-knopfreihe">
+  <button data-role="none" class="sm-btn sm-b-aktion" type="submit"><?= vw_e(vw_t('ALLG.SPEICHERN')) ?></button>
+</div>
+</form>
+<h3><?= vw_e(vw_t('SIGNAL.H_TEST')) ?></h3>
+<p class="sm-hilfe"><?= vw_t('SIGNAL.H_TEST_TEXT') ?></p>
+<div class="sm-knopfreihe">
+  <form action="index.php" method="post">
+    <input data-role="none" type="hidden" name="activetab" value="tab-settings">
+    <?= vw_formfeld($vw_cfg) ?>
+    <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="signal_test" value="1"><?= vw_e(vw_t('SIGNAL.K_TEST')) ?></button>
+  </form>
+</div>
 
 <h2><?= vw_e(vw_t('EINST.H_ERKANNT')) ?></h2>
 <?php if (!$vw_fahrzeuge) { ?>
@@ -1396,6 +1661,79 @@ if ($vw_x3) { ?>
 <tr><td><?= vw_e(vw_t('MQTT.T_PLUGIN')) ?></td><td class="<?= !empty($vw_cfg['mqtt_ein']) ? 'sm-an' : 'sm-aus' ?>"><?= !empty($vw_cfg['mqtt_ein']) ? vw_e(vw_t('ALLG.EIN')) : vw_e(vw_t('ALLG.AUS')) ?></td></tr>
 </table>
 
+<?php if ((int) $vw_mqtt['fassung'] !== 1) { /* Gruppe 41 (G1): Gateway V2 - Hakenliste; bei unbekannter Fassung beides */ ?>
+<h2><?= vw_e(vw_t('MQTT.H_V2')) ?></h2>
+<p class="sm-hilfe"><?= vw_t('MQTT.V2_ERKLAERUNG') ?></p>
+<?php list($vw_v2ok, $vw_v2txt) = vw_v2_haken_lage($vw_cfg); ?>
+<div class="<?= $vw_v2ok === 1 ? 'sm-hinweis' : ($vw_v2ok === 0 ? 'sm-fehler' : 'sm-warnung') ?>"><?= vw_e($vw_v2txt) ?></div>
+<div style="overflow-x:auto;">
+<table class="sm-tbl">
+<tr><th><?= vw_e(vw_t('MQTT.T_THEMA')) ?></th><th><?= vw_e(vw_t('MQTT.T_GATEWAYNAME')) ?></th>
+    <th><?= vw_e(vw_t('MQTT.T_NONCACHED')) ?></th><th><?= vw_e(vw_t('MQTT.T_BEDEUTUNG')) ?></th></tr>
+<?php foreach (vw_v2_haken($vw_cfg) as $vw_h) { ?>
+<tr><td><span class="sm-mono"><?= vw_e($vw_h['thema']) ?></span></td><td><span class="sm-mono"><?= vw_e($vw_h['name']) ?></span></td>
+    <td><?= $vw_h['noncached'] ? vw_e(vw_t('ALLG.JA')) : vw_e(vw_t('ALLG.NEIN')) ?></td><td><?= $vw_h['bez'] !== '' ? vw_t($vw_h['bez']) : '' ?></td></tr>
+<?php } ?>
+</table>
+</div>
+<?php } ?>
+
+<h2><?= vw_e(vw_t('BEFEHL.H_TITEL')) ?></h2>
+<div class="sm-warnung"><?= vw_t('BEFEHL.UDP_HINWEIS') ?></div>
+<form action="index.php" method="post">
+<input data-role="none" type="hidden" name="save_befehle" value="1">
+<input data-role="none" type="hidden" name="activetab" value="tab-mqtt">
+<div class="sm-feld">
+  <label style="display:inline-flex;align-items:center;gap:8px;">
+    <input data-role="none" type="checkbox" name="befehle_mqtt_ein" value="1" <?= !empty($vw_cfg['befehle_mqtt_ein']) ? 'checked' : '' ?>>
+    <?= vw_e(vw_t('BEFEHL.L_ANNEHMEN')) ?>
+  </label>
+  <div class="sm-hilfe"><?= vw_t('BEFEHL.H_ANNEHMEN') ?></div>
+</div>
+<div class="sm-feld">
+  <label style="display:inline-flex;align-items:center;gap:8px;">
+    <input data-role="none" type="checkbox" name="befehle_mqtt_steuern" value="1" <?= !empty($vw_cfg['befehle_mqtt_steuern']) ? 'checked' : '' ?>>
+    <?= vw_e(vw_t('BEFEHL.L_STEUERN')) ?>
+  </label>
+  <div class="sm-hilfe"><?= vw_t('BEFEHL.H_STEUERN') ?></div>
+</div>
+<div class="sm-feld">
+  <label style="display:inline-flex;align-items:center;gap:8px;">
+    <input data-role="none" type="checkbox" name="endpunkt_ein" value="1" <?= !empty($vw_cfg['endpunkt_ein']) ? 'checked' : '' ?>>
+    <?= vw_e(vw_t('BEFEHL.L_ENDPUNKT')) ?>
+  </label>
+  <div class="sm-hilfe"><?= vw_t('BEFEHL.H_ENDPUNKT') ?></div>
+</div>
+<?= vw_formfeld($vw_cfg) ?>
+<div class="sm-knopfreihe">
+  <button data-role="none" class="sm-btn sm-b-aktion" type="submit"><?= vw_e(vw_t('ALLG.SPEICHERN')) ?></button>
+</div>
+</form>
+<?php list($vw_bbok, $vw_bbtxt) = vw_bruecke_lage(); ?>
+<div class="<?= $vw_bbok === true ? 'sm-hinweis' : ($vw_bbok === null ? 'sm-warnung' : 'sm-fehler') ?>"><b><?= vw_e(vw_t('BEFEHL.F_BRUECKE')) ?>:</b> <?= vw_e($vw_bbtxt) ?></div>
+<?php list($vw_bl, $vw_blf) = vw_bruecke_liste(); ?>
+<?php if ($vw_bl === null) { ?>
+<div class="sm-fehler"><?= vw_e($vw_blf) ?></div>
+<?php } else { ?>
+<div style="overflow-x:auto;">
+<table class="sm-tbl">
+<tr><th><?= vw_e(vw_t('MQTT.T_THEMA')) ?></th><th><?= vw_e(vw_t('BEFEHL.T_ART')) ?></th><th><?= vw_e(vw_t('BEFEHL.T_TITEL')) ?></th></tr>
+<?php foreach ($vw_bl['befehle'] as $vw_b) { ?>
+<tr><td><span class="sm-mono"><?= vw_e($vw_b['thema']) ?></span></td>
+    <td><?= vw_e($vw_b['art']) ?></td>
+    <td><?= vw_e($vw_b['titel']) ?></td></tr>
+<?php } ?>
+</table>
+</div>
+<div class="sm-knopfreihe">
+  <form action="index.php" method="post">
+    <input data-role="none" type="hidden" name="activetab" value="tab-mqtt">
+    <?= vw_formfeld($vw_cfg) ?>
+    <button data-role="none" class="sm-btn sm-b-lesen" type="submit" name="vorlage_befehle" value="1"><?= vw_e(vw_t('BEFEHL.K_VORLAGE')) ?></button>
+  </form>
+</div>
+<?php } ?>
+
 <h2><?= vw_e(vw_t('MQTT.H_ABO')) ?></h2>
 <?php
 /* Der Hinweis UND seine Warnstufe UND die Anleitung daneben verzweigen
@@ -1464,6 +1802,8 @@ $vw_text_t = count($vw_themen) - $vw_zahl_t;
 
 <!-- ================= Reiter: Einbindung in Loxone ================= -->
 <div class="sm-seite<?= $vw_tab === 'tab-loxone' ? ' sm-active' : '' ?>" id="tab-loxone">
+<div class="<?= !empty($vw_cfg['endpunkt_ein']) ? 'sm-hinweis' : 'sm-warnung' ?>"><?= vw_t('LOX.G41_NEUER_WEG') ?><?php
+    if (empty($vw_cfg['endpunkt_ein'])) { ?> <?= vw_t('LOX.G41_ENDPUNKT_AUS') ?><?php } ?></div>
 <h2><?= vw_e(vw_t('LOX.H_TITEL')) ?></h2>
 <p><?= vw_t('LOX.EINLEITUNG') ?></p>
 
@@ -1970,7 +2310,8 @@ function vw_bausteinseiten()
 <tr><th><?= vw_e(vw_t('VERL.T_BEGINN')) ?></th><th><?= vw_e(vw_t('VERL.T_DAUER')) ?></th>
     <th><?= vw_e(vw_t('VERL.T_VON')) ?></th><th><?= vw_e(vw_t('VERL.T_BIS')) ?></th>
     <th><?= vw_e(vw_t('VERL.T_KWH')) ?></th><th><?= vw_e(vw_t('VERL.T_KM')) ?></th>
-    <th><?= vw_e(vw_t('VERL.T_QUELLE')) ?></th></tr>
+    <th><?= vw_e(vw_t('VERL.T_QUELLE')) ?></th>
+    <th><?= vw_e(vw_t('VERL.T_KOSTEN')) ?></th><th><?= vw_e(vw_t('VERL.T_PREIS')) ?></th></tr>
 <?php foreach ($vw_ladungen as $vw_l) {
     $vw_dauer = $vw_l['ende'] > $vw_l['start']
               ? (int) round(($vw_l['ende'] - $vw_l['start']) / 60) : null; ?>
@@ -1980,7 +2321,9 @@ function vw_bausteinseiten()
     <td><?= $vw_l['soc_nach'] === null ? '&mdash;' : vw_e($vw_l['soc_nach']) . ' %' ?></td>
     <td><?= $vw_l['kwh'] === null ? '&mdash;' : vw_e($vw_l['kwh']) . ' kWh' ?></td>
     <td><?= $vw_l['km'] === null ? '&mdash;' : vw_e($vw_l['km']) . ' km' ?></td>
-    <td><?= vw_e($vw_l['quelle']) ?></td></tr>
+    <td><?= vw_e($vw_l['quelle']) ?></td>
+    <td><?= !is_numeric($vw_l['kosten']) ? '&mdash;' : vw_e(number_format((float) $vw_l['kosten'], 2, ',', '')) . ' &euro;' ?></td>
+    <td><?= !is_numeric($vw_l['preis']) ? '&mdash;' : vw_e(number_format((float) $vw_l['preis'], 1, ',', '')) . ' ct' ?></td></tr>
 <?php } ?>
 </table>
 </div>
@@ -2052,6 +2395,9 @@ function vw_bausteinseiten()
     <input data-role="none" type="hidden" name="activetab" value="tab-test">
     <?= vw_formfeld($vw_cfg) ?>
     <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="ansage_test" value="1"><?= vw_e(vw_t('TEST.K_ANSAGE_TEST')) ?></button>
+<?php /* Welle Mehrfach-Ziele (Sprachmodul 1.2.1): je weiteres Ziel ein Knopf "Testansage an Ziel n (Geraet (Plugin))";
+   ohne weitere Ziele nichts. */
+if (vw_mit_zielen()) { echo ansage_testknoepfe_html(vw_tts(), vw_ansage_k(), array('klasse' => 'sm-btn sm-b-aktion')); } ?>
   </form>
 </div>
 
@@ -2149,6 +2495,14 @@ if (class_exists('LBWeb', false) && method_exists('LBWeb', 'loglist_html')) {
 <?php } else { ?>
 <div class="sm-hinweis"><?= vw_t('LOG.LEER') ?></div>
 <?php } ?>
+<?php /* Gruppe 41 (0.9.33): Startprotokoll der Befehlsbruecke und Fehlerausgabe des Minutenwaechters. */
+foreach (array('befehle_start.log', 'cron.err') as $vw_ld) {
+    $vw_lf = $vw_p['logdir'] . '/' . $vw_ld;
+    $vw_lz = is_file($vw_lf) ? vw_log_ende($vw_lf, 40) : array();
+    if ($vw_lz) { ?>
+<h3><span class="sm-mono"><?= vw_e($vw_ld) ?></span></h3>
+<div class="sm-log"><?= vw_e(implode("\n", $vw_lz)) ?></div>
+<?php } } ?>
 <div class="sm-legende">
 <span><i class="sm-punkt sm-b-aktion"></i> <?= vw_t('LEGENDE.AKTION_LOG') ?></span>
 </div>

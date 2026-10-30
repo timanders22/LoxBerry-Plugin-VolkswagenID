@@ -171,7 +171,9 @@ chmod 600 "$PCONFIG/zugang.json"
 # Marke; was im neuen Datenordner schon liegt, wird nicht ueberschrieben.
 if [ "$UPG_MARKE" = 1 ] && [ -d "$RETTUNG" ] && [ ! -L "$RETTUNG" ]; then
     ZURUECK=""
-    for f in token.json verlauf ladungen.csv fortschreibung.json; do
+    # ladekosten.json, ansage_sperre.json, mqtt_praefixe.json: Nachtrag 3 (29.10.2026), wie in preupgrade.sh.
+    for f in token.json verlauf ladungen.csv fortschreibung.json ladung_mitschrift.json vorklima.json \
+             ladekosten.json ansage_sperre.json mqtt_praefixe.json; do
         if { [ -e "$RETTUNG/$f" ] || [ -L "$RETTUNG/$f" ]; } && [ ! -e "$PDATA/$f" ]; then
             if [ -L "$RETTUNG/$f" ]; then
                 echo "<WARNING> $RETTUNG/$f ist ein Verweis - nicht zurueckgeholt."
@@ -350,6 +352,43 @@ chown -R loxberry:loxberry "$PBIN" "$PDATA" "$PLOG" "$PCONFIG" 2>/dev/null
 chmod 600 "$PCONFIG/vw.json" 2>/dev/null
 chmod 600 "$PCONFIG/zugang.json"
 chmod 600 "$PDATA/token.json" 2>/dev/null
+
+# ---------- endpunkt_ein beim Update (Gruppe 41, 0.9.33, Bauvorschrift G3) ----------
+# Neue Anlagen nehmen das MQTT-Gateway V2 und die Befehlsbruecke; dort ist der HTTP-Endpunkt ab Werk
+# aus (vw_vorgaben()). Eine Anlage, die von einer Fassung vor 0.9.33 kommt, nutzt ihn vermutlich - fehlt
+# der Schluessel in der zurueckgespielten Konfiguration, wird er auf 1 gesetzt, in vw.json und in der
+# Zweitschrift. Ein vorhandener Wert bleibt (auch 0). Unteilbar (Nebendatei, Rechte vor dem Umbenennen).
+# Eine Konfiguration ohne Inhalt ({}) bleibt unberuehrt: dort gilt die Vorgabe einer neuen Anlage.
+if [ "$UPG_MARKE" = 1 ] && command -v perl >/dev/null 2>&1; then
+    for f in "$PCONFIG/vw.json" "$BASE/config/plugins/$PFOLDER.backup.vw.json"; do
+        [ -s "$f" ] && [ ! -L "$f" ] || continue
+        perl -MJSON::PP -e '
+            my $f = shift; local $/;
+            open my $fh, "<", $f or exit 1; my $r = <$fh>; close $fh;
+            my $d = eval { JSON::PP->new->decode($r) };
+            exit 1 unless ref $d eq "HASH";
+            exit 3 unless %$d;
+            exit 3 if exists $d->{endpunkt_ein};
+            $d->{endpunkt_ein} = 1;
+            my $mode = (stat $f)[2] & 07777;
+            my $t = "$f.g41.$$";
+            umask 077;
+            open my $o, ">", $t or exit 1;
+            (print $o JSON::PP->new->pretty->canonical->encode($d)) or exit 1;
+            close $o or exit 1;
+            chmod $mode, $t;
+            rename $t, $f or exit 1;
+            exit 0;
+        ' "$f"
+        case $? in
+            0) echo "<OK> $(basename "$f"): HTTP-Endpunkt bleibt eingeschaltet (endpunkt_ein = 1, Bestand)." ;;
+            3) ;;
+            *) echo "<INFO> $(basename "$f"): endpunkt_ein liess sich nicht ergaenzen - der Endpunkt ist aus,"
+               echo "<INFO> bis er im Reiter MQTT eingeschaltet wird." ;;
+        esac
+    done
+fi
+chmod 600 "$PCONFIG/vw.json" 2>/dev/null
 
 # ---------- Dienst wieder starten, wenn er vor dem Upgrade lief ----------
 #

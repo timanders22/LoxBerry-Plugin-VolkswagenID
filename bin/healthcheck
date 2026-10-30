@@ -1,178 +1,82 @@
 #!/usr/bin/env php
 <?php
 /**
- * Volkswagen ID - Healthcheck des LoxBerry
+ * Volkswagen ID - Anschluss an den LoxBerry-Healthcheck (seit 0.9.33, Gruppe 41, Nachtrag 29.10.2026)
  *
- * Seit LoxBerry 2.2 ruft sbin/healthcheck.pl eine ausfuehrbare Datei dieses
- * Namens im bin/-Ordner des Plugins auf, einmal mit "title" und einmal mit
- * "check". plugininstall.pl setzt bin/ rekursiv auf 755; die Datei ist damit
- * von selbst ausfuehrbar.
- *
- * Antwort ist JSON mit desc, status, result, optional url und logfile.
- * Statuswerte nach der LoxBerry-Skala:
- *     leer/0  unbekannt
- *     3       Fehler
- *     4       Warnung
- *     5       in Ordnung
- *     6       Hinweis
- *
- * Nebeneffekt ohne Zusatzarbeit: healthcheck.pl veroeffentlicht das Ergebnis
- * zusaetzlich retained nach MQTT unter <rechnername>/healthcheck/<titel>.
- *
- * WARUM DAS ZAEHLT
- * Stirbt der Abrufdienst, steht der Klartext dazu ausschliesslich auf der
- * Plugin-Seite. Wer sie nicht oeffnet, sieht ein unauffaelliges Symbol - und
- * in Loxone behaelt der virtuelle Eingang seinen letzten Wert, es sieht also
- * aus wie ein Auto, an dem sich nichts tut.
- *
- * Beurteilt wird dasselbe wie in der Zeile "Arbeitet der Dienst noch?" des
- * Reiters Test: das Lebenszeichen, nicht die Prozessnummer. Ein Prozess kann
- * dastehen und nichts mehr tun.
- *
+ * sbin/healthcheck.pl ruft eine ausfuehrbare Datei bin/healthcheck des Plugins auf - einmal mit "title", einmal
+ * mit "check" (Regeln/03 :73; direkt, die Shebang-Zeile entscheidet - Regeln/02 :691). Antworten sind JSON:
+ *   title -> {"desc":"Volkswagen ID"}
+ *   check -> {"desc", "status", "result", "url", "logfile"}; Status 0 unbekannt, 3 Fehler, 4 Warnung,
+ *            5 in Ordnung, 6 Hinweis. healthcheck.pl stellt das Ergebnis zusaetzlich retained nach MQTT
+ *            (<rechnername>/healthcheck/Volkswagen ID).
+ * Form von Renault NG 2.1.20: das Urteil steht in vw_gesund_urteil() der Bibliothek, die Fakten sammelt
+ * vw_gesund_fakten() - NUR LESEND: kein Netz, kein Broker, keine Anmeldung beim Hersteller, kein Protokoll,
+ * keine Datei. Geurteilt wird ueber das ALTER, nie ueber einen einzelnen Abruf (Regeln/04 :809):
+ *   - Zugangsdaten leer -> 6 "nicht eingerichtet" (eine Neuinstallation ist kein Fehler);
+ *   - Dienst bewusst angehalten (kein Sollmerker, kein Prozess) -> 6;
+ *   - Dienst soll laufen, es laeuft keiner -> 3 ("laeuft" = ein Prozess, dessen /proc/<pid>/cmdline das Skript
+ *     des Plugins ist; die PID-Datei allein genuegt nicht);
+ *   - Lebenszeichen aelter als max(10 min, 3 x Takt) -> 3;
+ *   - letzter gelungener Abruf aelter als max(15 min, 3 x Takt) -> 4, als max(1 h, 6 x Takt) -> 3; nach einem
+ *     Neustart zaehlt die Zeit seit dem Start;
+ *   - MQTT an, aber kein Gateway mit UDP-Eingang oder kein Autostart -> 4; der Dienst meldet keine Verbindung
+ *     zum Broker (Haus-Themen) -> 4; Gateway V2: Haken fehlen -> 4; Befehle ueber MQTT an, Bruecke steht -> 4.
+ * Der Text nennt keine Zugangsdaten, VIN, Kennzeichen oder Fahrzeugnamen.
+ * Bis 0.9.32 stand hier ein eigener Rahmen (Sollmerker, Lebenszeichen aus zustand.json, Fehlerfolge): er
+ * fragte weder die Zugangsdaten noch den Prozess (nur das Alter von zustand.json), weder MQTT noch die
+ * Bruecke, und gab den Fehlertext des Herstellers ungefiltert weiter. Titel "Volkswagen ID" bleibt
+ * (MQTT-Thema des Healthchecks unveraendert).
+ * Aufruf wie LoxBerry: direkt, als loxberry, Eingabe aus /dev/null. Der Installer setzt bin/ 755.
  * Kompatibel mit PHP 7.4 und PHP 8.x.
  */
 
 error_reporting(E_ALL & ~E_DEPRECATED & ~E_NOTICE);
 ini_set('display_errors', '0');
 
-$vw_was = isset($argv[1]) ? (string) $argv[1] : 'check';
-
-/* Den LoxBerry-Wurzelordner ohne festen Systempfad bestimmen.
- *
- * Erst $LBHOMEDIR (der Kern setzt es), dann aufwaerts suchen - und zwar nach
- * config/plugins, data/plugins UND config/system/general.json. Bis 0.9.23
- * genuegten config/plugins und webfrontend, und die Umgebung wurde gar nicht
- * gefragt: in einem fremden Baum mit diesen beiden Ordnern meldete der
- * healthcheck dessen Zustand als den der Anlage (in WSL gemessen,
- * Pruefung-VolkswagenID-0.9.24, Fall K11). Rueckgabe '' heisst "keine
- * Wurzel"; der Aufrufer faengt das ab.
- */
-function vw_hc_wurzel()
+function vw_hc_antwort(array $a)
 {
-    $h = getenv('LBHOMEDIR');
-    if ($h && is_dir($h . '/config/plugins') && is_dir($h . '/data/plugins')) {
-        return rtrim($h, '/');
-    }
-    $d = __DIR__;
-    for ($i = 0; $i < 8; $i++) {
-        if (is_dir($d . '/config/plugins') && is_dir($d . '/data/plugins')
-            && is_file($d . '/config/system/general.json')) {
-            return $d;
-        }
-        $eltern = dirname($d);
-        if ($eltern === $d) {
-            break;
-        }
-        $d = $eltern;
-    }
-    return '';
-}
-
-function vw_hc_antwort($desc, $status, $result, $extra = array())
-{
-    $a = array('desc' => $desc, 'status' => $status, 'result' => $result);
-    foreach ($extra as $k => $v) {
-        $a[$k] = $v;
-    }
-    $j = json_encode($a, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
-    // json_encode gibt bei ungueltigem UTF-8 false zurueck - dann lieber eine
-    // knappe Antwort als gar keine.
-    echo $j !== false ? $j : '{"desc":"Volkswagen ID","status":0,"result":"unlesbar"}';
+    $j = json_encode($a, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
+    echo ($j !== false ? $j : '{"desc":"Volkswagen ID","status":0,"result":"unlesbar"}') . "\n";
     exit(0);
 }
 
-if ($vw_was === 'title') {
-    vw_hc_antwort('Volkswagen ID', 5, 'Volkswagen ID');
+$vw_hc_was = isset($argv[1]) ? strtolower((string) $argv[1]) : 'check';
+if ($vw_hc_was === 'title') {
+    vw_hc_antwort(array('desc' => 'Volkswagen ID'));
 }
 
-$vw_home = vw_hc_wurzel();
-/* Ohne Wurzel wird nichts gelesen und nichts behauptet. Ein leerer $vw_home
- * ergaebe sonst Pfade wie /data/plugins/<ordner> - und die Antwort "der
- * Dienst ist angehalten" waere eine Aussage ueber eine Anlage, die hier gar
- * nicht gefunden wurde. Status 0 = "unbekannt". */
-if ($vw_home === '') {
-    vw_hc_antwort('Volkswagen ID', 0,
-        'Der LoxBerry-Wurzelordner liess sich von hier aus nicht bestimmen '
-        . '(weder $LBHOMEDIR noch eine Suche oberhalb von ' . __DIR__
-        . ' fuehrten zu einem Verzeichnis mit config/plugins, data/plugins und '
-        . 'config/system/general.json). Es wurde nichts gelesen.');
-}
-$vw_lbp = basename(rtrim((string) getenv('LBPPLUGINDIR'), '/'));
-if ($vw_lbp !== '' && !in_array($vw_lbp, array('.', '/', 'bin', 'plugins'), true)) {
-    $vw_ordner = $vw_lbp;
+/* Die Bibliothek: liegt diese Datei unter .../bin/plugins/<ordner>, ist sie installiert, sonst im Archiv. */
+if (basename(dirname(__DIR__)) === 'plugins') {
+    $vw_hc_lib = dirname(dirname(dirname(__DIR__))) . '/webfrontend/html/plugins/' . basename(__DIR__) . '/vw_lib.php';
 } else {
-    $vw_ordner = basename(dirname(__DIR__)) === 'plugins' ? basename(__DIR__) : 'volkswagenid';
+    $vw_hc_lib = dirname(__DIR__) . '/webfrontend/html/vw_lib.php';
 }
-$vw_pdata = $vw_home . '/data/plugins/' . $vw_ordner;
-$vw_url = '/admin/plugins/' . $vw_ordner . '/index.php';
-$vw_log = $vw_home . '/log/plugins/' . $vw_ordner . '/vw.log';
-
-/* Der Sollmerker sagt, ob der Dienst ueberhaupt laufen SOLL. Ein bewusst
- * angehaltener Dienst ist kein Fehler und wird nicht als einer gemeldet. */
-if (!is_file($vw_pdata . '/soll_laufen')) {
-    vw_hc_antwort('Volkswagen ID', 6,
-        'Der Abrufdienst ist angehalten. Das ist kein Fehler, sondern eine Einstellung.',
-        array('url' => $vw_url));
+if (!is_file($vw_hc_lib)) {
+    vw_hc_antwort(array('desc' => 'Volkswagen ID', 'status' => 3,
+        'result' => 'vw_lib.php nicht gefunden - das Plugin ist unvollstaendig installiert.'));
 }
+require_once $vw_hc_lib;
 
-$vw_z = array();
-if (is_file($vw_pdata . '/zustand.json')) {
-    $vw_d = json_decode((string) @file_get_contents($vw_pdata . '/zustand.json'), true);
-    if (is_array($vw_d)) {
-        $vw_z = $vw_d;
+$vw_hc_p = vw_paths();
+if ($vw_hc_p['home'] === '') {
+    /* Ohne LoxBerry-Wurzel wird nichts gelesen und nichts behauptet: 0 = unbekannt. */
+    vw_hc_antwort(array('desc' => 'Volkswagen ID', 'status' => 0,
+        'result' => 'Kein LoxBerry-Wurzelverzeichnis gefunden (ausgepacktes Archiv oder Pruefordner) - nichts geprueft.'));
+}
+// Die Sprache des LoxBerry, wenn der Aufrufer keine setzt (nur gelesen) - fuer die Zeile "Gateway V2".
+if (!getenv('LBLANG')) {
+    $vw_hc_gen = json_decode((string) @file_get_contents($vw_hc_p['home'] . '/config/system/general.json'), true);
+    if (isset($vw_hc_gen['Base']['Lang']) && is_string($vw_hc_gen['Base']['Lang'])) {
+        putenv('LBLANG=' . $vw_hc_gen['Base']['Lang']);
     }
 }
-if (!$vw_z || !isset($vw_z['ts'])) {
-    vw_hc_antwort('Volkswagen ID', 0,
-        'Es liegt noch kein Lebenszeichen vor. Der erste Durchgang nach dem Start erzeugt eines.',
-        array('url' => $vw_url, 'logfile' => $vw_log));
-}
 
-$vw_alter = time() - (int) $vw_z['ts'];
-$vw_takt = isset($vw_z['intervall']) && is_numeric($vw_z['intervall'])
-         ? (int) $vw_z['intervall'] : 300;
-/* Dieselbe Grenze wie im Reiter Test: dreimal der Takt, mindestens zehn
- * Minuten. Drei Stellen, die dasselbe anders sagen, sind zwei zu viel. */
-$vw_grenze = max(600, 3 * $vw_takt);
+list($vw_hc_status, $vw_hc_text) = vw_gesund_urteil(vw_gesund_fakten(vw_config(false)));
 
-if ($vw_alter > $vw_grenze) {
-    vw_hc_antwort('Volkswagen ID', 3, sprintf(
-        'Der Abrufdienst soll laufen, hat sich aber seit %d Minuten nicht mehr gemeldet '
-        . '(erwartet hoechstens %d). In Loxone stehen die Werte still, ohne dass es dort '
-        . 'auffaellt.', (int) round($vw_alter / 60), (int) round($vw_grenze / 60)),
-        array('url' => $vw_url, 'logfile' => $vw_log));
-}
-
-/* Der Dienst lebt. Jetzt erst zaehlt, ob die Abrufe auch ankommen. */
-$vw_folge = isset($vw_z['fehler_folge']) && is_numeric($vw_z['fehler_folge'])
-          ? (int) $vw_z['fehler_folge'] : 0;
-$vw_grund = isset($vw_z['grund']) ? (string) $vw_z['grund'] : '';
-$vw_fehler = isset($vw_z['fehler']) ? trim((string) $vw_z['fehler']) : '';
-
-if ($vw_folge >= 3) {
-    vw_hc_antwort('Volkswagen ID', 3, sprintf(
-        '%d Abrufe in Folge fehlgeschlagen (%s). %s',
-        $vw_folge, $vw_grund !== '' ? $vw_grund : 'ohne Grundangabe',
-        $vw_fehler !== '' ? $vw_fehler : ''),
-        array('url' => $vw_url, 'logfile' => $vw_log));
-}
-if ($vw_folge > 0) {
-    vw_hc_antwort('Volkswagen ID', 4, sprintf(
-        '%d Abruf(e) in Folge fehlgeschlagen (%s). Ein einzelner Aussetzer ist bei einer '
-        . 'Herstellerschnittstelle normal; ab drei wird daraus ein Fehler.',
-        $vw_folge, $vw_grund !== '' ? $vw_grund : 'ohne Grundangabe'),
-        array('url' => $vw_url, 'logfile' => $vw_log));
-}
-
-$vw_anzahl = isset($vw_z['anzahl_fahrzeuge']) ? (int) $vw_z['anzahl_fahrzeuge'] : 0;
-if ($vw_anzahl < 1) {
-    vw_hc_antwort('Volkswagen ID', 4,
-        'Der Dienst laeuft und ruft ab, das Konto fuehrt aber kein Fahrzeug.',
-        array('url' => $vw_url, 'logfile' => $vw_log));
-}
-
-vw_hc_antwort('Volkswagen ID', 5, sprintf(
-    '%d Fahrzeug(e), letzter Abruf vor %d s, Zaehlerstand %d.',
-    $vw_anzahl, $vw_alter,
-    isset($vw_z['zaehler']) ? (int) $vw_z['zaehler'] : -1),
-    array('url' => $vw_url, 'logfile' => $vw_log));
+vw_hc_antwort(array(
+    'desc' => 'Volkswagen ID',
+    'status' => (int) $vw_hc_status,
+    'result' => (string) $vw_hc_text,
+    'url' => '/admin/plugins/' . $vw_hc_p['plugin'] . '/index.php',
+    'logfile' => $vw_hc_p['logdir'] . '/vw.log',
+));

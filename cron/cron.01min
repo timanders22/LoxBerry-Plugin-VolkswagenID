@@ -4,4 +4,17 @@
 # Den bin-Pfad des Plugins setzt der Installer in der Befehlszeile unten ein.
 # Der Platzhalter steht bewusst NUR dort: der Installer ersetzt ihn in der
 # ganzen Datei, auch in einem Kommentar (am Geraet gesehen 17.09.2026).
-"REPLACELBPBINDIR/dienst.sh" waechter >/dev/null 2>&1
+#
+# Seit 0.9.33 (Gruppe 41, Bauvorschrift G2) als ERSTE Anweisung der Waechter der
+# Befehlsbruecke (Muster Matter2Lox 0.9.45, AudiConnect 0.9.30): startet sie nach Boot
+# und Update spaetestens nach einer Minute, wenn "Befehle ueber MQTT annehmen" gesetzt
+# ist, und haelt sie sonst an (nie waehrend einer Aktualisierung, hoechstens alle 600 s
+# ein Neustart). Kein Start in den Hakenskripten. Ausgabe nach /dev/null: die Bruecke
+# protokolliert selbst. Der Dienstwaechter schreibt seine Fehlerausgabe seit 0.9.33
+# nach cron.err neben dem Protokoll (Regeln/03); erst den Ordner anlegen und die Datei
+# anfassen - log/plugins liegt auf der RAM-Platte und kann fehlen.
+BBSH="REPLACELBPBINDIR/befehlsbruecke.sh"
+[ -f "$BBSH" ] && /bin/bash "$BBSH" waechter >/dev/null 2>&1
+mkdir -p "REPLACELBPLOGDIR" 2>/dev/null
+touch "REPLACELBPLOGDIR/cron.err" 2>/dev/null
+"REPLACELBPBINDIR/dienst.sh" waechter >/dev/null 2>>"REPLACELBPLOGDIR/cron.err"

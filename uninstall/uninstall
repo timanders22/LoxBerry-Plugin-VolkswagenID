@@ -119,6 +119,21 @@ vw_ueberschreiben() {
 }
 
 # ---------------------------------------------------------------
+# 0. Befehlsbruecke anhalten (Gruppe 41, 0.9.33, Bauvorschrift G2)
+# ---------------------------------------------------------------
+# Vor allem anderen: sie ruft vw_befehl_annehmen() und legte sonst noch
+# Befehle in eine Warteschlange, die gleich geleert wird.
+if [ -f "$PBIN/befehlsbruecke.sh" ]; then
+    if bash "$PBIN/befehlsbruecke.sh" stop >/dev/null 2>&1; then
+        echo "<OK> Befehlsbruecke angehalten."
+    else
+        echo "<INFO> Befehlsbruecke: stop meldete einen Fehler - sie lief vermutlich nicht."
+    fi
+else
+    echo "<INFO> Keine Befehlsbruecke gefunden - nichts anzuhalten."
+fi
+
+# ---------------------------------------------------------------
 # 1. Dienst anhalten
 # ---------------------------------------------------------------
 # Geprueft wird ARGUMENTWEISE: /proc/<pid>/cmdline trennt die Argumente

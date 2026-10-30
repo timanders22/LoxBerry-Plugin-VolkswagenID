@@ -90,6 +90,20 @@ else
     echo "<WARNING> Aktualisierung bitte die Plugin-Oberflaeche nicht benutzen."
 fi
 
+# Gruppe 41 (0.9.33, Bauvorschrift G2): die Befehlsbruecke anhalten, bevor der bin-Ordner ersetzt wird.
+# Ihr Waechter in cron.01min startet sie nach dem Update wieder - nur mit dem Haken "Befehle ueber MQTT
+# annehmen", und nicht, solange die Marke oben liegt (sie liest dieselbe Datei).
+BBSH="$BASE/bin/plugins/$PFOLDER/befehlsbruecke.sh"
+if [ -f "$BBSH" ]; then
+    if bash "$BBSH" stop >/dev/null 2>&1; then
+        echo "<INFO> Befehlsbruecke angehalten (der Waechter startet sie nach dem Update, wenn der Haken gesetzt ist)."
+    else
+        echo "<INFO> Befehlsbruecke: stop meldete einen Fehler - sie lief vermutlich nicht."
+    fi
+else
+    echo "<INFO> Keine Befehlsbruecke installiert (Fassung vor 0.9.33) - nichts anzuhalten."
+fi
+
 # Der Merker sagt dem postinstall, dass der Dienst LIEF.
 #
 # BERICHTIGT am 03.09.2026, und diesmal an der Primaerquelle gemessen.
@@ -290,7 +304,22 @@ if [ -e "$RETTUNG" ] || [ -L "$RETTUNG" ]; then
     fi
 fi
 VW_LISTE=""
-for f in token.json verlauf ladungen.csv fortschreibung.json; do
+# ladung_mitschrift.json (offene Ladung, Ladekosten) und vorklima.json (Merker der Vorklimatisierung
+# und der Ankunft) seit dem Nachtrag 29.10.2026 - ohne sie bekam eine Ladung, ueber die ein Update
+# lief, -1 "mitschrift_fehlt".
+# Nachtrag 3 (29.10.2026, Bestandsaufnahme aller Laufzeitdateien): ladekosten.json (Kosten und Preis
+# der letzten Ladung je Fahrzeug - ohne sie stand nach einem Update bis zur naechsten Ladung -1 im
+# retained Thema), ansage_sperre.json (Wiederholsperre der Ansagen und Signal-Nachrichten, soll einen
+# Neustart ueberstehen) und mqtt_praefixe.json (die zum Abraeumen vorgemerkten Praefixe - ohne sie
+# blieben Werte unter einem frueheren Praefix fuer immer im Broker). Bewusst NICHT: loxone.json,
+# zustand.json, cache.json, bibliothek_cache.json (entstehen beim naechsten Abruf), lebenszeichen,
+# dienst.pid, dienst.sperre, .verlauf_ts_*, soll_laufen (dafuer der Merker .lief_vorher),
+# retain_dienstzustand_geraeumt (das einmalige Abraeumen laeuft nach einem Update bewusst noch
+# einmal), befehle/ und antworten/ (ein Befehl von vor dem Update soll danach nicht mehr laufen),
+# aussentemp.json (kommt mit dem naechsten Wert ueber die Bruecke), einmalmeldung.json,
+# .endpunkt_probe.json, *_letzte.json.
+for f in token.json verlauf ladungen.csv fortschreibung.json ladung_mitschrift.json vorklima.json \
+         ladekosten.json ansage_sperre.json mqtt_praefixe.json; do
     [ -e "$PDATA_ALT/$f" ] && [ ! -L "$PDATA_ALT/$f" ] && VW_LISTE="$VW_LISTE $f"
 done
 if [ -n "$VW_LISTE" ] && [ ! -e "$RETTUNG" ]; then

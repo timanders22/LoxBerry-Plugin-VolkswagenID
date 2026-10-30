@@ -2,6 +2,10 @@
 /**
  * Volkswagen ID - Endpunkt fuer den Miniserver
  *
+ * SEIT 0.9.33 (Gruppe 41): abschaltbar ueber endpunkt_ein (Reiter MQTT; neu ab Werk aus, beim Update an) -
+ * neue Anlagen nehmen das MQTT-Gateway V2 und die Befehlsbruecke. Die Pruefungen der schaltenden Aktionen
+ * stehen in vw_befehl_annehmen() (vw_lib.php), derselben Funktion, die die Bruecke ruft.
+ *
  * Liegt im unangemeldeten Bereich, damit Loxone ihn ohne Zugangsdaten
  * erreicht, und ist deshalb durch ein Token geschuetzt. Verglichen wird mit
  * hash_equals, also in gleichbleibender Zeit - ein einfaches == liesse sich
@@ -75,6 +79,20 @@ if ($vw_soll === '') {
 if (!hash_equals($vw_soll, $vw_ist)) {
     http_response_code(403);
     echo "FEHLER;OK=0;GRUND=TOKEN\n";
+    exit;
+}
+
+/* ---------------- endpunkt_ein (Gruppe 41, 0.9.33; Hausform MGiSmart 1.1.28 E-E1 A) ----------------
+ * Neue Anlagen nehmen das MQTT-Gateway V2 und die Befehlsbruecke; dieser Endpunkt ist dort ab Werk
+ * aus. Beim Update setzt postinstall.sh den Haken auf 1, wenn er in der Konfiguration fehlt - wer die
+ * HTTP-Vorlagen nutzt, merkt nichts. Ausgeschaltet antwortet JEDER lesende und schaltende Aufruf nach
+ * der Tokenpruefung mit 403. Die Tokenpruefung steht davor, damit ein Fremder nicht erfaehrt, ob der
+ * Weg an ist. VW hat keinen ?selftest; nichts bleibt offen. */
+if (empty($vw_cfg['endpunkt_ein'])) {
+    http_response_code(403);
+    echo "FEHLER;OK=0;GRUND=ENDPUNKT_AUS\n";
+    echo "Der HTTP-Endpunkt ist ausgeschaltet (Reiter MQTT, Haken 'HTTP-Endpunkt fuer Loxone'). "
+       . "Neue Anlagen nehmen das MQTT-Gateway V2 und die Befehlsbruecke.\n";
     exit;
 }
 
@@ -407,135 +425,21 @@ if ($vw_aktion === 'teile') {
 
 /* ================= Schaltende Aktionen ================= */
 
-$vw_b = isset($vw_alle_befehle[$vw_aktion]) ? $vw_alle_befehle[$vw_aktion] : array();
-
-/* Der Endpunkt prueft die ANFRAGE, bevor er den Dienst prueft. Sonst
- * beantwortet er eine gesperrte Aktion mit "Dienst laeuft nicht" - und der
- * Anwender sucht am falschen Ende. */
-if ($vw_aktion !== 'abruf' && empty($vw_cfg['steuerung_ein'])) {
-    http_response_code(403);
-    echo "SET;OK=0;GRUND=STEUERUNG_AUS\n";
-    echo "Schreibende Befehle sind gesperrt. Reiter Einstellungen, Haken 'Schreibende Befehle zulassen'.\n";
+/* Gruppe 41 (0.9.33): die Pruefungen stehen seit 0.9.33 in vw_befehl_annehmen() (vw_lib.php) - DERSELBEN
+ * Funktion, die die Befehlsbruecke (bin/befehle_zuordnung.php) ruft. Reihenfolge, Antwortzeilen und
+ * HTTP-Codes sind dieselben wie bis 0.9.32 (dort inline): Steuerung, zweiter Haken, S-PIN, Name der
+ * Einstellung, Zusatzwert, Fahrzeug im Abbild, Dienst, Warteschlange mit Warten (wartezeit_endpunkt). */
+$vw_erg = vw_befehl_annehmen($vw_aktion, array('temp' => $vw_temp, 'prozent' => $vw_prozent,
+    'ampere' => $vw_ampere, 'name' => $vw_name, 'wert' => $vw_wert), $vw_fahrzeug, 'http');
+if ($vw_erg['art'] === 'abgewiesen') {
+    http_response_code((int) $vw_erg['http']);
+    foreach ($vw_erg['zeilen'] as $vw_zeile) {
+        echo $vw_zeile . "\n";
+    }
     exit;
 }
-/* Der zweite Haken. Ver- und Entriegeln, Hupe und Lichthupe oeffnen das
- * Fahrzeug beziehungsweise machen es auffindbar - sie haengen deshalb an einem
- * eigenen Schalter, der ab Werk aus ist. */
-if (!empty($vw_b['eingreifend']) && empty($vw_cfg['eingreifend_ein'])) {
-    http_response_code(403);
-    echo "SET;OK=0;GRUND=EINGREIFEND_AUS\n";
-    echo "Eingreifende Befehle sind gesperrt. Reiter Einstellungen, Haken 'Eingreifende Befehle zulassen'.\n";
-    exit;
-}
-if (!empty($vw_b['spin'])) {
-    $vw_zg = vw_zugang();
-    if ($vw_zg['spin_laenge'] !== 4) {
-        http_response_code(400);
-        echo "SET;OK=0;GRUND=SPIN_FEHLT\n";
-        echo "Dieser Befehl braucht die vierstellige S-PIN. Reiter Einstellungen.\n";
-        exit;
-    }
-}
-/* Der NAME einer Ja/Nein-Einstellung wird geprueft, BEVOR nach dem Dienst
- * gefragt wird.
- *
- * Ob ein Name schaltbar ist, haengt nicht daran, ob der Abrufdienst laeuft:
- * ein Parameterfehler ist 400, ein Dienstproblem 503. Gemessen beim Bau von
- * 0.9.14 stand die Dienstpruefung davor, und ein Aufruf mit einem nicht mehr
- * schaltbaren Namen bekam "DIENST_LAEUFT_NICHT" - also genau dann keine
- * Erklaerung, wenn jemand nach einem Update nachsieht, warum seine Adresse
- * nicht mehr greift. Der Dienst kann dabei stehen.
- *
- * Ein Name, den es GIBT, der sich aber nicht setzen laesst, bekommt seine
- * eigene Antwort mit dem Grund - nicht "unbekannt". Ein Virtueller Ausgang
- * wertet die Antwort nicht aus, aber ein Mensch im Browser tut es. */
-if ($vw_aktion === 'einstellung') {
-    $vw_schalter = vw_schalter();
-    $vw_nurlesend = vw_nur_lesend();
-    if ($vw_name !== '' && isset($vw_nurlesend[$vw_name])) {
-        http_response_code(400);
-        echo "SET;OK=0;GRUND=NUR_LESEND\n";
-        echo trim(strip_tags(html_entity_decode(vw_t($vw_nurlesend[$vw_name]),
-                                                ENT_QUOTES, 'UTF-8'))) . "\n";
-        echo 'Schaltbar sind: ' . implode(', ', array_keys($vw_schalter)) . "\n";
-        exit;
-    }
-    if ($vw_name === '' || !isset($vw_schalter[$vw_name])) {
-        http_response_code(400);
-        echo "SET;OK=0;GRUND=NAME_UNBEKANNT\n";
-        echo 'Der Parameter name fehlt oder ist unbekannt. Erlaubt sind: '
-           . implode(', ', array_keys($vw_schalter)) . "\n";
-        exit;
-    }
-}
-
-/* DIE ANFRAGE WIRD GEPRUEFT, BEVOR DER DIENST GEPRUEFT WIRD (C6, Durchgang
- * 02.10.2026; Regeln/03 Abschnitt 4). Bis 0.9.26 stand die Dienstpruefung vor
- * den Pflichtparametern: klima_start ohne temp ergab bei angehaltenem Dienst
- * 503 DIENST_LAEUFT_NICHT statt 400 TEMP_FEHLT - eine falsch gebaute Adresse
- * sah aus wie ein angehaltener Dienst (gemessen, Codebericht Nr. 6). */
-$vw_befehl = array('aktion' => $vw_aktion, 'fahrzeug' => $vw_fahrzeug, 'von' => 'endpunkt');
-
-if ($vw_aktion === 'klima_start' || $vw_aktion === 'zieltemperatur') {
-    if ($vw_temp === '') {
-        http_response_code(400);
-        echo "SET;OK=0;GRUND=TEMP_FEHLT\n";
-        echo "Der Parameter temp fehlt (Zieltemperatur in Grad Celsius).\n";
-        exit;
-    }
-    $vw_befehl['temp'] = str_replace(',', '.', $vw_temp);
-} elseif ($vw_aktion === 'ladegrenze') {
-    if ($vw_prozent === '') {
-        http_response_code(400);
-        echo "SET;OK=0;GRUND=PROZENT_FEHLT\n";
-        exit;
-    }
-    $vw_befehl['prozent'] = (int) $vw_prozent;
-} elseif ($vw_aktion === 'ladestrom') {
-    if ($vw_ampere === '') {
-        http_response_code(400);
-        echo "SET;OK=0;GRUND=AMPERE_FEHLT\n";
-        echo "Der Parameter ampere fehlt (zulaessig: 5, 6, 10, 13, 16 oder 32).\n";
-        exit;
-    }
-    $vw_befehl['ampere'] = (int) $vw_ampere;
-} elseif ($vw_aktion === 'einstellung') {
-    if ($vw_wert === '') {
-        http_response_code(400);
-        echo "SET;OK=0;GRUND=WERT_FEHLT\n";
-        echo "Der Parameter wert fehlt (0 oder 1).\n";
-        exit;
-    }
-    $vw_befehl['name'] = $vw_name;
-    $vw_befehl['wert'] = (int) $vw_wert;
-}
-
-/* EINE NUMMER, DIE DAS ABBILD NICHT KENNT, SCHALTET NICHTS (C1, Durchgang
- * 02.10.2026): 404, wie beim Lesen. Der Dienst loest die Nummer ueber die
- * feste Zuordnung auf (bin/vw.py fahrzeug_waehlen()). Ohne Abbild entscheidet
- * er selbst ("noch kein Fahrzeug bekannt"). */
-if ($vw_aktion !== 'abruf' && $vw_alle && vw_nummer_von($vw_alle, $vw_fahrzeug) === 0) {
-    http_response_code(404);
-    echo "SET;OK=0;GRUND=FAHRZEUG_UNBEKANNT\n";
-    echo 'Fahrzeug ' . vw_s($vw_fahrzeug, 20) . ' ist nicht bekannt. Bekannt sind: '
-       . implode(', ', array_keys($vw_alle)) . "\n";
-    exit;
-}
-
-if (vw_dienst_pid() === 0) {
-    // Nicht stillschweigend einreihen: ohne laufenden Dienst passiert nichts,
-    // und der Befehl laege bis zum naechsten Start in der Warteschlange.
-    http_response_code(503);
-    echo "SET;OK=0;GRUND=DIENST_LAEUFT_NICHT\n";
-    echo "Der Abrufdienst laeuft nicht. Reiter Einstellungen, Knopf 'Dienst starten'.\n";
-    exit;
-}
-
-/* Die Wartezeit des Endpunkts ist eine EIGENE, kuerzere als die der
- * Oberflaeche. Ein Virtueller Ausgang in Loxone haengt so lange, wie hier
- * gewartet wird; bis 0.9.9 waren das dieselben bis zu 30 Sekunden wie am
- * Bildschirm, und der Hilfetext sprach nur von der Oberflaeche. */
-list($vw_erg, $vw_meldung) = vw_befehl_absetzen($vw_befehl, (int) $vw_cfg['wartezeit_endpunkt']);
+$vw_meldung = $vw_erg['text'];
+$vw_erg = (int) $vw_erg['ok'];
 if ($vw_erg === 0) {
     http_response_code(500);
 }

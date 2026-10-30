@@ -307,7 +307,9 @@ function vw_pruefungen($netz = true)
 
     // Antwortet der eigene Endpunkt? Ein echter Aufruf auf 127.0.0.1 - er
     // findet die getrennten Baeume, die keine Lesepruefung sieht.
-    $zeilen[] = $netz ? vw_endpunkt_zeile($cfg) : vw_endpunkt_gespeichert();
+    // Gruppe 41 (G3): bei ausgeschaltetem Endpunkt wird er nicht aufgerufen (er antwortete 403 ENDPUNKT_AUS).
+    $zeilen[] = empty($cfg['endpunkt_ein']) ? vw_pruefzeile(-1, vw_t('TEST.F_ENDPUNKT'), vw_t('TEST.A_ENDPUNKT_AUS'))
+              : ($netz ? vw_endpunkt_zeile($cfg) : vw_endpunkt_gespeichert());
 
     // Tragen alle Formulare das Merkmal? Ein Formular vergisst man. Gemeldet
     // wird die ZAHL der angesehenen Stellen: eine Null ist kein "in Ordnung",
@@ -353,6 +355,28 @@ function vw_pruefungen($netz = true)
     // Nr. 36 b (seit 0.9.29): die Sprachausgabe. Alexa-NG/Chromecast werden nur bei offenem
     // Reiter Test gefragt (selftest=1, spricht nicht); der Music Server nie.
     $zeilen[] = vw_ansage_zeile($netz);
+
+    /* Gruppe 41 (0.9.33): Gateway V2 (einheitliche Pruefzeile), Befehlsbruecke, HTTP-Endpunkt,
+     * Haus-Quellen und Vorklimatisierung. Grau (-1) heisst: nicht feststellbar oder bewusst aus. */
+    list($vw_v2ok, $vw_v2txt) = vw_v2_haken_lage($cfg);
+    $zeilen[] = vw_pruefzeile($vw_v2ok === 2 ? -1 : (int) $vw_v2ok, vw_t('PRUEF.V2_FRAGE'), vw_e($vw_v2txt));
+    list($vw_bbok, $vw_bbtxt) = vw_bruecke_lage();
+    $zeilen[] = vw_pruefzeile($vw_bbok === true ? 1 : ($vw_bbok === null ? -1 : 0), vw_t('BEFEHL.F_BRUECKE'), vw_e($vw_bbtxt));
+    if (!empty($cfg['befehle_mqtt_ein'])) {
+        list($vw_prc, $vw_paus) = vw_bruecke_pruefen();
+        $vw_pf = array_values(array_filter($vw_paus, function ($z) { return strpos($z, '[FEHL]') !== false; }));
+        $zeilen[] = vw_pruefzeile($vw_prc === 0 ? 1 : 0, vw_t('BEFEHL.F_PRUEFEN'),
+            $vw_prc === 0 ? vw_t('BEFEHL.T_PRUEFEN_OK') : vw_e(implode(' ', array_slice($vw_pf ? $vw_pf : $vw_paus, 0, 3))));
+    }
+    $zeilen[] = vw_pruefzeile(-1, vw_t('TEST.F_HTTP_ENDPUNKT'),
+        !empty($cfg['endpunkt_ein']) ? vw_t('TEST.A_HTTP_ENDPUNKT_EIN') : vw_t('TEST.A_HTTP_ENDPUNKT_AUS'));
+    foreach (vw_haus_pruefzeilen($cfg) as $vw_hz) {
+        $zeilen[] = vw_pruefzeile((int) $vw_hz[1], vw_e($vw_hz[0]), vw_e($vw_hz[2]));
+    }
+    $vw_vz = vw_vorklima_pruefzeile($cfg);
+    if ($vw_vz !== null) {
+        $zeilen[] = vw_pruefzeile($vw_vz[0] === 2 ? -1 : (int) $vw_vz[0], vw_t('HAUS.VK_FRAGE'), vw_e($vw_vz[1]));
+    }
 
     // Zum Schluss: wie viele Striche stehen in dieser Liste? Ein Strich ist
     // ausdruecklich kein Haken - wer ihn beim Ueberfliegen wie einen

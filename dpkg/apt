@@ -13,3 +13,8 @@
 # Bis 0.9.26 gab es diese Datei nicht (I4, Durchgang 02.10.2026), und
 # postinstall.sh trug dem Anwender auf, das Paket von Hand zu installieren.
 python3-venv
+#
+# Gruppe 41 (0.9.33): mosquitto_sub/_pub fuer die Befehlsbruecke (im LoxBerry-Grundabbild ohnehin
+# vorhanden; Hausform wie AudiConnect 0.9.30 und MGiSmart 1.1.28). Die Haus-Themen liest der Dienst ueber
+# seine eigene Verbindung (paho in der virtuellen Umgebung) - dafuer braucht es das Paket nicht.
+mosquitto-clients
