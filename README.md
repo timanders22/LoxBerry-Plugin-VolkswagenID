@@ -20,6 +20,10 @@ Plug-in-Hybrid führt das Plugin beide.
 > gegen Attrappen, sondern gegen **echte Objekte der Bibliothek**. Deshalb
 > 0.9.x und nicht 1.0.0, und deshalb sind schreibende Befehle ab Werk gesperrt.
 
+## Neu in 0.9.34
+
+Bilder der Einbindung erneuert: Die Seitenbilder zeigen jetzt die Musterprojekt-Seiten in der Hausform (MQTT-Gateway V2 und Befehlsbrücke statt der früheren HTTP-Vorlagen). Sonst keine Änderung gegen 0.9.33.
+
 ## Neu in 0.9.33
 
 Hausform der LoxBerry-Plugins (Gruppe 41, wie AudiConnect 0.9.30 und Skoda-Connect-NG 0.9.34). Alles Neue
