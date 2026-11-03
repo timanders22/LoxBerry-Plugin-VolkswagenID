@@ -257,9 +257,9 @@ rm -f "$BASE/data/plugins/$PFOLDER.nummern.json" 2>/dev/null
 # Konfiguration und auf general.json.
 if [ -x "$PBIN/venv/bin/python3" ] && [ -f "$PBIN/vw.py" ]; then
     if [ "$(id -u)" = "0" ] && id loxberry >/dev/null 2>&1; then
-        su -s /bin/bash loxberry -c "PYTHONDONTWRITEBYTECODE=1 timeout 60 $(printf '%q ' "$PBIN/venv/bin/python3" "$PBIN/vw.py") --mqtt-leeren" 2>&1 || true
+        su -s /bin/bash loxberry -c "PYTHONDONTWRITEBYTECODE=1 timeout 120 $(printf '%q ' "$PBIN/venv/bin/python3" "$PBIN/vw.py") --mqtt-leeren" 2>&1 || true
     else
-        PYTHONDONTWRITEBYTECODE=1 timeout 60 "$PBIN/venv/bin/python3" "$PBIN/vw.py" --mqtt-leeren 2>&1 || true
+        PYTHONDONTWRITEBYTECODE=1 timeout 120 "$PBIN/venv/bin/python3" "$PBIN/vw.py" --mqtt-leeren 2>&1 || true
     fi
 else
     echo "<INFO> Die Python-Umgebung fehlt - behaltene MQTT-Themen wurden nicht geleert."

@@ -125,7 +125,15 @@ if (function_exists('mb_substr')) {
 }
 
 $vw_text = vw_ansage_satz($vw_d['anlass'], $vw_d['nr'], $vw_name, $vw_soc, $vw_grenze);
-list($vw_rc, $vw_zeile) = ansage_cli(json_encode(array('text' => $vw_text), JSON_UNESCAPED_UNICODE),
-                                     vw_tts(false), vw_ansage_k());
-echo $vw_zeile, "\n";
-exit($vw_rc);
+/* Stamm 1.3.2 (Welle S4): Sperre, Nachtruhe und Schalter "Ansagen aus" stehen im Stamm. Die Bruecke legt nur hin, gesprochen wird in einem eigenen
+ * Vorgang: Der Dienst wartet nicht auf Lautsprecher. Die Antwortzeile bleibt in der Form: STAND=1 heisst hier hingelegt. Rueckgabe 0 hingelegt, 3 Ausgabe aus. */
+$vw_kf = vw_config(false);
+$vw_ausgabe = vw_tts_von($vw_kf);
+if ((string) $vw_ausgabe['mode'] === 'aus') {
+    echo "ANSAGE;STAND=-1;ART=aus;KENNUNG=AUS;HTTP=0;ZEICHEN=0\n";
+    exit(3);
+}
+vw_ansage_token_pflegen($vw_kf);
+vw_ansage_legen(array(array('schluessel' => $vw_d['anlass'] . '|' . $vw_d['nr'], 'text' => $vw_text)));
+echo 'ANSAGE;STAND=1;ART=gelegt;KENNUNG=GELEGT;HTTP=0;ZEICHEN=' . strlen((string) $vw_text) . "\n";
+exit(0);

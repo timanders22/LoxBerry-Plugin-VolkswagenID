@@ -373,6 +373,8 @@ function vw_pruefungen($netz = true)
     foreach (vw_haus_pruefzeilen($cfg) as $vw_hz) {
         $zeilen[] = vw_pruefzeile((int) $vw_hz[1], vw_e($vw_hz[0]), vw_e($vw_hz[2]));
     }
+    list($vw_sfs, $vw_sft) = vw_sammel_lage($cfg);
+    $zeilen[] = vw_pruefzeile($vw_sfs, vw_t('EINST.F_HAUS_FAHRZEUG'), vw_e($vw_sft));
     $vw_vz = vw_vorklima_pruefzeile($cfg);
     if ($vw_vz !== null) {
         $zeilen[] = vw_pruefzeile($vw_vz[0] === 2 ? -1 : (int) $vw_vz[0], vw_t('HAUS.VK_FRAGE'), vw_e($vw_vz[1]));
@@ -812,7 +814,7 @@ function vw_reiter_lesen()
 function vw_ansage_zeile($netz)
 {
     $cfg = vw_config();
-    list($st, $html) = ansage_pruefzeile(vw_tts(), (bool) $netz, vw_ansage_k());
+    list($st, $html) = ansage_pruefzeile(vw_ansage_pruefblock(), (bool) $netz, vw_ansage_k());
     $an = array();
     foreach (vw_ansage_anlaesse() as $a) {
         if (!empty($cfg[$a[0]])) {

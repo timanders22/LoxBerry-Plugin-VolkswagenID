@@ -548,7 +548,8 @@ if ($vw_post && isset($_POST['speichern'])) {
     $vw_tbean = array();
     $vw_thinw = array();     // Welle Mehrfach-Ziele (Sprachmodul 1.2.1): Hinweise des Moduls, die das Speichern nicht verhindern
     $vw_cfg['tts'] = ansage_formular_lesen($_POST, vw_tts(), $vw_tmangel, $vw_tbean,
-        array('modi' => vw_ansage_modi(), 'ziele' => vw_mit_zielen()), vw_ansage_k(), $vw_thinw);
+        array('modi' => vw_ansage_modi(), 'ziele' => vw_mit_zielen(), 'token_vor_ort' => true, 'aus_gewinnt' => true), vw_ansage_k(), $vw_thinw);
+    list($vw_cfg['ansage_regeln']) = ansage_regeln_formular($_POST, vw_ansage_regeln($vw_cfg), array(), $vw_tmangel, $vw_tbean, vw_ansage_k());     // S2: Wann gesprochen wird (Stamm)
     foreach ($vw_tmangel as $vw_tm) {
         $vw_fehler[] = vw_e($vw_tm['text']);
     }
@@ -563,7 +564,7 @@ if ($vw_post && isset($_POST['speichern'])) {
             array('heim_breite', 'heim_laenge', 'empf_grenze', 'empf_thema', 'abfahrt_thema',
                   'email', 'steuerung_ein', 'zugriff_erzwingen', 'eingreifend_ein',
                   'abfahrt_ein', 'empf_kleiner'), $vw_anlass_felder,
-            ansage_x2_felder(vw_ansage_opt()), vw_ziele_x2_felder()), $vw_falsch);
+            ansage_x2_felder(vw_ansage_opt()), ansage_regeln_x2_felder(), vw_ziele_x2_felder()), $vw_falsch);
     } else {
         $vw_zug_ok = true;
         if ($vw_loeschen) {
@@ -617,6 +618,7 @@ if ($vw_post && isset($_POST['save_mqtt'])) {
     $vw_vorher = array((int) $vw_mcfg['mqtt_ein'], (int) $vw_mcfg['mqtt_retain'],
                        (string) $vw_mcfg['mqtt_topic']);
     $vw_mcfg['mqtt_ein'] = isset($_POST['mqtt_ein']) ? 1 : 0;
+    $vw_mcfg['haus_fahrzeug_ein'] = isset($_POST['haus_fahrzeug_ein']) ? 1 : 0;
     $vw_mcfg['mqtt_retain'] = isset($_POST['mqtt_retain']) ? 1 : 0;
     /* NICHTS STILL ENTFERNEN (O4, Durchgang 02.10.2026; Nr. 19). Bis 0.9.26
      * wurden Anfuehrungszeichen und Steuerzeichen still entfernt und
@@ -638,7 +640,7 @@ if ($vw_post && isset($_POST['save_mqtt'])) {
         }
     }
     if ($vw_fehler) {
-        $vw_eingaben = vw_eingaben_sammeln('mqtt', array('mqtt_ein', 'mqtt_topic', 'mqtt_retain'),
+        $vw_eingaben = vw_eingaben_sammeln('mqtt', array('mqtt_ein', 'mqtt_topic', 'mqtt_retain', 'haus_fahrzeug_ein'),
                                            $vw_falsch);
     } elseif (vw_config_speichern($vw_mcfg)) {
         $vw_meldungen[] = vw_t('EINST.GESPEICHERT');
@@ -688,10 +690,10 @@ if ($vw_post && isset($_POST['save_befehle'])) {
 if ($vw_post && isset($_POST['save_g41'])) {
     $vw_gcfg = vw_config();
     $vw_falsch = array();
-    foreach (array('haus_abfahrt_ein', 'vorklima_anwesend_ein', 'vorklima_wetter_ein', 'ankunft_ein', 'haus_strompreis_ein', 'signal_ein', 'signal_laden_fertig', 'signal_laden_abbruch', 'signal_offen', 'signal_ausfall', 'signal_vorklima') as $vw_feld) {
+    foreach (array('haus_abfahrt_ein', 'vorklima_anwesend_ein', 'vorklima_wetter_ein', 'ankunft_ein', 'haus_strompreis_ein', 'signal_ein', 'signal_laden_fertig', 'signal_laden_abbruch', 'signal_offen', 'signal_ausfall', 'signal_vorklima', 'signal_kabel', 'vorklima_nur_kabel') as $vw_feld) {
         $vw_gcfg[$vw_feld] = isset($_POST[$vw_feld]) ? 1 : 0;
     }
-    foreach (array('abfahrt_fahrzeug', 'vorklima_kalt_unter', 'vorklima_heiss_ueber', 'ankunft_quelle', 'ladeempf_quelle', 'signal_praefix') as $vw_feld) {
+    foreach (array('abfahrt_fahrzeug', 'vorklima_kalt_unter', 'vorklima_heiss_ueber', 'ankunft_quelle', 'ladeempf_quelle', 'signal_praefix', 'kabel_soc', 'kabel_uhr', 'kabel_abfahrt_min', 'vorklima_min_soc') as $vw_feld) {
         $vw_name = vw_t('EINST.L_' . strtoupper($vw_feld));
         $vw_roh = isset($_POST[$vw_feld]) ? $_POST[$vw_feld] : '';
         if (!is_string($vw_roh)) {
@@ -722,7 +724,7 @@ if ($vw_post && isset($_POST['save_g41'])) {
         $vw_falsch[] = 'ankunft_quelle';
     }
     if ($vw_fehler) {
-        $vw_eingaben = vw_eingaben_sammeln('g41', array_merge(array('haus_abfahrt_ein', 'vorklima_anwesend_ein', 'vorklima_wetter_ein', 'ankunft_ein', 'haus_strompreis_ein', 'signal_ein', 'signal_laden_fertig', 'signal_laden_abbruch', 'signal_offen', 'signal_ausfall', 'signal_vorklima'), array('abfahrt_fahrzeug', 'vorklima_kalt_unter', 'vorklima_heiss_ueber', 'ankunft_quelle', 'ladeempf_quelle', 'signal_praefix')), $vw_falsch);
+        $vw_eingaben = vw_eingaben_sammeln('g41', array_merge(array('haus_abfahrt_ein', 'vorklima_anwesend_ein', 'vorklima_wetter_ein', 'ankunft_ein', 'haus_strompreis_ein', 'signal_ein', 'signal_laden_fertig', 'signal_laden_abbruch', 'signal_offen', 'signal_ausfall', 'signal_vorklima', 'signal_kabel', 'vorklima_nur_kabel'), array('abfahrt_fahrzeug', 'vorklima_kalt_unter', 'vorklima_heiss_ueber', 'ankunft_quelle', 'ladeempf_quelle', 'signal_praefix', 'kabel_soc', 'kabel_uhr', 'kabel_abfahrt_min', 'vorklima_min_soc')), $vw_falsch);
     } elseif (vw_config_speichern($vw_gcfg)) {
         $vw_meldungen[] = vw_t('EINST.GESPEICHERT');
     } else {
@@ -816,9 +818,9 @@ if ($vw_post && (isset($_POST['ansage_test']) || isset($_POST['ansage_test_ziel'
     if (isset($_POST['ansage_test_ziel']) && $vw_tnur === 0) {
         $vw_tr = array('stand' => 0, 'kennung' => 'ZIEL_UNBEKANNT|-', 'art' => '-', 'http' => 0, 'zeile' => '', 'zeichen' => 0);
     } elseif ($vw_tnur >= 1) {
-        $vw_tr = ansage_testansage(vw_tts(), $vw_tk, $vw_tnur);
+        $vw_tr = ansage_testansage(vw_ansage_vor_ort(), $vw_tk, $vw_tnur);
     } else {
-        $vw_tr = ansage_testansage(vw_tts(), $vw_tk);
+        $vw_tr = ansage_testansage(vw_ansage_vor_ort(), $vw_tk);
     }
     vw_log('Testansage' . ($vw_tnur >= 1 ? ' an Ziel ' . $vw_tnur : '') . ': ' . ansage_kurz($vw_tr));
     if ($vw_tr['stand'] === 1) {
@@ -942,6 +944,8 @@ if ($vw_rahmen) {
 .sm-tbl { border-collapse: collapse; width: 100%; margin: 8px 0; font-size: 0.9em; }
 .sm-tbl th, .sm-tbl td { border: 1px solid #ccc; padding: 5px 7px; text-align: left; vertical-align: top; }
 .sm-tbl th { background: #eef3e6; font-weight: 600; }
+.sm-breit { overflow-x: auto; -webkit-overflow-scrolling: touch; margin: 10px 0; }
+.sm-breit .sm-tbl { margin: 0; min-width: 760px; }
 .sm-mono { font-family: Consolas, "Courier New", monospace; background: #f0f0f0;
     padding: 1px 4px; border-radius: 3px; font-size: 0.94em; word-break: break-all; }
 .sm-pre { background: #f4f4f4; border: 1px solid #ccc; padding: 10px; font-size: 0.85em;
@@ -1407,6 +1411,11 @@ if ($vw_k1_saetze) { ?>
 /* Welle Mehrfach-Ziele (Sprachmodul 1.2.1): Tabelle der weiteren Ausgabeziele; nach einer Beanstandung traegt sie das Eingetippte. */
 'ziele' => vw_mit_zielen(),
 'ziele_post' => (vw_fa('einst') && isset($vw_eingaben['werte']) && is_array($vw_eingaben['werte'])) ? vw_ziele_x2_post($vw_eingaben['werte']) : null), vw_ansage_k()); ?>
+<?= ansage_regeln_html(vw_ansage_regeln($vw_cfg), array(), array(), array(
+    'w' => function ($n, $g) { return vw_fw('einst', $n, $g); },
+    'm' => function ($n) { return vw_fm(vw_ziele_x2_name($n)); },
+    'c' => function ($n, $g) { return vw_fh('einst', $n, $g); },
+    'token_vor_ort' => true), vw_ansage_k()) ?>
 <h3><?= vw_e(vw_t('EINST.H_ANSAGE_ANLAESSE')) ?></h3>
 <?php foreach (vw_ansage_anlaesse() as $vw_a) { ?>
 <div class="sm-feld">
@@ -1470,6 +1479,18 @@ if ($vw_k1_saetze) { ?>
   <label for="vorklima_heiss_ueber"><?= vw_e(vw_t('EINST.L_VORKLIMA_HEISS_UEBER')) ?></label>
   <input data-role="none" type="<?= vw_ftyp('vorklima_heiss_ueber') ?>" id="vorklima_heiss_ueber" name="vorklima_heiss_ueber" value="<?= vw_e(vw_fw('g41', 'vorklima_heiss_ueber', (int) $vw_cfg['vorklima_heiss_ueber'])) ?>"<?= vw_fm('vorklima_heiss_ueber') ?> min="<?= (int) $vw_regeln_g41['vorklima_heiss_ueber'][1] ?>" max="<?= (int) $vw_regeln_g41['vorklima_heiss_ueber'][2] ?>">
 </div>
+<div class="sm-feld">
+  <label for="vorklima_min_soc"><?= vw_e(vw_t('EINST.L_VORKLIMA_MIN_SOC')) ?></label>
+  <input data-role="none" type="number" id="vorklima_min_soc" name="vorklima_min_soc" value="<?= vw_e(vw_fw('g41', 'vorklima_min_soc', (string) $vw_cfg['vorklima_min_soc'])) ?>"<?= vw_fm('vorklima_min_soc') ?> min="0" max="100">
+  <div class="sm-hilfe"><?= vw_t('EINST.H_VORKLIMA_MIN_SOC') ?></div>
+</div>
+<div class="sm-feld">
+  <label style="display:inline-flex;align-items:center;gap:8px;">
+    <input data-role="none" type="checkbox" name="vorklima_nur_kabel" value="1" <?= vw_fh('g41', 'vorklima_nur_kabel', !empty($vw_cfg['vorklima_nur_kabel'])) ? 'checked' : '' ?><?= vw_fm('vorklima_nur_kabel') ?>>
+    <?= vw_e(vw_t('EINST.L_VORKLIMA_NUR_KABEL')) ?>
+  </label>
+  <div class="sm-hilfe"><?= vw_t('EINST.H_VORKLIMA_NUR_KABEL') ?></div>
+</div>
 <h3><?= vw_e(vw_t('EINST.H_ANKUNFT')) ?></h3>
 <div class="sm-feld">
   <label style="display:inline-flex;align-items:center;gap:8px;">
@@ -1499,6 +1520,27 @@ if ($vw_k1_saetze) { ?>
 <?php } ?>
   </select>
   <div class="sm-hilfe"><?= vw_t('EINST.H_LADEEMPF_QUELLE') ?></div>
+</div>
+<h3><?= vw_e(vw_t('EINST.H_SAMMEL_KABEL')) ?></h3>
+<p class="sm-hilfe"><?= vw_t('EINST.SAMMEL_KABEL_HILFE') ?></p>
+<div class="sm-feld">
+  <label for="kabel_soc"><?= vw_e(vw_t('EINST.L_KABEL_SOC')) ?></label>
+  <input data-role="none" type="number" id="kabel_soc" name="kabel_soc" value="<?= vw_e(vw_fw('g41', 'kabel_soc', (string) $vw_cfg['kabel_soc'])) ?>"<?= vw_fm('kabel_soc') ?> min="1" max="100">
+</div>
+<div class="sm-feld">
+  <label for="kabel_uhr"><?= vw_e(vw_t('EINST.L_KABEL_UHR')) ?></label>
+  <input data-role="none" type="time" id="kabel_uhr" name="kabel_uhr" value="<?= vw_e(vw_fw('g41', 'kabel_uhr', (string) $vw_cfg['kabel_uhr'])) ?>"<?= vw_fm('kabel_uhr') ?>>
+</div>
+<div class="sm-feld">
+  <label for="kabel_abfahrt_min"><?= vw_e(vw_t('EINST.L_KABEL_ABFAHRT_MIN')) ?></label>
+  <input data-role="none" type="number" id="kabel_abfahrt_min" name="kabel_abfahrt_min" value="<?= vw_e(vw_fw('g41', 'kabel_abfahrt_min', (string) $vw_cfg['kabel_abfahrt_min'])) ?>"<?= vw_fm('kabel_abfahrt_min') ?> min="0" max="720">
+  <div class="sm-hilfe"><?= vw_t('EINST.H_KABEL_ABFAHRT_MIN') ?></div>
+</div>
+<div class="sm-feld">
+  <label style="display:inline-flex;align-items:center;gap:8px;">
+    <input data-role="none" type="checkbox" name="signal_kabel" value="1" <?= vw_fh('g41', 'signal_kabel', !empty($vw_cfg['signal_kabel'])) ? 'checked' : '' ?><?= vw_fm('signal_kabel') ?>>
+    <?= vw_e(vw_t('EINST.L_SIGNAL_KABEL')) ?>
+  </label>
 </div>
 <h3><?= vw_e(vw_t('EINST.H_SIGNAL')) ?></h3>
 <p class="sm-hilfe"><?= vw_t('EINST.SIGNAL_ERKLAERUNG') ?></p>
@@ -1636,6 +1678,13 @@ if ($vw_x3) { ?>
     <?= vw_e(vw_t('EINST.L_MQTT_RETAIN')) ?>
   </label>
   <div class="sm-hilfe"><?= vw_t('EINST.H_MQTT_RETAIN') ?></div>
+</div>
+<div class="sm-feld">
+  <label style="display:inline-flex;align-items:center;gap:8px;">
+    <input data-role="none" type="checkbox" name="haus_fahrzeug_ein" value="1" <?= vw_fh('mqtt', 'haus_fahrzeug_ein', !empty($vw_cfg['haus_fahrzeug_ein'])) ? 'checked' : '' ?>>
+    <?= vw_e(vw_t('EINST.L_HAUS_FAHRZEUG_EIN')) ?>
+  </label>
+  <div class="sm-hilfe"><?= vw_t('EINST.H_HAUS_FAHRZEUG_EIN') ?></div>
 </div>
 <div class="sm-legende"><span><i class="sm-punkt sm-b-aktion"></i> <?= vw_t('LEGENDE.AKTION') ?></span></div>
 <div class="sm-knopfreihe">
@@ -2399,6 +2448,7 @@ function vw_bausteinseiten()
    ohne weitere Ziele nichts. */
 if (vw_mit_zielen()) { echo ansage_testknoepfe_html(vw_tts(), vw_ansage_k(), array('klasse' => 'sm-btn sm-b-aktion')); } ?>
   </form>
+<?= vw_ansage_lage_html() ?>
 </div>
 
 <h3><?= vw_e(vw_t('TEST.H_SCHALTEN')) ?></h3>
