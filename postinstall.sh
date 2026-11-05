@@ -266,15 +266,15 @@ if [ "$GERETTET" = 1 ]; then
 fi
 
 if [ "$PIP_NOETIG" = 1 ]; then
-"$VENV/bin/python3" -m pip install --upgrade pip setuptools wheel >/dev/null 2>&1 || \
+timeout 900 "$VENV/bin/python3" -m pip install --disable-pip-version-check --upgrade pip setuptools wheel >/dev/null 2>&1 || \
     echo "<INFO> pip liess sich nicht aktualisieren - wird mit der vorhandenen Fassung versucht."
 
 echo "<INFO> Installiere carconnectivity $KERN und den Volkswagen-Connector $CONNECTOR"
 echo "<INFO> (benoetigt eine Internetverbindung) ..."
-if ! "$VENV/bin/python3" -m pip install --no-cache-dir \
+if ! timeout 2400 "$VENV/bin/python3" -m pip install --disable-pip-version-check --no-cache-dir \
         "carconnectivity==$KERN" "carconnectivity-connector-volkswagen==$CONNECTOR"; then
     echo "<INFO> Feste Fassungen nicht installierbar - versuche die neuesten."
-    if ! "$VENV/bin/python3" -m pip install --no-cache-dir \
+    if ! timeout 2400 "$VENV/bin/python3" -m pip install --disable-pip-version-check --no-cache-dir \
             "carconnectivity-connector-volkswagen"; then
         if [ "$GERETTET" = 1 ]; then
             # I2: scheitert pip, bleibt die gerettete Umgebung in Betrieb.
@@ -309,7 +309,7 @@ fi
 if [ "$GERETTET" = 1 ] && "$VENV/bin/python3" -c 'import paho.mqtt.client' 2>/dev/null; then
     echo "<OK> paho-mqtt ist vorhanden (uebernommene Umgebung)."
 elif echo "<INFO> Installiere paho-mqtt (nur fuer Ladeempfehlung und Vorklimatisierung) ..." \
-   && "$VENV/bin/python3" -m pip install --no-cache-dir "paho-mqtt" >/dev/null 2>&1 \
+   && timeout 900 "$VENV/bin/python3" -m pip install --disable-pip-version-check --no-cache-dir "paho-mqtt" >/dev/null 2>&1 \
    && "$VENV/bin/python3" -c 'import paho.mqtt.client' 2>/dev/null; then
     echo "<OK> paho-mqtt ist vorhanden."
 else

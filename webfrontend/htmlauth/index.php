@@ -553,6 +553,8 @@ if ($vw_post && isset($_POST['speichern'])) {
     $vw_cfg['tts'] = ansage_formular_lesen($_POST, vw_tts(), $vw_tmangel, $vw_tbean,
         array('modi' => vw_ansage_modi(), 'ziele' => vw_mit_zielen(), 'token_vor_ort' => true, 'aus_gewinnt' => true), vw_ansage_k(), $vw_thinw);
     list($vw_cfg['ansage_regeln']) = ansage_regeln_formular($_POST, vw_ansage_regeln($vw_cfg), array(), $vw_tmangel, $vw_tbean, vw_ansage_k());     // S2: Wann gesprochen wird (Stamm)
+    // 0.9.38: ein eingetipptes oder geloeschtes Sprechtoken ist nicht mehr vom Nachbarn; bis 0.9.37 ueberschrieb es der naechste Abgleich.
+    $vw_cfg['ansage_token_herkunft'] = ansage_token_herkunft_formular($_POST, isset($vw_cfg['ansage_token_herkunft']) ? $vw_cfg['ansage_token_herkunft'] : array());
     foreach ($vw_tmangel as $vw_tm) {
         $vw_fehler[] = vw_e($vw_tm['text']);
     }
@@ -567,7 +569,7 @@ if ($vw_post && isset($_POST['speichern'])) {
             array('heim_breite', 'heim_laenge', 'empf_grenze', 'empf_thema', 'abfahrt_thema',
                   'email', 'steuerung_ein', 'zugriff_erzwingen', 'eingreifend_ein',
                   'abfahrt_ein', 'empf_kleiner'), $vw_anlass_felder,
-            ansage_x2_felder(vw_ansage_opt()), ansage_regeln_x2_felder(), vw_ziele_x2_felder()), $vw_falsch);
+            ansage_x2_felder(vw_ansage_opt()), ansage_regeln_x2_felder(), array('ansage_tafel_ein', 'ansage_tafel_namen', 'ansage_homepod_ein', 'ansage_homepod_geraet'), vw_ziele_x2_felder()), $vw_falsch);     // 0.9.38: Tafel und HomePod dazu
     } else {
         $vw_zug_ok = true;
         if ($vw_loeschen) {

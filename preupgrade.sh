@@ -8,6 +8,10 @@
 ARGV3=$3
 ARGV5=$5
 PFOLDER="${ARGV3:-volkswagenid}"
+# 05.11.2026: ein Ordnername mit "/" oder "." waere ein Pfad hinaus (dieselbe Formel wie MGiSmart und Govee).
+case "$PFOLDER" in
+    ''|.|..|*/*) echo "<FAIL> Unbrauchbarer Ordnername '$PFOLDER' - nichts angefasst."; exit 2 ;;
+esac
 BASE="${ARGV5:-$LBHOMEDIR}"
 
 # ---------- Die Wurzel: GELESEN, nicht geraten ----------
@@ -46,7 +50,7 @@ if [ -z "$BASE" ]; then
     echo "<WARNING> traegt kein Verzeichnis config/plugins, data/plugins und"
     echo "<WARNING> config/system/general.json. Es wurde nichts angelegt, nichts"
     echo "<WARNING> gesichert und kein Dienst angehalten."
-    exit 1
+    exit 2
 fi
 
 # ---------- Die Upgrade-Marke, als ERSTES ----------
@@ -86,9 +90,44 @@ else
     # Die Wirkung pruefen, nicht den Rueckgabewert (Kernschicht 2). Ohne
     # Marke laeuft die Aktualisierung weiter, nur mit dem alten Risiko.
     rm -f "$MARKE" 2>/dev/null
-    echo "<WARNING> Die Marke $MARKE liess sich nicht anlegen; waehrend der"
-    echo "<WARNING> Aktualisierung bitte die Plugin-Oberflaeche nicht benutzen."
+    # 05.11.2026: ohne Marke haelt die Installation das Update fuer eine Neuinstallation und legt die Einstellungen beiseite; bis hierher nur eine Warnung.
+    echo "<FAIL> Die Marke $MARKE liess sich nicht anlegen - die Aktualisierung wird abgebrochen,"
+    echo "<FAIL> die bisherige Fassung bleibt unveraendert installiert."
+    exit 2
 fi
+# ---------- Update-Schutz (05.11.2026, Bauart Govee 0.9.34) ----------
+# plugininstall.pl bricht nur bei Rueckgabewert >1 vor purge_installation ab. Die Kopie entsteht als <Ziel>.neu.<pid>, traegt 0600,
+# BEVOR Inhalt hineinkommt, wird mit cmp verglichen und erst dann per mv an ihren Platz gestellt: eine heile Sicherung bleibt heil.
+ZS_FEHL=""
+zs_hinlegen() {   # $1 Quelle, $2 Ziel
+    [ -d "$2" ] && return 1
+    zs_neu="$2.neu.$$"
+    rm -f "$zs_neu" 2>/dev/null
+    if { : > "$zs_neu"; } 2>/dev/null && chmod 600 "$zs_neu" 2>/dev/null \
+       && cp "$1" "$zs_neu" 2>/dev/null && cmp -s "$1" "$zs_neu" \
+       && mv -f "$zs_neu" "$2" 2>/dev/null; then
+        return 0
+    fi
+    rm -f "$zs_neu" 2>/dev/null
+    return 1
+}
+zs_sichere() {   # $1 Quelle, $2 Ziel: fehlt die Datei oder ist sie leer, ist ein Fehlschlag keiner
+    [ -f "$1" ] || return 0
+    zs_hinlegen "$1" "$2" && return 0
+    [ -s "$1" ] || return 1
+    echo "<WARNING> $(basename "$1") liess sich nicht sichern ($2)."
+    ZS_FEHL="$ZS_FEHL $(basename "$1")"
+    return 1
+}
+zs_schluss() {   # Fehlschlag gesammelt: Marke weg, Abbruch vor purge_installation
+    [ -n "$ZS_FEHL" ] || return 0
+    echo "<FAIL> Nicht gesichert:$ZS_FEHL - die Aktualisierung wird abgebrochen, damit der Purge die Originale nicht loescht."
+    echo "<FAIL> Die bisherige Fassung bleibt installiert. Bitte Platz und Rechte unter config/plugins und data/plugins pruefen."
+    rm -f "$MARKE" 2>/dev/null
+    # Die Python-Umgebung liegt beiseite (weiter unten); die bisherige Fassung braucht sie.
+    [ -d "$VENV_ABLAGE" ] && [ ! -e "$VENV_JETZT" ] && mv -f "$VENV_ABLAGE" "$VENV_JETZT" 2>/dev/null
+    exit 2
+}
 
 # Gruppe 41 (0.9.33, Bauvorschrift G2): die Befehlsbruecke anhalten, bevor der bin-Ordner ersetzt wird.
 # Ihr Waechter in cron.01min startet sie nach dem Update wieder - nur mit dem Haken "Befehle ueber MQTT
@@ -276,8 +315,7 @@ rm -f "$PIDDATEI"
 ALTNR="$BASE/data/plugins/$PFOLDER/nummern.json"
 NEUNR="$BASE/data/plugins/$PFOLDER.nummern.json"
 if [ -f "$ALTNR" ] && [ ! -f "$NEUNR" ]; then
-    cp -p "$ALTNR" "$NEUNR" 2>/dev/null || true
-    echo "<INFO> Fahrzeugnummern gesichert."
+    zs_sichere "$ALTNR" "$NEUNR" && echo "<INFO> Fahrzeugnummern gesichert."
 fi
 
 # ---------- Rettung des Datenordners (I3, Durchgang 02.10.2026) ----------
@@ -336,10 +374,12 @@ if [ -n "$VW_LISTE" ] && [ ! -e "$RETTUNG" ]; then
         else
             rm -rf "${RETTUNG:?}.neu"
             echo "<WARNING> Die Rettung ist unvollstaendig (fehlt:$VW_FEHLT) - nichts gerettet."
+            ZS_FEHL="$ZS_FEHL Rettung"
         fi
     else
         rm -rf "${RETTUNG:?}.neu"
         echo "<WARNING> Verlauf, Ladeprotokoll und Anmeldemarken liessen sich nicht retten."
+        ZS_FEHL="$ZS_FEHL Rettung"
     fi
 fi
 
@@ -369,7 +409,7 @@ fi
 CFGDIR="$BASE/config/plugins/$PFOLDER"
 for f in vw.json zugang.json; do
     if [ -f "$CFGDIR/$f" ]; then
-        cp -p "$CFGDIR/$f" "$BASE/config/plugins/$PFOLDER.backup.$f" || true
+        zs_sichere "$CFGDIR/$f" "$BASE/config/plugins/$PFOLDER.backup.$f"
     fi
 done
 # BEIDE Zweitschriften auf 0600. cp -p uebernimmt zwar den Quellmodus, aber
@@ -377,5 +417,6 @@ done
 # einer aelteren Fassung kann die Datei noch mit 0644 dastehen.
 chmod 600 "$BASE/config/plugins/$PFOLDER.backup.zugang.json" 2>/dev/null || true
 chmod 600 "$BASE/config/plugins/$PFOLDER.backup.vw.json" 2>/dev/null || true
+zs_schluss
 echo "<OK> preupgrade abgeschlossen."
 exit 0
