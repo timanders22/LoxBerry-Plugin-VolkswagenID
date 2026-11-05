@@ -272,6 +272,7 @@ if (isset($_POST['activetab']) && is_string($_POST['activetab'])
 if ($vw_post && isset($_POST['vorlage_befehle'])) {
     list($vw_name, $vw_inhalt) = vw_vorlage_befehle();
     if ($vw_inhalt !== '') {
+        while (ob_get_level() > 0) { @ob_end_clean(); }
         header('Content-Type: application/xml; charset=utf-8');
         header('Content-Disposition: attachment; filename="' . $vw_name . '"');
         header('Content-Length: ' . strlen($vw_inhalt));
@@ -297,6 +298,7 @@ if ($vw_post && isset($_POST['vorlage'])) {
         $vw_fehler[] = vw_t('LOX.VORLAGE_UNBEKANNT');
     }
     if ($vw_name !== '') {
+        while (ob_get_level() > 0) { @ob_end_clean(); }
         header('Content-Type: application/xml; charset=utf-8');
         header('Content-Disposition: attachment; filename="' . $vw_name . '"');
         echo $vw_inhalt;
@@ -317,6 +319,7 @@ if ($vw_post && isset($_POST['vorlage'])) {
 if ($vw_post && isset($_POST['vw_sichern'])) {
     $vw_js = vw_sicherung_schreiben();
     if ($vw_js !== false) {
+        while (ob_get_level() > 0) { @ob_end_clean(); }
         header('Content-Type: application/json; charset=utf-8');
         header('Content-Disposition: attachment; filename="volkswagenid_einstellungen_'
                . date('Ymd_His') . '.json"');
