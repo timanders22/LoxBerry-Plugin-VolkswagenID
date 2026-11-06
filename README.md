@@ -20,6 +20,10 @@ Plug-in-Hybrid führt das Plugin beide.
 > gegen Attrappen, sondern gegen **echte Objekte der Bibliothek**. Deshalb
 > 0.9.x und nicht 1.0.0, und deshalb sind schreibende Befehle ab Werk gesperrt.
 
+## Neu in 0.9.41
+
+- Sprachdateien: Die Texte stehen jetzt in der Reihenfolge, in der der Spracherzeuger sie schreibt. Schlüssel und Texte sind unverändert; an der Oberfläche ändert sich nichts.
+
 ## Neu in 0.9.40
 
 - Gemeinsames Sprachmodul 1.4.2: Wird eine Ansage bewusst nicht gesprochen (gerade eben schon gesagt, gesperrt oder Ruhezeit), steht das im Protokoll jetzt so – und nicht mehr als Fehler.
