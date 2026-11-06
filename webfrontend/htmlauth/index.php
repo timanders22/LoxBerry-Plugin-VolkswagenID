@@ -453,6 +453,15 @@ if ($vw_post && isset($_POST['speichern'])) {
     $vw_cfg['abfahrt_ein'] = isset($_POST['abfahrt_ein']) ? 1 : 0;
     $vw_cfg['empf_kleiner'] = isset($_POST['empf_kleiner']) ? 1 : 0;
 
+    // 0.9.39: beide Zahlen aus der Karte zusammen ins Feld Breitengrad kopiert ("50.123, 8.456") - hier aufteilen,
+    // wenn Laengengrad leer ist oder schon die zweite Zahl traegt. Eine Kommazahl allein ("51,3") bleibt eine Zahl.
+    if (isset($_POST['heim_breite']) && is_string($_POST['heim_breite'])
+        && !preg_match('/^\s*-?\d+,\d+\s*\z/', $_POST['heim_breite'])
+        && preg_match('/^\s*(-?\d{1,3}(?:\.\d+)?)\s*[,;\/ ]\s*(-?\d{1,3}(?:\.\d+)?)\s*\z/', $_POST['heim_breite'], $vw_pm)
+        && (!isset($_POST['heim_laenge']) || !is_string($_POST['heim_laenge']) || trim($_POST['heim_laenge']) === ''
+            || str_replace(',', '.', trim($_POST['heim_laenge'])) === $vw_pm[2])) {
+        $_POST['heim_breite'] = $vw_pm[1]; $_POST['heim_laenge'] = $vw_pm[2];
+    }
     /* Heimatort und Ladeempfehlung: Kommazahlen und Themen. Ein LEERES Feld
      * ist hier zulaessig und heisst "nicht eingerichtet" - es wird nicht zu 0
      * gemacht. Eine 0/0 waere ein Punkt im Atlantik, und jede Entfernung
@@ -1349,6 +1358,7 @@ if ($vw_k1_saetze) { ?>
 <div class="sm-feld">
   <label for="heim_breite"><?= vw_e(vw_t('EINST.L_HEIM_BREITE')) ?></label>
   <input data-role="none" type="text" id="heim_breite" name="heim_breite" value="<?= vw_e(vw_fw('einst', 'heim_breite', $vw_cfg['heim_breite'])) ?>"<?= vw_fm('heim_breite') ?> placeholder="51.318339">
+  <div class="sm-hilfe"><a href="<?= vw_e('https://mapatlas.eu/' . (vw_sprache() === 'de' ? 'de' : 'en') . '/tools/coordinates') ?>" target="_blank" rel="noopener"><?= vw_e(vw_t('EINST.KARTE')) ?></a>. <?= vw_e(vw_t('EINST.KARTE_ZUSAMMEN')) ?></div>
 </div>
 <div class="sm-feld">
   <label for="heim_laenge"><?= vw_e(vw_t('EINST.L_HEIM_LAENGE')) ?></label>
