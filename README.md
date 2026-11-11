@@ -20,6 +20,10 @@ Plug-in-Hybrid führt das Plugin beide.
 > gegen Attrappen, sondern gegen **echte Objekte der Bibliothek**. Deshalb
 > 0.9.x und nicht 1.0.0, und deshalb sind schreibende Befehle ab Werk gesperrt.
 
+## Neu in 0.9.43
+
+- **Vorprüfung der Sprachausgabe wie die Brücke:** Steht die Sprachausgabe in der Konfiguration als leere Liste (`"tts": []`), nimmt die Vorprüfung im Dienst sie jetzt wie die Brücke als „aus“. Bisher hielt der Dienst sie für „an“ und rief die Brücke auf, die dann mit „aus“ ablehnte. Gesprochen wurde in beiden Fassungen nichts; es entfallen nur der vergebliche Aufruf und seine Protokollzeile. Eine nicht leere Liste weist die Brücke ab und nimmt den Werksblock; dabei bleibt es. Gemessen im Prüfstand auf dem Arbeitsrechner unter PHP 7.4 und 8.4, am Gerät noch nicht.
+
 ## Neu in 0.9.42
 
 - Gemeinsames Sprachmodul 1.4.3: Als LoxBerry-Wurzel aus `LBHOMEDIR` gilt für die Sprachausgabe nur noch ein Ordner mit `config/plugins`, `data/plugins` und `config/system/general.json`; bis 1.4.2 genügte `config/system`, und ein Prüfstand oder Rest mit diesem Ordner wurde wie ein LoxBerry gelesen. Auf einem LoxBerry ändert sich nichts.

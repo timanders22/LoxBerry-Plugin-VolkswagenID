@@ -4366,10 +4366,17 @@ def ansage_ausfall(ok: int, fehler_folge: int) -> bool:
 
 def _ansage_aus() -> bool:
     """Ist die Ausgabe aus? Nur der Modus wird angesehen; geprueft wird der Block
-    in der Bruecke. Fehlt er oder ist er unlesbar, gilt er als aus (Vorgabe)."""
+    in der Bruecke. Fehlt er, gilt er als an (ab Werk, Stamm 1.3.2); ein Objekt ohne
+    Modus und eine Liste gelten wie in der Bruecke als aus."""
     roh, _lage = _config_roh()
     t = roh.get("tts") if isinstance(roh, dict) else None
     # Stamm 1.3.2: nie gespeichert heisst ab Werk an; ein gespeichertes "aus" bleibt.
+    # Eine leere Liste (so schrieb das Speichern ein leeres Objekt in AudiConnect bis 0.9.41 und BYD-Autos bis
+    # 0.9.39) liest die Bruecke wie einen leeren Block, also als "aus"; eine nicht leere Liste weist sie ab
+    # und nimmt den Werksblock (an) - gemessen 11.11.2026. Bis zu dieser Fassung (VolkswagenID 0.9.43) rief der
+    # Dienst die Bruecke bei [] vergeblich auf; sie antwortete mit ART=aus.
+    if isinstance(t, list) and not t:
+        return True
     return isinstance(t, dict) and t.get("mode", "aus") == "aus"
 
 
