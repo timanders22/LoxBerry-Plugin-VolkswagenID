@@ -377,8 +377,14 @@ starten() {
         echo "FEHLER: Zugangsdaten fehlen ($PCONFIG/zugang.json). Erst in der Oberflaeche eintragen."
         return 1
     fi
-    if ! grep -q '"passwort"[[:space:]]*:[[:space:]]*"[^"]\{1,\}"' "$PCONFIG/zugang.json" 2>/dev/null \
-       || ! grep -q '"email"[[:space:]]*:[[:space:]]*"[^"]\{1,\}"' "$PCONFIG/zugang.json" 2>/dev/null; then
+    # 0.9.44: mit der Datenquelle Portal (vw.json: "quelle": "portal") zaehlen
+    # portal_email und portal_passwort, sonst email und passwort.
+    ZV=""
+    if grep -q '"quelle"[[:space:]]*:[[:space:]]*"portal"' "$PCONFIG/vw.json" 2>/dev/null; then
+        ZV="portal_"
+    fi
+    if ! grep -q "\"${ZV}passwort\"[[:space:]]*:[[:space:]]*\"[^\"]\\{1,\\}\"" "$PCONFIG/zugang.json" 2>/dev/null \
+       || ! grep -q "\"${ZV}email\"[[:space:]]*:[[:space:]]*\"[^\"]\\{1,\\}\"" "$PCONFIG/zugang.json" 2>/dev/null; then
         echo "FEHLER: In $PCONFIG/zugang.json fehlt der Benutzername oder das Passwort."
         echo "        Reiter Einstellungen der Plugin-Oberflaeche. Der Dienst wird nicht"
         echo "        gestartet - sonst liefe er in eine Neustartschleife."

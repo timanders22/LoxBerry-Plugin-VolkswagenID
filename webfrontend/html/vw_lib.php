@@ -239,6 +239,11 @@ function vw_vorgaben()
         'vorklima_min_soc'       => 20,
         'vorklima_nur_kabel'     => 0,
         'ansage_kabel_vergessen' => 1,
+        /* 0.9.44: Datenquelle. 'weconnect' (Volkswagen-App, bisheriger Weg) bleibt die Vorgabe;
+         * 'portal' liest das EU-Data-Act-Portal von Volkswagen (nur lesend). Dieselben Werte wie
+         * VORGABEN in bin/vw.py. portal_marke: 'pkw' oder 'nutzfahrzeuge' (Anmeldung am Portal). */
+        'quelle'                 => 'weconnect',
+        'portal_marke'           => 'pkw',
         'tts'               => ansage_werk_block(),     // Stamm 1.3.2: ab Werk an, nur fuer einen nie gespeicherten Block
         'ansage_regeln' => ansage_regeln_vorgaben(),
         'ansage_token_herkunft' => array(),
@@ -358,6 +363,9 @@ function vw_regeln()
         'vorklima_min_soc'       => array('ganz', 0, 100),
         'vorklima_nur_kabel'     => array('schalt'),
         'ansage_kabel_vergessen' => array('schalt'),
+        /* 0.9.44 */
+        'quelle'                 => array('text', '#^(weconnect|portal)$#', 9),
+        'portal_marke'           => array('text', '#^(pkw|nutzfahrzeuge)$#', 13),
         'aktionstoken'       => array('text', '#^[A-Za-z0-9_.\-]{0,64}$#', 64),
         'wartezeit'          => array('ganz', 0, 30),
         'wartezeit_endpunkt' => array('ganz', 0, 15),
@@ -842,6 +850,9 @@ function vw_zugang()
         'email'       => isset($z['email']) ? (string) $z['email'] : '',
         'laenge'      => isset($z['passwort']) ? strlen((string) $z['passwort']) : 0,
         'spin_laenge' => isset($z['spin']) ? strlen((string) $z['spin']) : 0,
+        /* 0.9.44: Anmeldung am EU-Data-Act-Portal - dieselbe 0600-Datei, eigene Schluessel. */
+        'portal_email'  => isset($z['portal_email']) ? (string) $z['portal_email'] : '',
+        'portal_laenge' => isset($z['portal_passwort']) ? strlen((string) $z['portal_passwort']) : 0,
     );
 }
 
@@ -853,7 +864,7 @@ function vw_zugang()
  * Genau dieser Fehler hat im ACTi-Plugin 21 vergebliche Anmeldeversuche
  * verursacht.
  */
-function vw_zugang_speichern($email, $passwort, $spin)
+function vw_zugang_speichern($email, $passwort, $spin, $portal_email = null, $portal_passwort = null)
 {
     $p = vw_paths();
     if (!is_dir($p['configdir'])) {
@@ -869,6 +880,19 @@ function vw_zugang_speichern($email, $passwort, $spin)
                       ? $spin
                       : (isset($alt['spin']) ? $alt['spin'] : ''),
     );
+    /* 0.9.44: die Anmeldung am Portal. null heisst "nicht angegeben" (behalten) - so
+     * bleiben sie bei jedem Aufrufer, der sie nicht kennt, unveraendert stehen; ein
+     * leeres Passwortfeld loescht auch hier nichts. Bis 0.9.43 schrieb diese
+     * Funktion nur drei Schluessel; ein vierter waere beim naechsten Speichern
+     * verschwunden. */
+    $pe = $portal_email !== null ? $portal_email
+        : (isset($alt['portal_email']) ? $alt['portal_email'] : '');
+    $pp = ($portal_passwort !== null && $portal_passwort !== '') ? $portal_passwort
+        : (isset($alt['portal_passwort']) ? $alt['portal_passwort'] : '');
+    if ($pe !== '' || $pp !== '') {
+        $neu['portal_email'] = $pe;
+        $neu['portal_passwort'] = $pp;
+    }
     $json = json_encode($neu, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     // json_encode liefert bei ungueltigem UTF-8 false - dann darf nichts
     // geschrieben werden, sonst stuenden hier LEERE Zugangsdaten.
@@ -1374,20 +1398,22 @@ function vw_dienst($befehl)
 function vw_bibliothek_fassungen()
 {
     $py = vw_paths()['bindir'] . '/venv/bin/python3';
-    $leer = array('kern' => '', 'connector' => '');
+    $leer = array('kern' => '', 'connector' => '', 'portal' => '');
     if (!is_file($py)) {
         return $leer;
     }
     $ausgabe = array();
+    /* 0.9.44: dazu die Bibliothek der Datenquelle Portal ('portal'). */
     @exec(escapeshellcmd($py) . ' -c ' . escapeshellarg(
         'import importlib.metadata as m' . "\n"
-        . 'for p in ("carconnectivity", "carconnectivity-connector-volkswagen"):' . "\n"
+        . 'for p in ("carconnectivity", "carconnectivity-connector-volkswagen", "carconnectivity-connector-vw-eu-data-act"):' . "\n"
         . '    try: print(m.version(p))' . "\n"
         . '    except Exception: print("")'
     ) . ' 2>/dev/null', $ausgabe);
     return array(
         'kern'      => isset($ausgabe[0]) ? trim($ausgabe[0]) : '',
         'connector' => isset($ausgabe[1]) ? trim($ausgabe[1]) : '',
+        'portal'    => isset($ausgabe[2]) ? trim($ausgabe[2]) : '',
     );
 }
 
@@ -1838,6 +1864,9 @@ function vw_mqtt_themen()
         // (Min -1/-999 oben: die -1-Regel fuer Messwerte ohne Aussage, Nachtrag 4)
         'fahrzeugN/restzeit_min'            => $z('VW_MQTT.RESTZEIT', 'min', 1, -1, 100000, 0),
         'fahrzeugN/klima_restzeit_min'      => $z('VW_MQTT.KLIMA_RESTZEIT', 'min', 1, -1, 100000, 0),
+        // ---- je Fahrzeug: 0.9.44, nur mit der Datenquelle Portal; fluechtig, -1 ohne Aussage ----
+        'fahrzeugN/portal_messzeit'         => $z('VW_MQTT.PORTAL_MESSZEIT', 's', 1, -1, 2147483647, 0),
+        'fahrzeugN/portal_alter_min'        => $z('VW_MQTT.PORTAL_ALTER', 'min', 1, -1, 10000000, 0),
         // ---- je Fahrzeug: Text, ab 0.9.10 ----
         'fahrzeugN/zustand_text'            => $t('VW_MQTT.T_ZUSTAND'),
         'fahrzeugN/klima_text'              => $t('VW_MQTT.T_KLIMA'),
@@ -2427,8 +2456,8 @@ function vw_vorlage($nummer = 1, $art = 'status')
              * das, was der Doc-Block oben ausschliessen will. Bis 0.9.11
              * trugen alle fuenf Vorlagen denselben Zyklus. */
             'polling' => (string) ($art === 'wartung'
-                ? max(60, (int) $cfg['intervall'] * max(1, (int) $cfg['takt_wartung']))
-                : max(60, (int) $cfg['intervall'])),
+                ? max(60, vw_takt_wirksam($cfg) * max(1, (int) $cfg['takt_wartung']))
+                : max(60, vw_takt_wirksam($cfg))),
             'comment' => 'Erzeugt vom LoxBerry-Plugin Volkswagen ID (' . date('d.m.Y') . ')',
         ), $cmds),
     );
@@ -2551,6 +2580,11 @@ function vw_vorlage_mqtt($nummer = 1)
         $voll = str_replace('fahrzeugN', 'fahrzeug' . (int) $nummer, $thema);
         if (!empty($info['text'])) {
             $text++;
+            continue;
+        }
+        /* 0.9.44: die beiden Portal-Themen sendet der Dienst nur mit der Quelle Portal - dann, und
+         * nur dann, stehen sie auch in der Vorlage (MQTT_NUR_PORTAL in bin/vw.py). */
+        if (strpos($thema, 'fahrzeugN/portal_') === 0 && (!isset($cfg['quelle']) || $cfg['quelle'] !== 'portal')) {
             continue;
         }
         $bedeutung = trim(strip_tags(html_entity_decode(vw_t($info['s']), ENT_QUOTES, 'UTF-8')));
@@ -3048,7 +3082,8 @@ function vw_sicherung_lesen($roh)
          * F9f). Sie werden geprueft wie im Formular (vw_zugang_pruefen()). Fehlt
          * der Eintrag (aeltere Sicherung), bleibt der Zugang unveraendert. */
         if ($k === 'zugang') {
-            if (!is_array($w) || array_diff(array_keys($w), array('email', 'passwort', 'spin'))) {
+            if (!is_array($w) || array_diff(array_keys($w), array('email', 'passwort', 'spin',
+                                                                  'portal_email', 'portal_passwort'))) {
                 $mangel[] = vw_t('EINST.SICH_ZUGANG_FORM');
                 $namen[] = 'zugang';
                 continue;
@@ -3063,8 +3098,21 @@ function vw_sicherung_lesen($roh)
                 }
                 continue;
             }
+            /* 0.9.44: die Anmeldung am Portal, geprueft wie im Formular. Fehlt sie
+             * (aeltere Sicherung), bleibt sie unveraendert (null). */
+            $zp = vw_portal_zugang_pruefen(isset($w['portal_email']) ? $w['portal_email'] : '',
+                                           isset($w['portal_passwort']) ? $w['portal_passwort'] : '');
+            if ($zp['fehler']) {
+                foreach ($zp['fehler'] as $feld => $text) {
+                    $mangel[] = vw_t('EINST.SICH_ZUGANG') . ' ' . $text;
+                    $namen[] = 'zugang.' . $feld;
+                }
+                continue;
+            }
             $zugang = array('email' => $zf['email'], 'passwort' => $zf['passwort'],
-                            'spin' => $zf['spin']);
+                            'spin' => $zf['spin'],
+                            'portal_email' => array_key_exists('portal_email', $w) ? $zp['email'] : null,
+                            'portal_passwort' => array_key_exists('portal_passwort', $w) ? $zp['passwort'] : null);
             continue;
         }
         if ($k === 'tts') {
@@ -3270,6 +3318,33 @@ function vw_zugang_pruefen($email, $passwort, $spin)
 }
 
 /**
+ * Die Anmeldung am EU-Data-Act-Portal pruefen (0.9.44) - dieselben Regeln wie
+ * vw_zugang_pruefen() fuer E-Mail und Passwort; Fehlerschluessel portal_email
+ * und portal_passwort, jeder Text mit dem Vorsatz "Portal:".
+ * Rueckgabe: array('fehler' => array(feld => Text), 'email', 'passwort').
+ */
+function vw_portal_zugang_pruefen($email, $passwort)
+{
+    $r = vw_zugang_pruefen($email, $passwort, '');
+    $fehler = array();
+    foreach ($r['fehler'] as $feld => $text) {
+        $fehler['portal_' . $feld] = vw_t('EINST.PORTAL_VORSATZ') . ' ' . $text;
+    }
+    return array('fehler' => $fehler, 'email' => $r['email'], 'passwort' => $r['passwort']);
+}
+
+/**
+ * Der Abruftakt, mit dem der Dienst wirklich arbeitet (0.9.44): mit der
+ * Datenquelle Portal mindestens 900 s (das Portal liefert hoechstens alle
+ * 15 Minuten neue Daten). Dieselbe Regel wie takt_wirksam() in bin/vw.py.
+ */
+function vw_takt_wirksam($cfg)
+{
+    $t = isset($cfg['intervall']) && is_numeric($cfg['intervall']) ? (int) $cfg['intervall'] : 300;
+    return (isset($cfg['quelle']) && $cfg['quelle'] === 'portal') ? max(900, $t) : $t;
+}
+
+/**
  * Die Sicherungsdatei, wie sie heruntergeladen wird.
  *
  * Vollstaendig aus den Vorgaben heraus - ein Schluessel, der fehlt, kaeme beim
@@ -3314,6 +3389,9 @@ function vw_sicherung_schreiben($pruefen = true)
         'email'    => isset($zg['email']) && is_string($zg['email']) ? $zg['email'] : '',
         'passwort' => isset($zg['passwort']) && is_string($zg['passwort']) ? $zg['passwort'] : '',
         'spin'     => isset($zg['spin']) && is_string($zg['spin']) ? $zg['spin'] : '',
+        /* 0.9.44: Anmeldung am EU-Data-Act-Portal */
+        'portal_email'    => isset($zg['portal_email']) && is_string($zg['portal_email']) ? $zg['portal_email'] : '',
+        'portal_passwort' => isset($zg['portal_passwort']) && is_string($zg['portal_passwort']) ? $zg['portal_passwort'] : '',
     );
     /* X-3 (Nachzug G1, 02.10.2026; Bauform Skoda-Connect-NG 0.9.29, APC-UPS
      * 1.2.17): die Sicherung geht durch DIESELBE Pruefung wie das
@@ -3461,13 +3539,21 @@ function vw_neue_schluessel_0933()
                  'signal_praefix', 'signal_laden_fertig', 'signal_laden_abbruch', 'signal_offen',
                  'signal_ausfall', 'signal_vorklima',
                  /* 0.9.35 */ 'haus_fahrzeug_ein', 'kabel_soc', 'kabel_uhr', 'kabel_abfahrt_min', 'signal_kabel',
-                 'vorklima_min_soc', 'vorklima_nur_kabel');
+                 'vorklima_min_soc', 'vorklima_nur_kabel',
+                 /* 0.9.44 */ 'quelle', 'portal_marke');
 }
 
-/** Sind Zugangsdaten eingetragen? (E-Mail und Passwort.) */
-function vw_zugang_da()
+/** Sind Zugangsdaten eingetragen? (E-Mail und Passwort - seit 0.9.44 die der
+ *  eingestellten Datenquelle.) */
+function vw_zugang_da($cfg = null)
 {
     $z = vw_zugang();
+    /* Ohne mitgegebene Konfiguration nur LESEN (vw_config(false)): diese Funktion
+     * laeuft auch in der Gesundheitspruefung, und die legt nichts an. */
+    $c = is_array($cfg) ? $cfg : vw_config(false);
+    if (isset($c['quelle']) && $c['quelle'] === 'portal') {
+        return $z['portal_email'] !== '' && $z['portal_laenge'] > 0;
+    }
     return $z['email'] !== '' && $z['laenge'] > 0;
 }
 
@@ -4243,7 +4329,7 @@ function vw_gesund_fakten(array $cfg)
     $p = vw_paths();
     $jetzt = time();
     $f = array();
-    $f['eingerichtet'] = (bool) vw_zugang_da();
+    $f['eingerichtet'] = (bool) vw_zugang_da($cfg);
     $f['soll'] = (int) vw_dienst_soll() === 1;
     $f['pid'] = (int) vw_dienst_pid();
     /* Der Start des laufenden Dienstes: die PID-Datei, wenn sie genau diesen Prozess nennt. */

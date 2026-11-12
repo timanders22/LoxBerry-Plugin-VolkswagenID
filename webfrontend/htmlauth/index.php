@@ -369,7 +369,8 @@ if ($vw_post && isset($_POST['vw_zurueck'])) {
             if ($vw_neuzugang === null) {
                 $vw_hinweise[] = vw_t('EINST.SICH_OHNE_ZUGANG');
             } elseif (vw_zugang_speichern($vw_neuzugang['email'], $vw_neuzugang['passwort'],
-                                          $vw_neuzugang['spin'])) {
+                                          $vw_neuzugang['spin'], $vw_neuzugang['portal_email'],
+                                          $vw_neuzugang['portal_passwort'])) {
                 $vw_meldungen[] = vw_t('EINST.SICH_ZUGANG_UEBERNOMMEN');
             } else {
                 $vw_fehler[] = vw_t('EINST.FEHLER_ZUGANG_SPEICHERN');
@@ -452,6 +453,29 @@ if ($vw_post && isset($_POST['speichern'])) {
     $vw_cfg['eingreifend_ein'] = isset($_POST['eingreifend_ein']) ? 1 : 0;
     $vw_cfg['abfahrt_ein'] = isset($_POST['abfahrt_ein']) ? 1 : 0;
     $vw_cfg['empf_kleiner'] = isset($_POST['empf_kleiner']) ? 1 : 0;
+
+    /* 0.9.44: Datenquelle und Marke am Portal - Auswahlfelder, geprueft gegen
+     * vw_regeln(). Ein fehlendes oder fremdes Feld wird beanstandet, nicht still
+     * auf die Vorgabe gesetzt. Die alten Werte merken: aendert sich etwas, wird
+     * der laufende Dienst nach dem Speichern neu gestartet (die Bibliothek wird
+     * nur beim Start eingerichtet). */
+    $vw_quelle_alt = array((string) $vw_cfg['quelle'], (string) $vw_cfg['portal_marke']);
+    foreach (array('quelle', 'portal_marke') as $vw_feld) {
+        $vw_name = vw_t('EINST.L_' . strtoupper($vw_feld));
+        $vw_roh = isset($_POST[$vw_feld]) ? $_POST[$vw_feld] : '';
+        if (!is_string($vw_roh)) {
+            $vw_fehler[] = sprintf(vw_t('EINST.FEHLER_LISTE'), $vw_name);
+            $vw_falsch[] = $vw_feld;
+            continue;
+        }
+        list($vw_ok2, $vw_rein) = vw_wert_pruefen($vw_feld, $vw_roh);
+        if (!$vw_ok2) {
+            $vw_fehler[] = sprintf(vw_t('EINST.FEHLER_AUSWAHL'), $vw_name);
+            $vw_falsch[] = $vw_feld;
+            continue;
+        }
+        $vw_cfg[$vw_feld] = $vw_rein;
+    }
 
     // 0.9.39: beide Zahlen aus der Karte zusammen ins Feld Breitengrad kopiert ("50.123, 8.456") - hier aufteilen,
     // wenn Laengengrad leer ist oder schon die zweite Zahl traegt. Eine Kommazahl allein ("51,3") bleibt eine Zahl.
@@ -546,6 +570,28 @@ if ($vw_post && isset($_POST['speichern'])) {
             $vw_fehler[] = vw_t('EINST.FEHLER_EMAIL_LEER');
             $vw_falsch[] = 'email';
         }
+        /* 0.9.44: Anmeldung am EU-Data-Act-Portal - dieselben Regeln. Ein geleertes
+         * E-Mail-Feld loescht nichts (Haken "Zugangsdaten loeschen"). */
+        $vw_zp = vw_portal_zugang_pruefen(isset($_POST['portal_email']) ? $_POST['portal_email'] : '',
+                                          isset($_POST['portal_passwort']) ? $_POST['portal_passwort'] : '');
+        foreach ($vw_zp['fehler'] as $vw_feld => $vw_text) {
+            $vw_fehler[] = $vw_text;
+            $vw_falsch[] = $vw_feld;
+        }
+        if (!isset($vw_zp['fehler']['portal_email']) && $vw_zp['email'] === '' && $vw_zg_alt['portal_email'] !== '') {
+            $vw_fehler[] = vw_t('EINST.FEHLER_PORTAL_EMAIL_LEER');
+            $vw_falsch[] = 'portal_email';
+        }
+        $vw_portal_neu = !$vw_zp['fehler'] && ($vw_zp['email'] !== $vw_zg_alt['portal_email'] || $vw_zp['passwort'] !== '');
+        /* Quelle Portal ohne Anmeldung: der Dienst liefe nicht an - abgewiesen
+         * (fail closed), nicht still gespeichert. */
+        if (!in_array('quelle', $vw_falsch, true) && $vw_cfg['quelle'] === 'portal' && !$vw_zp['fehler']
+            && (($vw_zp['email'] === '' ? $vw_zg_alt['portal_email'] : $vw_zp['email']) === ''
+                || ($vw_zp['passwort'] === '' && $vw_zg_alt['portal_laenge'] === 0))) {
+            $vw_fehler[] = vw_t('EINST.FEHLER_PORTAL_ZUGANG_FEHLT');
+            $vw_falsch[] = 'portal_email';
+            $vw_falsch[] = 'portal_passwort';
+        }
     }
 
     /* Nr. 36 b (Stufe 2, seit 0.9.29): Sprachausgabe und Anlaesse. Jede Beanstandung verhindert
@@ -576,7 +622,7 @@ if ($vw_post && isset($_POST['speichern'])) {
          * (ansage_x2_felder() nennt die Token nicht). */
         $vw_eingaben = vw_eingaben_sammeln('einst', array_merge($vw_zahlfelder,
             array('heim_breite', 'heim_laenge', 'empf_grenze', 'empf_thema', 'abfahrt_thema',
-                  'email', 'steuerung_ein', 'zugriff_erzwingen', 'eingreifend_ein',
+                  'email', 'portal_email', 'quelle', 'portal_marke', 'steuerung_ein', 'zugriff_erzwingen', 'eingreifend_ein',
                   'abfahrt_ein', 'empf_kleiner'), $vw_anlass_felder,
             ansage_x2_felder(vw_ansage_opt()), ansage_regeln_x2_felder(), array('ansage_tafel_ein', 'ansage_tafel_namen', 'ansage_homepod_ein', 'ansage_homepod_geraet'), vw_ziele_x2_felder()), $vw_falsch);     // 0.9.38: Tafel und HomePod dazu
     } else {
@@ -589,13 +635,27 @@ if ($vw_post && isset($_POST['speichern'])) {
                 $vw_teil = true;
                 $vw_zug_ok = false;
             }
-        } elseif (!vw_zugang_speichern($vw_zf['email'], $vw_zf['passwort'], $vw_zf['spin'])) {
+        } elseif (!vw_zugang_speichern($vw_zf['email'], $vw_zf['passwort'], $vw_zf['spin'],
+                                       $vw_zp['email'], $vw_zp['passwort'])) {
             $vw_fehler[] = vw_t('EINST.FEHLER_ZUGANG_SPEICHERN');
             $vw_zug_ok = false;
         }
         if ($vw_zug_ok) {
             if (vw_config_speichern($vw_cfg)) {
                 $vw_meldungen[] = vw_t('EINST.GESPEICHERT');
+                /* 0.9.44: die Bibliothek der Datenquelle richtet der Dienst nur beim Start
+                 * ein. Hat sich Quelle, Marke oder - bei der Quelle Portal - die Anmeldung
+                 * geaendert, wird er neu gestartet, und die Seite sagt, was geschah. */
+                if (array((string) $vw_cfg['quelle'], (string) $vw_cfg['portal_marke']) !== $vw_quelle_alt
+                    || ($vw_cfg['quelle'] === 'portal' && !empty($vw_portal_neu))) {
+                    if (vw_dienst_pid() > 0) {
+                        list($vw_dok, $vw_daus) = vw_dienst('restart');
+                        $vw_meldungen[] = $vw_dok ? vw_t('EINST.QUELLE_DIENST_NEU')
+                                                  : vw_t('EINST.SICH_DIENST_FEHL') . ' ' . vw_e($vw_daus);
+                    } else {
+                        $vw_meldungen[] = vw_t('EINST.QUELLE_DIENST_AUS');
+                    }
+                }
                 foreach ($vw_thinw as $vw_th) { $vw_hinweise[] = $vw_th['text']; }     // Welle Mehrfach-Ziele: erst nach dem Speichern
                 /* Ein Hinweis, keine Beanstandung (O10): er verhindert das
                  * Speichern nicht. */
@@ -1140,6 +1200,11 @@ if ($vw_lage['fremd']) { ?>
 &middot; <?= vw_e(vw_t('ALLG.SOC')) ?> <b><?= !isset($vw_fz['soc']) || $vw_fz['soc'] === null ? '&ndash;' : vw_e($vw_fz['soc']) . ' %' ?></b>
 &middot; <?= vw_e(vw_t('ALLG.REICHWEITE')) ?> <?= !isset($vw_fz['reichweite_km']) || $vw_fz['reichweite_km'] === null ? '&ndash;' : vw_e($vw_fz['reichweite_km']) . ' km' ?>
 &middot; <?= vw_e(vw_t('ALLG.KM')) ?> <?= !isset($vw_fz['kilometerstand']) || $vw_fz['kilometerstand'] === null ? '&ndash;' : vw_e($vw_fz['kilometerstand']) . ' km' ?>
+<?php if (isset($vw_fz['portal_messzeit']) && is_numeric($vw_fz['portal_messzeit']) && (int) $vw_fz['portal_messzeit'] > 0) {
+    /* 0.9.44: Messzeit der Portaldaten und ihr Alter JETZT (nicht beim Abruf). */
+    $vw_pm = (int) $vw_fz['portal_messzeit']; ?>
+&middot; <?= vw_e(vw_t('ALLG.PORTAL_MESSZEIT')) ?> <?= vw_e(date('d.m.Y H:i', $vw_pm)) ?> (<?= vw_e(sprintf(vw_t('ALLG.PORTAL_VOR_MIN'), max(0, (int) floor((time() - $vw_pm) / 60)))) ?>)
+<?php } ?>
 &middot; <?= vw_e(vw_t('ALLG.VERRIEGELT')) ?>
 <?php if (!isset($vw_fz['verriegelt']) || $vw_fz['verriegelt'] === null) { ?>&ndash;<?php
       } elseif ($vw_fz['verriegelt']) { ?><span class="sm-an"><?= vw_e(vw_t('ALLG.JA')) ?></span><?php
@@ -1268,6 +1333,35 @@ if ($vw_k1_saetze) { ?>
   <div class="sm-hilfe"><?= vw_t('EINST.H_ZUGANG_LOESCHEN') ?></div>
 </div>
 <?php } ?>
+
+<h2><?= vw_e(vw_t('EINST.H_DATENQUELLE')) ?></h2>
+<div class="sm-warnung"><?= vw_t('EINST.QUELLE_ERKLAERUNG') ?></div>
+<div class="sm-feld">
+  <label for="quelle"><?= vw_e(vw_t('EINST.L_QUELLE')) ?></label>
+  <select data-role="none" id="quelle" name="quelle"<?= vw_fm('quelle') ?>>
+    <option value="weconnect"<?= vw_fw('einst', 'quelle', (string) $vw_cfg['quelle']) === 'weconnect' ? ' selected' : '' ?>><?= vw_e(vw_t('EINST.O_QUELLE_WECONNECT')) ?></option>
+    <option value="portal"<?= vw_fw('einst', 'quelle', (string) $vw_cfg['quelle']) === 'portal' ? ' selected' : '' ?>><?= vw_e(vw_t('EINST.O_QUELLE_PORTAL')) ?></option>
+  </select>
+  <div class="sm-hilfe"><?= vw_t('EINST.H_QUELLE') ?></div>
+</div>
+<div class="sm-feld">
+  <label for="portal_marke"><?= vw_e(vw_t('EINST.L_PORTAL_MARKE')) ?></label>
+  <select data-role="none" id="portal_marke" name="portal_marke"<?= vw_fm('portal_marke') ?>>
+    <option value="pkw"<?= vw_fw('einst', 'portal_marke', (string) $vw_cfg['portal_marke']) === 'pkw' ? ' selected' : '' ?>><?= vw_e(vw_t('EINST.O_MARKE_PKW')) ?></option>
+    <option value="nutzfahrzeuge"<?= vw_fw('einst', 'portal_marke', (string) $vw_cfg['portal_marke']) === 'nutzfahrzeuge' ? ' selected' : '' ?>><?= vw_e(vw_t('EINST.O_MARKE_NUTZ')) ?></option>
+  </select>
+  <div class="sm-hilfe"><?= vw_t('EINST.H_PORTAL_MARKE') ?></div>
+</div>
+<div class="sm-feld">
+  <label for="portal_email"><?= vw_e(vw_t('EINST.L_PORTAL_EMAIL')) ?></label>
+  <input data-role="none" type="text" id="portal_email" name="portal_email" value="<?= vw_e(vw_fw('einst', 'portal_email', $vw_zg['portal_email'])) ?>"<?= vw_fm('portal_email') ?> placeholder="name@example.com">
+  <div class="sm-hilfe"><?= vw_t('EINST.H_PORTAL_EMAIL') ?></div>
+</div>
+<div class="sm-feld">
+  <label for="portal_passwort"><?= vw_e(vw_t('EINST.L_PORTAL_PASSWORT')) ?></label>
+  <input data-role="none" type="password" id="portal_passwort" name="portal_passwort" value=""<?= vw_fm('portal_passwort') ?> placeholder="<?= $vw_zg['portal_laenge'] > 0 ? vw_e(sprintf(vw_t('EINST.PW_GESETZT'), $vw_zg['portal_laenge'])) : vw_e(vw_t('EINST.PW_LEER')) ?>">
+  <div class="sm-hilfe"><?= vw_t('EINST.H_PORTAL_PASSWORT') ?></div>
+</div>
 
 <h2><?= vw_e(vw_t('EINST.H_TAKT')) ?></h2>
 <div class="sm-warnung"><?= vw_t('EINST.TAKT_WARNUNG') ?></div>
@@ -1887,7 +1981,7 @@ $vw_text_t = count($vw_themen) - $vw_zahl_t;
 <tr><th><?= vw_e(vw_t('ALLG.EIGENSCHAFT')) ?></th><th><?= vw_e(vw_t('ALLG.WERT')) ?></th></tr>
 <tr><td><?= vw_e(vw_t('LOX.T_ADRESSE')) ?></td>
     <td><span class="sm-mono"><?= vw_e($vw_basis) ?>?token=<?= vw_e($vw_token) ?>&amp;aktion=status&amp;fahrzeug=1</span></td></tr>
-<tr><td><?= vw_e(vw_t('LOX.T_ZYKLUS')) ?></td><td><?= (int) $vw_cfg['intervall'] ?> <?= vw_e(vw_t('ALLG.SEKUNDEN')) ?></td></tr>
+<tr><td><?= vw_e(vw_t('LOX.T_ZYKLUS')) ?></td><td><?= (int) vw_takt_wirksam($vw_cfg) ?> <?= vw_e(vw_t('ALLG.SEKUNDEN')) ?></td></tr>
 </table>
 <?= vw_t('LOX.S3_BEFEHLE') ?>
 <table class="sm-tbl">
@@ -1970,7 +2064,7 @@ $vw_nummern = $vw_fahrzeuge ? array_keys($vw_fahrzeuge) : array('1');
 <table class="sm-tbl">
 <tr><th><?= vw_e(vw_t('ALLG.EIGENSCHAFT')) ?></th><th><?= vw_e(vw_t('ALLG.WERT')) ?></th></tr>
 <tr><td><?= vw_e(vw_t('LOX.T_ADRESSE')) ?></td><td><span class="sm-mono"><?= vw_e($vw_basis) ?>?token=<?= vw_e($vw_token) ?>&amp;aktion=laden&amp;fahrzeug=1</span></td></tr>
-<tr><td><?= vw_e(vw_t('LOX.T_ZYKLUS')) ?></td><td><?= (int) $vw_cfg['intervall'] ?> <?= vw_e(vw_t('ALLG.SEKUNDEN')) ?></td></tr>
+<tr><td><?= vw_e(vw_t('LOX.T_ZYKLUS')) ?></td><td><?= (int) vw_takt_wirksam($vw_cfg) ?> <?= vw_e(vw_t('ALLG.SEKUNDEN')) ?></td></tr>
 </table>
 <table class="sm-tbl">
 <tr><th><?= vw_e(vw_t('LOX.T_BEFEHL')) ?></th><th><?= vw_e(vw_t('LOX.T_EINHEIT')) ?></th><th><?= vw_e(vw_t('LOX.T_BEDEUTUNG')) ?></th></tr>

@@ -304,6 +304,16 @@ VORGABEN = {
     "vorklima_min_soc": 20,
     "vorklima_nur_kabel": 0,
     "ansage_kabel_vergessen": 1,
+    # 0.9.44: Datenquelle. "weconnect" ist der bisherige Weg ueber
+    # carconnectivity-connector-volkswagen und bleibt die Vorgabe - eine
+    # bestehende vw.json ohne den Schluessel faehrt also unveraendert weiter.
+    # "portal" liest das EU-Data-Act-Portal von Volkswagen ueber
+    # carconnectivity-connector-vw-eu-data-act (nur lesend, Daten etwa alle
+    # 15 Minuten). Dieselben Schluessel und Werte wie in vw_vorgaben().
+    "quelle": "weconnect",
+    # Marke der Anmeldung am Portal: "pkw" = VOLKSWAGEN_PASSENGER_CARS,
+    # "nutzfahrzeuge" = VOLKSWAGEN_COMMERCIAL_VEHICLES (z. B. ID. Buzz).
+    "portal_marke": "pkw",
 }
 
 # Grenzen je Einstellung - dieselben Zahlen wie in vw_regeln() der Bibliothek.
@@ -357,9 +367,32 @@ MUSTER_TEXT = {
     "ladeempf_quelle": (r"thema|haus", 5),
     "signal_praefix": (r"[A-Za-z0-9_-]{1,40}", 40),
     "kabel_uhr": (r"([01][0-9]|2[0-3]):[0-5][0-9]", 5),
+    # 0.9.44: Datenquelle und Marke am Portal - dieselben Muster wie vw_regeln()
+    "quelle": (r"weconnect|portal", 9),
+    "portal_marke": (r"pkw|nutzfahrzeuge", 13),
 }
 
 TAKT_MIN = 180
+
+# 0.9.44, Quelle "portal": das Portal stellt hoechstens alle 15 Minuten einen
+# neuen Datensatz bereit (README der Bibliothek 0.3.4: "~15-minute cadence";
+# connector.py: DATASET_INTERVAL = 15 min). Ein kuerzerer Takt holt keine
+# frischeren Werte, nur mehr Anfragen - Volkswagen hat die Gemeinschaftsclients
+# im Oktober 2026 ausdruecklich um weniger Last gebeten (client.py, Kommentar
+# zum entfallenen Vorabruf). Der Dienst nimmt deshalb den groesseren der beiden
+# Werte: eingestellten Takt oder 900 s.
+TAKT_PORTAL = 900
+# Fassung der Portal-Bibliothek, gegen die gebaut und geprueft wurde
+# (postinstall.sh nagelt dieselbe fest).
+PORTAL_BIBLIOTHEK = "carconnectivity-connector-vw-eu-data-act"
+# Land und Sprache im OIDC-"state" der Anmeldung (country__language__BRAND).
+# Die Bibliothek nimmt ohne Angabe "si"/"sl"; das Plugin nimmt "de"/"de".
+# Ob das fuer die Anmeldung einen Unterschied macht, ist NICHT gemessen
+# (keine Anmeldung am Portal in dieser Fassung) - siehe README.
+PORTAL_LAND = "de"
+PORTAL_SPRACHE = "de"
+PORTAL_MARKEN = {"pkw": "VOLKSWAGEN_PASSENGER_CARS",
+                 "nutzfahrzeuge": "VOLKSWAGEN_COMMERCIAL_VEHICLES"}
 
 # Zustaende, die Loxone als Zahl braucht. Ein unbekannter Zustand wird zu None
 # (am Endpunkt ein Strich), NICHT zu 0 - eine 0 waere eine stille
@@ -762,12 +795,36 @@ def config() -> dict:
 
 
 def zugang() -> dict:
+    # 0.9.44: die Anmeldung am EU-Data-Act-Portal steht in DERSELBEN 0600-Datei
+    # unter eigenen Schluesseln (portal_email, portal_passwort). Damit gehen sie
+    # durch dieselbe Zweitschrift, dasselbe preupgrade/postinstall und dasselbe
+    # Loeschen wie die bisherigen Zugangsdaten.
     z = json_lesen(DATEI_ZUGANG)
     return {
         "email": str(z.get("email") or "").strip(),
         "passwort": str(z.get("passwort") or ""),
         "spin": str(z.get("spin") or ""),
+        "portal_email": str(z.get("portal_email") or "").strip(),
+        "portal_passwort": str(z.get("portal_passwort") or ""),
     }
+
+
+def zugang_fuer_quelle(z: dict, cfg: dict) -> tuple:
+    """(Benutzername, Passwort) der eingestellten Quelle (0.9.44)."""
+    if cfg.get("quelle") == "portal":
+        return (z.get("portal_email") or "", z.get("portal_passwort") or "")
+    return (z.get("email") or "", z.get("passwort") or "")
+
+
+def takt_wirksam(cfg: dict) -> int:
+    """Der Abruftakt, mit dem der Dienst wirklich arbeitet (0.9.44).
+
+    Mit Quelle "portal" mindestens TAKT_PORTAL. Dieselbe Regel steht als
+    vw_takt_wirksam() in vw_lib.php; die Frischegrenzen von Endpunkt, Reiter
+    Test und Gesundheitspruefung rechnen damit.
+    """
+    t = int(cfg.get("intervall") or VORGABEN["intervall"])
+    return max(TAKT_PORTAL, t) if cfg.get("quelle") == "portal" else t
 
 
 # ---------------------------------------------------------------------------
@@ -1294,6 +1351,33 @@ def abbild_position(fahrzeug, cfg: dict) -> dict:
     return d
 
 
+def abbild_portal(fahrzeug, cfg: dict, jetzt=None) -> dict:
+    """Messzeit der Portaldaten (0.9.44, nur mit Quelle "portal").
+
+    Ein Datensatz des Portals ist eine Lieferung, keine Messung: er fasst
+    Meldungen des Fahrzeugs zusammen, die Minuten bis Stunden alt sein koennen
+    (README der Bibliothek 0.3.4, "A new delivery is not a new measurement").
+    In der Beispieldatei vom 11.11.2026 lag die Messzeit 27 Stunden vor dem
+    Herunterladen. Das Alter des Abrufs (ts, am Endpunkt ALTER) sagt darueber
+    nichts; deshalb steht die Messzeit eigens daneben.
+
+    Quelle: das Attribut captured_at, das die Bibliothek je Fahrzeug anlegt
+    (connector.py: neueste timestampUtc des Datensatzes, sonst createdOn der
+    Lieferung). Fehlt es, bleiben beide Werte leer - keine 0.
+    """
+    d = getattr(fahrzeug, "captured_at", None)
+    v = getattr(d, "value", None) if d is not None else None
+    if not isinstance(v, datetime):
+        return {"portal_messzeit": None, "portal_alter_min": None}
+    try:
+        messzeit = int(v.timestamp())
+    except (OSError, OverflowError, ValueError):
+        return {"portal_messzeit": None, "portal_alter_min": None}
+    jetzt = time.time() if jetzt is None else jetzt
+    alter = int((jetzt - messzeit) // 60)
+    return {"portal_messzeit": messzeit, "portal_alter_min": alter if alter >= 0 else 0}
+
+
 def fahrzeug_abbilden(fahrzeug, cfg: dict, zyklus: int, stamm: dict) -> dict:
     """Setzt das Abbild eines Fahrzeugs zusammen.
 
@@ -1308,6 +1392,8 @@ def fahrzeug_abbilden(fahrzeug, cfg: dict, zyklus: int, stamm: dict) -> dict:
                   ("position", abbild_position)]
     if zyklus % cfg["takt_wartung"] == 0 or not stamm:
         abschnitte.append(("wartung", abbild_wartung))
+    if cfg.get("quelle") == "portal":
+        abschnitte.append(("portal", abbild_portal))
     for name, funktion in abschnitte:
         try:
             d.update(funktion(fahrzeug, cfg))
@@ -1816,6 +1902,16 @@ def _befehl_absetzen(fahrzeuge: list, cfg: dict, b: dict) -> tuple[int, str, dic
             return (0, meldung, {})
         return (1, "Sofortabruf eingeplant.", {})
 
+    # 0.9.44: das EU-Data-Act-Portal ist nur lesend (README der Bibliothek
+    # 0.3.4: "Read-only. No commands are possible"). Abgewiesen wird mit dem
+    # wahren Grund, bevor die Haken gefragt werden - sonst hiesse die Antwort
+    # "Steuerung ausgeschaltet", und wer sie einschaltet, bekaeme danach eine
+    # unverstaendliche Absage der Bibliothek.
+    if cfg.get("quelle") == "portal":
+        return (0, "Die Datenquelle ist das EU-Data-Act-Portal; es liefert nur Werte und "
+                   "nimmt keine Befehle an. Schreibende Befehle gehen nur mit der Quelle "
+                   "'Volkswagen-App (WeConnect)' im Reiter Einstellungen.", {})
+
     if not cfg.get("steuerung_ein"):
         return (0, "Die Steuerung ist ausgeschaltet. Reiter Einstellungen, "
                    "Haken 'Schreibende Befehle zulassen'.", {})
@@ -2142,7 +2238,16 @@ MQTT_FELDER = (
     # ---- Nachtrag 4 (29.10.2026): Restminuten bis Ladeende / Klima-Ende, fluechtig; -1 ohne
     # Aussage, 0 nach dem Ende. Nicht im Abbild - abbild_schreiben() rechnet sie aus der Endzeit.
     "restzeit_min", "klima_restzeit_min",
+    # ---- 0.9.44: nur mit der Quelle Portal (EU-Data-Act-Portal), fluechtig ----
+    # Messzeit der Portaldaten (Unix-Zeit) und ihr Alter in Minuten beim
+    # Abruf. Mit der Quelle WeConnect gehen sie nicht hinaus (abbild_schreiben();
+    # in diesem Tupel stehen in Kommentaren keine Namen in Anfuehrungszeichen,
+    # vw_mqtt_themen_im_dienst() liest jede solche Zeichenfolge als Thema).
+    "portal_messzeit", "portal_alter_min",
 )
+
+# Nur mit Quelle "portal" gesendet (0.9.44).
+MQTT_NUR_PORTAL = ("portal_messzeit", "portal_alter_min")
 
 # Themen mit einer Zeichenkette als Nutzlast. Sie bekommen in der Loxone-
 # Vorlage KEINEN virtuellen Eingang - ein virtueller Eingang ist eine Zahl.
@@ -2208,6 +2313,8 @@ MQTT_OHNE_RETAIN = frozenset((
     "vorklima",
     # Nachtrag 4 (29.10.2026): Restminuten - eine Restzeit, nie behalten.
     "restzeit_min", "klima_restzeit_min",
+    # 0.9.44: Messzeit und Alter der Portaldaten - Zeitpunkte, nie behalten.
+    "portal_messzeit", "portal_alter_min",
 ))
 
 # Genau die Themen, deren zurueckbehaltener Altwert aus den Fassungen bis
@@ -2377,6 +2484,7 @@ MQTT_MESSWERT_ABSCHNITT = {
     "klima_restzeit_min": "status", "batterie_temp": "reichweite",
     "ladeleistung_kw": "laden", "ladetempo_kmh": "laden", "laden_fertig_um": "laden", "ladesaeule_kw": "laden",
     "restzeit_min": "laden",
+    "portal_messzeit": "portal", "portal_alter_min": "portal",
 }
 # Aussagen des Dienstes, die nie ohne Wert sind - die Regel laesst sie in Ruhe. vorklima traegt -1 schon als
 # "gescheitert"; ein -1 ohne Aussage waere dort doppeldeutig.
@@ -2558,6 +2666,9 @@ def abbild_schreiben(stand: dict, cfg: dict, ok: int, fehler: str = "",
                 return w
 
             for feld in MQTT_FELDER:
+                if feld in MQTT_NUR_PORTAL and cfg.get("quelle") != "portal":
+                    # 0.9.44: mit der bisherigen Quelle bleibt die Themenmenge, wie sie war.
+                    continue
                 if feld in RESTMIN_THEMEN:
                     # Nachtrag 4: Restminuten aus der Endzeit (nicht im Abbild).
                     ende = f.get(RESTMIN_THEMEN[feld])
@@ -4149,7 +4260,28 @@ def bibliothek_config(z: dict, cfg: dict) -> dict:
 
     Zugangsdaten stehen nur hier im Arbeitsspeicher, nie in einer Datei, die
     die Oberflaeche anzeigt.
+
+    0.9.44: mit Quelle "portal" der Connector "vw_eu_data_act" (Bibliothek
+    carconnectivity-connector-vw-eu-data-act, gelesen an 0.3.4: connector.py
+    liest username, password, interval, country, language, brand, vin,
+    hide_vins, accept_terms_on_login). Nicht gesetzt wird
+    accept_terms_on_login - neue Nutzungsbedingungen nimmt der Anwender selbst
+    im Browser an, nicht das Plugin in seinem Namen.
     """
+    if cfg.get("quelle") == "portal":
+        return {
+            "carConnectivity": {
+                "log_level": "WARNING",
+                "connectors": [{"type": "vw_eu_data_act", "config": {
+                    "username": z["portal_email"],
+                    "password": z["portal_passwort"],
+                    "interval": takt_wirksam(cfg),
+                    "country": PORTAL_LAND,
+                    "language": PORTAL_SPRACHE,
+                    "brand": PORTAL_MARKEN.get(cfg.get("portal_marke"), PORTAL_MARKEN["pkw"]),
+                }}],
+            }
+        }
     connector = {
         "username": z["email"],
         "password": z["passwort"],
@@ -4489,7 +4621,11 @@ def dienst(einmal: bool = False) -> int:
 
     cfg = config()
     z = zugang()
-    if not z["email"] or not z["passwort"]:
+    # 0.9.44: die Quelle gilt fuer den ganzen Lauf; eine Aenderung in der
+    # Oberflaeche wirkt nach dem Neustart, den die Oberflaeche dann ausloest.
+    quelle_start = cfg.get("quelle") or "weconnect"
+    benutzer, kennwort = zugang_fuer_quelle(z, cfg)
+    if not benutzer or not kennwort:
         # Den Sollmerker MITNEHMEN. Bis 0.9.9 blieb er liegen, der Waechter
         # startete den Dienst jede Minute neu, jeder Versuch schrieb eine Zeile
         # ins Protokoll - rund 1440 am Tag, die die Logdatei umwaelzen. Ein
@@ -4499,13 +4635,39 @@ def dienst(einmal: bool = False) -> int:
             (PDATA / "soll_laufen").unlink()
         except OSError:
             pass
+        if quelle_start == "portal":
+            _LOG.error("Zugangsdaten fuer das EU-Data-Act-Portal fehlen (Datenquelle 'Portal'). "
+                       "Reiter Einstellungen der Plugin-Oberflaeche oeffnen. Der Dienst bleibt "
+                       "angehalten, bis sie eingetragen sind.")
+            frueh_abbrechen(cfg, "ZUGANG_FEHLT", "Zugangsdaten fuer das EU-Data-Act-Portal fehlen.")
+            return 1
         _LOG.error("Zugangsdaten fehlen. Reiter Einstellungen der Plugin-Oberflaeche oeffnen. "
                    "Der Dienst bleibt angehalten, bis sie eingetragen sind.")
         frueh_abbrechen(cfg, "ZUGANG_FEHLT", "Zugangsdaten fehlen.")
         return 1
 
-    _LOG.info("Dienst startet (Takt %s s, Steuerung %s).",
-              cfg["intervall"], "ein" if cfg.get("steuerung_ein") else "aus")
+    if quelle_start == "portal":
+        # Vorab laden: fehlt die Bibliothek (postinstall.sh installiert sie, bricht
+        # bei einem Fehlschlag aber nicht ab), meldete CarConnectivity() nur einen
+        # unbekannten Connector-Typ. So steht der Grund im Protokoll.
+        try:
+            __import__("carconnectivity_connectors.vw_eu_data_act.connector")
+        except Exception as err:  # noqa: BLE001
+            try:
+                (PDATA / "soll_laufen").unlink()
+            except OSError:
+                pass
+            meldung = ("Die Bibliothek %s fuer die Datenquelle 'Portal' laesst sich nicht laden "
+                       "(%s). Plugin neu installieren oder die Quelle 'Volkswagen-App (WeConnect)' "
+                       "waehlen." % (PORTAL_BIBLIOTHEK, fehlertext(err)))
+            _LOG.error(meldung)
+            frueh_abbrechen(cfg, "BIBLIOTHEK_FEHLT", meldung)
+            return 1
+
+    _LOG.info("Dienst startet (Quelle %s, Takt %s s, Steuerung %s).",
+              "EU-Data-Act-Portal" if quelle_start == "portal" else "WeConnect",
+              takt_wirksam(cfg),
+              "ein" if cfg.get("steuerung_ein") else "aus")
 
     try:
         # tokenstore_file: die Bibliothek legt hier ihre Anmeldemarken ab und
@@ -4543,6 +4705,13 @@ def dienst(einmal: bool = False) -> int:
     try:
         while _LAUF:
             cfg = config()  # Aenderungen aus der Oberflaeche ohne Neustart uebernehmen
+            if cfg.get("quelle") != quelle_start:
+                # 0.9.44: die Bibliothek ist fuer die Startquelle eingerichtet; bis zum
+                # Neustart gilt sie weiter - fuer Abruf, Befehle und MQTT gleichermassen.
+                melde_gebremst("quelle_gewechselt",
+                               "Die Datenquelle wurde in der Oberflaeche geaendert; sie wirkt "
+                               "nach einem Neustart des Dienstes (Reiter Einstellungen).", 3600)
+                cfg["quelle"] = quelle_start
             _HORCHER.pflegen(cfg)
             ok = 0
             fehler = ""
@@ -4632,7 +4801,7 @@ def dienst(einmal: bool = False) -> int:
                              entfernt=entfernt)
             zustand_schreiben(ok=ok, fehler=fehler, grund=grund, zyklus=zyklus,
                               zaehler=zaehler, fehler_folge=fehler_folge,
-                              pid=os.getpid(), intervall=cfg["intervall"],
+                              pid=os.getpid(), intervall=takt_wirksam(cfg),
                               horcher=1 if _HORCHER.verbunden else 0,
                               horcher_grund=_HORCHER.grund,
                               anzahl_fahrzeuge=len(stand["fahrzeuge"]),
@@ -4648,9 +4817,9 @@ def dienst(einmal: bool = False) -> int:
             if einmal:
                 return 0 if ok else 1
 
-            rest = cfg["intervall"]
+            rest = takt_wirksam(cfg)
             if fehler_folge >= 3:
-                rest = min(3600, cfg["intervall"] * min(8, fehler_folge))
+                rest = min(3600, takt_wirksam(cfg) * min(8, fehler_folge))
                 melde_gebremst("bremse",
                                f"{fehler_folge} Fehlversuche - naechster Abruf erst in {rest} s.",
                                1800)
@@ -4746,6 +4915,27 @@ def selbsttest() -> int:
             fehler += 1
             zeilen.append(f"[FEHL] Bibliothek {paket} laesst sich nicht laden: {err}")
 
+    # 0.9.44: die Bibliothek der Datenquelle "Portal". Ein Fehlen zaehlt nur,
+    # wenn diese Quelle eingestellt ist - sonst wird sie nicht gebraucht.
+    portal_an = c.get("quelle") == "portal"
+    try:
+        __import__("carconnectivity_connectors.vw_eu_data_act.connector")
+        try:
+            fassung = md.version(PORTAL_BIBLIOTHEK)
+        except Exception:  # noqa: BLE001
+            fassung = "unbekannt"
+        zeilen.append(f"[{'OK]  ' if portal_an else 'INFO]'} Bibliothek {PORTAL_BIBLIOTHEK} "
+                      f"geladen, Fassung {fassung}"
+                      + ("" if portal_an else " (fuer die Datenquelle Portal; eingestellt ist WeConnect)"))
+    except Exception as err:  # noqa: BLE001
+        if portal_an:
+            fehler += 1
+            zeilen.append(f"[FEHL] Bibliothek {PORTAL_BIBLIOTHEK} laesst sich nicht laden, die "
+                          f"Datenquelle Portal ist aber eingestellt: {err}")
+        else:
+            zeilen.append(f"[INFO] Bibliothek {PORTAL_BIBLIOTHEK} laesst sich nicht laden ({err}). "
+                          f"Gebraucht wird sie nur fuer die Datenquelle Portal; eingestellt ist WeConnect.")
+
     for name, pfad in (("Konfiguration", PCONFIG), ("Daten", PDATA), ("Log", PLOG)):
         schreibbar = os.access(pfad, os.W_OK) if pfad.exists() else False
         zeilen.append(f"[{'OK]  ' if schreibbar else 'FEHL]'} Ordner {name} beschreibbar: {pfad}")
@@ -4754,21 +4944,33 @@ def selbsttest() -> int:
 
     z = zugang()
     # Ein Pruefknopf darf die FORM eines Geheimnisses beurteilen, nie seinen Wert zeigen.
-    if z["email"] and "@" in z["email"]:
-        zeilen.append(f"[OK]   Volkswagen-Benutzername hinterlegt ({z['email'][:2]}...@..., "
-                      f"{len(z['email'])} Zeichen)")
-    elif z["email"]:
-        fehler += 1
-        zeilen.append("[FEHL] Der Benutzername sieht nicht wie eine E-Mail-Adresse aus")
-    else:
-        fehler += 1
-        zeilen.append("[FEHL] Kein Benutzername hinterlegt")
-    if z["passwort"]:
-        zeilen.append(f"[OK]   Passwort hinterlegt ({len(z['passwort'])} Zeichen, "
-                      f"Inhalt wird nicht angezeigt)")
-    else:
-        fehler += 1
-        zeilen.append("[FEHL] Kein Passwort hinterlegt")
+    # 0.9.44: es zaehlen die Zugangsdaten der EINGESTELLTEN Quelle; die der anderen
+    # stehen als Auskunft da ([INFO]) und machen den Selbsttest nicht rot.
+    for vor, schl_e, schl_p, zaehlt in (
+            ("", "email", "passwort", not portal_an),
+            ("Portal: ", "portal_email", "portal_passwort", portal_an)):
+        marke = "[FEHL]" if zaehlt else "[INFO]"
+        if not zaehlt and not z[schl_e] and not z[schl_p]:
+            # Mit der Quelle WeConnect und ohne Portal-Zugang bleibt die Ausgabe wie bis 0.9.43.
+            if not vor:
+                zeilen.append("[INFO] Keine Zugangsdaten fuer die Volkswagen-App hinterlegt "
+                              "(eingestellt ist die Datenquelle Portal)")
+            continue
+        if z[schl_e] and "@" in z[schl_e]:
+            zeilen.append(f"[OK]   {vor}Volkswagen-Benutzername hinterlegt ({z[schl_e][:2]}...@..., "
+                          f"{len(z[schl_e])} Zeichen)")
+        elif z[schl_e]:
+            fehler += 1 if zaehlt else 0
+            zeilen.append(f"{marke} {vor}Der Benutzername sieht nicht wie eine E-Mail-Adresse aus")
+        else:
+            fehler += 1 if zaehlt else 0
+            zeilen.append(f"{marke} {vor}Kein Benutzername hinterlegt")
+        if z[schl_p]:
+            zeilen.append(f"[OK]   {vor}Passwort hinterlegt ({len(z[schl_p])} Zeichen, "
+                          f"Inhalt wird nicht angezeigt)")
+        else:
+            fehler += 1 if zaehlt else 0
+            zeilen.append(f"{marke} {vor}Kein Passwort hinterlegt")
     if z["spin"]:
         if z["spin"].isdigit() and len(z["spin"]) == 4:
             zeilen.append("[OK]   S-PIN hinterlegt (vier Ziffern)")

@@ -126,6 +126,12 @@ fi
 # Fassungen; eine neuere kann andere haben.
 KERN="0.11.10"
 CONNECTOR="0.10.6"
+# 0.9.44: Bibliothek der zweiten Datenquelle (EU-Data-Act-Portal von
+# Volkswagen), ab Werk nicht eingestellt. Verlangt carconnectivity>=0.11.10 und
+# requests~=2.32; beides erfuellt der Stand oben, pip laesst ihn also stehen
+# (gemessen 12.11.2026 mit "pip install --dry-run" der drei festen Fassungen:
+# carconnectivity 0.11.10, requests 2.34.2 - auf dem Arbeitsrechner, nicht am Geraet).
+PORTAL="0.3.4"
 
 mkdir -p "$PDATA" "$PLOG" "$PCONFIG" "$PDATA/befehle" "$PDATA/antworten" || {
     echo "<FAIL> Ordner konnten nicht angelegt werden."
@@ -319,6 +325,45 @@ else
     echo "<INFO> Vorklimatisierung; der Reiter Test sagt es ebenfalls."
 fi
 
+# ---------- Datenquelle Portal: freiwillig, ein Fehlschlag ist keiner ----------
+#
+# Gebraucht wird carconnectivity-connector-vw-eu-data-act NUR, wenn im Reiter
+# Einstellungen die Datenquelle "EU-Data-Act-Portal" gewaehlt ist - ab Werk
+# ist es die Volkswagen-App (WeConnect). Wie bei paho-mqtt bricht ein
+# Fehlschlag die Installation nicht ab; mit der Quelle Portal meldet dann der
+# Dienst beim Start, dass die Bibliothek fehlt, und der Reiter Test zeigt es rot.
+PORTAL_IST=$("$VENV/bin/python3" -c 'import importlib.metadata as m; print(m.version("carconnectivity-connector-vw-eu-data-act"))' 2>/dev/null)
+if [ "$PORTAL_IST" = "$PORTAL" ]; then
+    echo "<OK> Bibliothek fuer die Datenquelle Portal ist vorhanden ($PORTAL)."
+else
+    echo "<INFO> Installiere carconnectivity-connector-vw-eu-data-act $PORTAL (nur fuer die Datenquelle Portal) ..."
+    if ! PORTAL_AUS=$(timeout 900 "$VENV/bin/python3" -m pip install --disable-pip-version-check --no-cache-dir \
+            "carconnectivity-connector-vw-eu-data-act==$PORTAL" 2>&1); then
+        echo "<INFO> Die Bibliothek fuer die Datenquelle Portal liess sich nicht installieren. Das ist"
+        echo "<INFO> KEIN Fehler fuer die Volkswagen-App (WeConnect); nur die Quelle Portal geht so nicht."
+        printf '%s\n' "$PORTAL_AUS" | tail -n 3 | sed 's/^/<INFO>     /'
+    fi
+fi
+# carconnectivity laedt beim Import JEDEN installierten Connector
+# (carconnectivity.py 0.11.10, discovered_connectors: importlib.import_module
+# ueber den ganzen Namensraum carconnectivity_connectors). Eine Portal-Bibliothek,
+# die sich nicht laden laesst, wuerde damit auch die Volkswagen-App-Schnittstelle
+# mitreissen. Deshalb: laesst sie sich nicht laden, wird sie wieder entfernt.
+if PORTAL_FEHLER=$("$VENV/bin/python3" -c 'import carconnectivity_connectors.vw_eu_data_act.connector' 2>&1); then
+    echo "<OK> Datenquelle Portal: Bibliothek laesst sich laden."
+elif [ -n "$("$VENV/bin/python3" -c 'import importlib.metadata as m; print(m.version("carconnectivity-connector-vw-eu-data-act"))' 2>/dev/null)" ]; then
+    echo "<WARNING> Datenquelle Portal: die Bibliothek ist installiert, laesst sich aber nicht laden:"
+    printf '%s\n' "$PORTAL_FEHLER" | tail -n 3 | sed 's/^/<WARNING>     /'
+    if timeout 300 "$VENV/bin/python3" -m pip uninstall -y carconnectivity-connector-vw-eu-data-act >/dev/null 2>&1; then
+        echo "<WARNING> Sie wurde wieder entfernt, damit die Volkswagen-App-Schnittstelle unberuehrt bleibt."
+    else
+        echo "<WARNING> Sie liess sich nicht entfernen; die Pruefung unten zeigt, ob carconnectivity noch laedt."
+    fi
+else
+    echo "<INFO> Datenquelle Portal: Bibliothek nicht installiert (nur fuer diese Quelle noetig):"
+    printf '%s\n' "$PORTAL_FEHLER" | tail -n 3 | sed 's/^/<INFO>     /'
+fi
+
 # Rueckgabewert allein genuegt nicht - es wird nachgesehen, ob sich beide
 # Pakete auch laden lassen.
 #
@@ -473,10 +518,18 @@ try:
         z = json.load(d)
 except Exception:
     sys.exit(1)
-ok = (isinstance(z, dict) and str(z.get("email") or "").strip() != ""
-      and str(z.get("passwort") or "") != "")
+# 0.9.44: es zaehlen die Zugangsdaten der eingestellten Datenquelle (vw.json,
+# Schluessel quelle; fehlt er oder ist die Datei unlesbar: WeConnect).
+try:
+    with open(sys.argv[2], encoding="utf-8") as d:
+        c = json.load(d)
+except Exception:
+    c = {}
+v = "portal_" if isinstance(c, dict) and c.get("quelle") == "portal" else ""
+ok = (isinstance(z, dict) and str(z.get(v + "email") or "").strip() != ""
+      and str(z.get(v + "passwort") or "") != "")
 sys.exit(0 if ok else 1)
-' "$PCONFIG/zugang.json" 2>/dev/null; then
+' "$PCONFIG/zugang.json" "$PCONFIG/vw.json" 2>/dev/null; then
     EINGERICHTET=1
 fi
 

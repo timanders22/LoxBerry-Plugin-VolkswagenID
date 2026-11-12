@@ -88,6 +88,15 @@ function vw_pruefungen($netz = true)
     $zeilen[] = vw_pruefzeile($f['connector'] !== '' ? 1 : 0, vw_t('TEST.F_CONNECTOR'),
         $f['connector'] !== '' ? 'carconnectivity-connector-volkswagen ' . vw_e($f['connector'])
                                : vw_t('TEST.A_CONNECTOR_FEHLT'));
+    /* 0.9.44: Datenquelle und die Bibliothek des Portals. Rot nur, wenn die Quelle
+     * Portal eingestellt ist und die Bibliothek fehlt; sonst grau (nicht gebraucht). */
+    $portal_an = isset($cfg['quelle']) && $cfg['quelle'] === 'portal';
+    $zeilen[] = vw_pruefzeile($portal_an ? 1 : -1, vw_t('TEST.F_QUELLE'),
+        $portal_an ? vw_t('TEST.A_QUELLE_PORTAL') : vw_t('TEST.A_QUELLE_WECONNECT'));
+    $zeilen[] = vw_pruefzeile($f['portal'] !== '' ? ($portal_an ? 1 : -1) : ($portal_an ? 0 : -1),
+        vw_t('TEST.F_PORTAL_LIB'),
+        $f['portal'] !== '' ? 'carconnectivity-connector-vw-eu-data-act ' . vw_e($f['portal'])
+                            : vw_t('TEST.A_PORTAL_LIB_FEHLT'));
 
     $pid = vw_dienst_pid();
     /* Ein BEWUSST angehaltener Dienst ist eine gewollte Lage: grauer Punkt, kein
@@ -100,14 +109,26 @@ function vw_pruefungen($netz = true)
         $pid > 0 ? vw_t('TEST.A_DIENST_LAEUFT') . ' ' . $pid
                  : (vw_dienst_soll() ? vw_t('TEST.A_DIENST_SOLL_TOT') : vw_t('TEST.A_DIENST_GESTOPPT')));
 
-    $zeilen[] = vw_pruefzeile($z['email'] !== '' && strpos($z['email'], '@') !== false ? 1 : 0,
+    /* 0.9.44: es zaehlen die Zugangsdaten der eingestellten Quelle; die der anderen
+     * stehen grau da, wenn sie fehlen. */
+    $wc_fehlt = $portal_an ? -1 : 0;
+    $zeilen[] = vw_pruefzeile($z['email'] !== '' && strpos($z['email'], '@') !== false ? 1 : $wc_fehlt,
         vw_t('TEST.F_KONTO'),
         $z['email'] !== '' ? vw_e($z['email']) : vw_t('TEST.A_KONTO_FEHLT'));
 
     // Ein Pruefknopf darf die FORM eines Geheimnisses beurteilen, nie seinen
     // Wert anzeigen.
-    $zeilen[] = vw_pruefzeile($z['laenge'] > 0 ? 1 : 0, vw_t('TEST.F_PASSWORT'),
+    $zeilen[] = vw_pruefzeile($z['laenge'] > 0 ? 1 : $wc_fehlt, vw_t('TEST.F_PASSWORT'),
         $z['laenge'] > 0 ? sprintf(vw_t('TEST.A_PASSWORT_DA'), $z['laenge']) : vw_t('TEST.A_PASSWORT_FEHLT'));
+    if ($portal_an || $z['portal_email'] !== '' || $z['portal_laenge'] > 0) {
+        $pt_fehlt = $portal_an ? 0 : -1;
+        $zeilen[] = vw_pruefzeile($z['portal_email'] !== '' && strpos($z['portal_email'], '@') !== false ? 1 : $pt_fehlt,
+            vw_t('TEST.F_PORTAL_KONTO'),
+            $z['portal_email'] !== '' ? vw_e($z['portal_email']) : vw_t('TEST.A_KONTO_FEHLT'));
+        $zeilen[] = vw_pruefzeile($z['portal_laenge'] > 0 ? 1 : $pt_fehlt, vw_t('TEST.F_PORTAL_PASSWORT'),
+            $z['portal_laenge'] > 0 ? sprintf(vw_t('TEST.A_PASSWORT_DA'), $z['portal_laenge'])
+                                    : vw_t('TEST.A_PASSWORT_FEHLT'));
+    }
 
     $rechte = is_file($p['zugang']) ? (fileperms($p['zugang']) & 0777) : -1;
     $zeilen[] = vw_pruefzeile(($rechte >= 0 && ($rechte & 0077) === 0) ? 1 : 0,
@@ -157,7 +178,7 @@ function vw_pruefungen($netz = true)
     } elseif ($alter < 0) {
         $zeilen[] = vw_pruefzeile(0, vw_t('TEST.F_ABRUF'), vw_t('TEST.A_NIE_ABGERUFEN'));
     } else {
-        $frisch = $alter <= max(600, 3 * (int) $cfg['intervall']);
+        $frisch = $alter <= max(600, 3 * vw_takt_wirksam($cfg));
         $zeilen[] = vw_pruefzeile($frisch ? 1 : 0, vw_t('TEST.F_ABRUF'),
             sprintf(vw_t('TEST.A_ABRUF_ALTER'), $alter));
     }
@@ -259,7 +280,7 @@ function vw_pruefungen($netz = true)
         $zeilen[] = vw_pruefzeile(-1, vw_t('TEST.F_HERZ'), vw_t('TEST.A_HERZ_UNBEKANNT'));
     } else {
         $alt = time() - $zzeit;
-        $frisch2 = $alt <= max(600, 3 * (int) $cfg['intervall']);
+        $frisch2 = $alt <= max(600, 3 * vw_takt_wirksam($cfg));
         $zeilen[] = vw_pruefzeile($frisch2 ? 1 : 0, vw_t('TEST.F_HERZ'),
             sprintf(vw_t('TEST.A_HERZ'), $alt,
                     isset($zu2['zaehler']) ? (int) $zu2['zaehler'] : -1));

@@ -178,7 +178,7 @@ $vw_lox = vw_loxone();
  * und 172801). Jetzt gilt OK=0, sobald ALTER groesser ist als das Dreifache
  * des Abruftakts; ALTER steht unveraendert daneben. Ein Zeitstempel mehr als
  * 5 s in der Zukunft ist keine Aussage: ALTER=999999, OK=0 (vw_alter_von). */
-$vw_grenze = 3 * max(180, (int) $vw_cfg['intervall']);
+$vw_grenze = 3 * max(180, vw_takt_wirksam($vw_cfg));     // 0.9.44: mit der Quelle Portal mindestens 900 s
 $vw_alter = vw_alter_von(isset($vw_lox['ts']) ? $vw_lox['ts'] : null);
 $vw_ok = (!empty($vw_lox['ok']) && $vw_alter >= 0 && $vw_alter <= $vw_grenze) ? 1 : 0;
 $vw_alle = vw_fahrzeuge();
