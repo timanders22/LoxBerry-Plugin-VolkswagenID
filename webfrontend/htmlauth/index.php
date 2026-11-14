@@ -342,54 +342,84 @@ if ($vw_post && isset($_POST['vw_sichern'])) {
  * weil es aussah, als sei nichts angekommen -, schrieb den alten Stand
  * zurueck. Gemessen am 27.08.2026. */
 if ($vw_post && isset($_POST['vw_zurueck'])) {
-    if (!isset($_FILES['vw_sicherung']) || !is_array($_FILES['vw_sicherung'])
-        || !isset($_FILES['vw_sicherung']['tmp_name'])
-        || !@is_uploaded_file($_FILES['vw_sicherung']['tmp_name'])) {
-        $vw_fehler[] = vw_t('EINST.SICH_KEINE_DATEI');
-    } elseif ((int) $_FILES['vw_sicherung']['size'] > 65536) {
-        $vw_fehler[] = vw_t('EINST.SICH_ZU_GROSS');
+    /* 0.9.45: Haken, hochgeladene Datei und Groessengrenze prueft das gemeinsame Sicherungsmodul
+     * (sicherung_eingang(), Modul 1.1.0, Entscheidung des Hausherrn 12.11.2026) - in jeder Linie gleich, und
+     * vor is_uploaded_file() steht der Haken zurueck_ok: ohne ihn wird nichts gelesen und nichts geaendert. */
+    list($vw_roh, $vw_ein_ab) = sicherung_eingang(vw_sicherung_beschreibung(), $_POST, $_FILES, 'vw_sicherung');
+    if ($vw_ein_ab !== null) {
+        $vw_ein_m = sicherung_meldungen(vw_sicherung_beschreibung(), $vw_ein_ab);
+        foreach ($vw_ein_m['fehler'] as $vw_ein_x) { $vw_fehler[] = $vw_ein_x; }
     } else {
-        list($vw_neu, $vw_mangel, $vw_n, $vw_neuzugang, $vw_shinw) = vw_sicherung_lesen(
-            (string) @file_get_contents($_FILES['vw_sicherung']['tmp_name']));
-        if ($vw_neu === null) {
-            /* ALLE Beanstandungen, nicht nur die erste - und geaendert wird
-             * nichts. Eine zur Haelfte uebernommene Konfiguration ist
-             * schlimmer als die alte, und man sieht es ihr nicht an. */
-            $vw_fehler[] = vw_t('EINST.SICH_ABGELEHNT') . ' ' . implode(' ', $vw_mangel);
-        } elseif (vw_config_speichern($vw_neu)) {
-            $vw_meldungen[] = sprintf(vw_t('EINST.SICH_UEBERNOMMEN'), $vw_n);
-            /* O7: ein leeres Token in der Datei - das geltende bleibt, und die
-             * Seite sagt es oben (bis 0.9.26 nur eine Protokollzeile). */
-            foreach ((array) $vw_shinw as $vw_h) {
-                $vw_hinweise[] = $vw_h;
+        /* 0.9.45: das gemeinsame Sicherungsmodul (sicherung_zurueckspielen(), Beschreibung
+         * vw_sicherung_beschreibung()) liest, prueft, verwirft Unbekanntes mit Namen, laesst leere Werte
+         * den bisherigen stehen und aendert bei einer Beanstandung GAR NICHTS (alle Beanstandungen, nicht
+         * nur die erste). Eine zur Haelfte uebernommene Konfiguration ist schlimmer als die alte, und man
+         * sieht es ihr nicht an. Die Schritte dieser Linie davor und danach stehen in den Rueckrufen -
+         * dieselben wie bis 0.9.44. */
+        $vw_b = vw_sicherung_beschreibung();
+        $vw_spaet = array();
+        $vw_b['vorbereiten'] = function ($neu, $jetzt, $r) use (&$vw_spaet) {
+            list($neu, $vw_spaet) = vw_sicherung_vorbereiten($neu, $jetzt, $r);
+            return $neu;
+        };
+        /* vw_config_speichern() schreibt Konfiguration UND Zweitschrift und leert den Zwischenspeicher
+         * (bis 0.9.9 zeigte die Seite danach den alten Stand); das Modul misst danach, ob die Zweitschrift
+         * inhaltsgleich ist. */
+        $vw_b['speichern'] = function ($neu) { return vw_config_speichern($neu); };
+        $vw_b['zweitschrift'] = function () { $p = vw_paths(); return array($p['config'], $p['sicherung']); };
+        $vw_b['nachziehen'] = function ($neu, $jetzt, $r) use (&$vw_fehler, &$vw_teil, &$vw_spaet) {
+            $h = array();
+            /* O7: ein leeres Token in der Datei - das geltende bleibt (Regel 3 des Moduls), und die Seite
+             * sagt es oben. */
+            if (in_array('aktionstoken', $r['leer_behalten'], true)) {
+                $h[] = vw_t('EINST.SICH_TOKEN_LEER');
             }
-            /* O6: die Zugangsdaten aus der Sicherung, geprueft wie im Formular;
-             * leere Felder behalten den vorhandenen Wert. zugang.json entsteht
-             * mit 0600 (vw_zugang_speichern()). */
-            if ($vw_neuzugang === null) {
-                $vw_hinweise[] = vw_t('EINST.SICH_OHNE_ZUGANG');
-            } elseif (vw_zugang_speichern($vw_neuzugang['email'], $vw_neuzugang['passwort'],
-                                          $vw_neuzugang['spin'], $vw_neuzugang['portal_email'],
-                                          $vw_neuzugang['portal_passwort'])) {
-                $vw_meldungen[] = vw_t('EINST.SICH_ZUGANG_UEBERNOMMEN');
+            /* Welle Mehrfach-Ziele (0.9.33): fehlte die Liste der weiteren Ziele in der Sicherung (aeltere
+             * Fassung), gelten die jetzigen weiteren Ziele - der Hinweis nennt sie. */
+            if ($vw_spaet) {
+                $h[] = sprintf(vw_t('EINST.SICH_SPAET'), vw_e(implode(', ', $vw_spaet)));
+            }
+            /* Nr. 36 b und Gruppe 41: eine Sicherung von 0.9.28 bzw. 0.9.32 oder frueher kennt die
+             * Sprachausgabe bzw. die Hausform nicht - deren Einstellungen bleiben, und die Seite sagt es. */
+            if (array_intersect(vw_neue_schluessel_0933(), $r['fehlt_behalten'])) {
+                $h[] = vw_t('EINST.SICH_OHNE_G41');
+            }
+            if (array_intersect(vw_ansage_neue_schluessel(), $r['fehlt_behalten'])) {
+                $h[] = vw_t('EINST.SICH_OHNE_ANSAGE');
+            }
+            /* O6: die Zugangsdaten aus der Sicherung, geprueft wie im Formular; leere Felder behalten den
+             * vorhandenen Wert. zugang.json entsteht mit 0600 (vw_zugang_speichern()). */
+            $zg = isset($r['teile']['zugang']) && is_array($r['teile']['zugang']) ? $r['teile']['zugang'] : null;
+            if ($zg === null) {
+                $h[] = vw_t('EINST.SICH_OHNE_ZUGANG');
+            } elseif (vw_zugang_speichern($zg['email'], $zg['passwort'], $zg['spin'], $zg['portal_email'],
+                                          $zg['portal_passwort'])) {
+                $h[] = vw_t('EINST.SICH_ZUGANG_UEBERNOMMEN');
             } else {
                 $vw_fehler[] = vw_t('EINST.FEHLER_ZUGANG_SPEICHERN');
                 $vw_teil = true;
             }
-            /* Den Dienst nachziehen und SAGEN, was mit ihm geschehen ist.
-             * Der Dienst liest die Konfiguration bei jedem Takt neu; ein
-             * Neustart ist deshalb nur noetig, wenn er gerade laeuft und der
-             * Takt lang ist. Gesagt wird es in jedem Fall. */
+            /* Den Dienst nachziehen und SAGEN, was mit ihm geschehen ist. Der Dienst liest die Konfiguration
+             * bei jedem Takt neu; ein Neustart ist deshalb nur noetig, wenn er gerade laeuft und der Takt lang
+             * ist. Gesagt wird es in jedem Fall. */
             if (vw_dienst_pid() > 0) {
-                list($vw_dok, $vw_daus) = vw_dienst('restart');
-                $vw_meldungen[] = $vw_dok ? vw_t('EINST.SICH_DIENST_NEU')
-                                          : vw_t('EINST.SICH_DIENST_FEHL') . ' ' . vw_e($vw_daus);
+                list($dok, $daus) = vw_dienst('restart');
+                $h[] = $dok ? vw_t('EINST.SICH_DIENST_NEU') : vw_t('EINST.SICH_DIENST_FEHL') . ' ' . vw_e($daus);
             } else {
-                $vw_meldungen[] = vw_t('EINST.SICH_DIENST_AUS');
+                $h[] = vw_t('EINST.SICH_DIENST_AUS');
             }
-        } else {
-            $vw_fehler[] = vw_t('EINST.SICH_SCHREIBFEHLER');
-        }
+            return $h;
+        };
+        /* Eine Protokollzeile: Zahlen und Namen, nie Werte; zurueckgespielt als INFO, abgewiesen als WARNING. */
+        $vw_b['log'] = function ($z) {
+            $p = vw_paths();
+            if ($p['logdir'] !== '' && !is_dir($p['logdir'])) { @mkdir($p['logdir'], 0775, true); }
+            if (strpos((string) $z, 'Sicherung zurueckgespielt') === 0) { vw_ansage_protokoll($z); } else { vw_log_zeile($z); }
+        };
+        $vw_r = sicherung_zurueckspielen($vw_b, $vw_roh);
+        $vw_m = sicherung_meldungen($vw_b, $vw_r);
+        foreach ($vw_m['fehler'] as $vw_x) { $vw_fehler[] = $vw_x; }
+        foreach ($vw_m['hinweise'] as $vw_x) { $vw_meldungen[] = $vw_x; }
     }
     $vw_tab = 'tab-settings';
 }
@@ -1757,6 +1787,7 @@ if ($vw_x3) { ?>
     <input data-role="none" type="hidden" name="activetab" value="tab-settings">
     <?= vw_formfeld($vw_cfg) ?>
     <input data-role="none" type="file" name="vw_sicherung" accept=".json">
+    <?= sicherung_haken_zeile(vw_sicherung_beschreibung()) ?>
     <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="vw_zurueck" value="1"><?= vw_t('EINST.K_ZURUECK') ?></button>
   </form>
 </div>

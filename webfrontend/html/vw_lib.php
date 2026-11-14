@@ -28,6 +28,10 @@ if (!function_exists('vw_e')) {
  * 0.9.29; seit 0.9.33 Stamm 1.2.1 mit weiteren Ausgabezielen, vw_mit_zielen(), Welle Mehrfach-Ziele).
  * Liegt neben dieser Datei; sie schuetzt sich selbst gegen doppeltes Laden. */
 require_once __DIR__ . '/sprachausgabe.php';
+/* 0.9.45: Das gemeinsame Sicherungsmodul (Abschrift von Werkzeuge/gemeinsam/sicherung.php, Auftrag des
+ * Hausherrn 12.11.2026): Einstellungen sichern und zurueckspielen nach denselben Regeln wie in den
+ * anderen Linien. Die Beschreibung dieser Linie steht in vw_sicherung_beschreibung(). */
+require_once __DIR__ . '/sicherung.php';
 
 
 /* Den LoxBerry-Wurzelordner ohne festen Systempfad bestimmen.
@@ -3038,237 +3042,206 @@ function vw_ansage_satz($anlass, $nr, $name, $soc = null, $grenze = null)
 }
 
 /**
- * Eine Sicherungsdatei einlesen - und dabei NICHTS durchgehen lassen.
+ * 0.9.45: Die Beschreibung dieser Linie fuer das gemeinsame Sicherungsmodul
+ * (Abschrift von Werkzeuge/gemeinsam/sicherung.php, Auftrag des Hausherrn
+ * 12.11.2026). Bis 0.9.44 las vw_sicherung_lesen() die Datei selbst; ein
+ * unbekannter Schluessel oben, im Block tts, in ansage_regeln oder im Teil
+ * zugang wies dort die GANZE Datei ab, und eine Datei mit fremdem oder ohne
+ * Kennzeichen wurde angenommen, solange ihre Schluessel passten (gemessen
+ * 12.11.2026 mit Werkzeuge/sicherung_pruefstand.py an 0.9.44, Klasse A).
  *
- * Die sieben Punkte aus REGELN_2, und der wichtigste ist der dritte: eine
- * halb gueltige Datei ueberschreibt GAR NICHTS. Wer eine Sicherung
- * zurueckspielt, will entweder den ganzen Stand oder gar keinen - eine zur
- * Haelfte uebernommene Konfiguration ist schlimmer als die alte, und man
- * sieht es ihr nicht an.
- *
- * Unbekannte Schluessel sind eine Beanstandung, kein stiller Verlust: sie
- * stammen aus einer anderen Fassung oder einem anderen Plugin.
- *
- * Rueckgabe: array(Konfiguration|null, Beanstandungen[], uebernommene Werte,
- * Zugangsdaten|null, Hinweise[], Namen der beanstandeten Werte[]). Das letzte
- * seit dem Nachzug G1 (02.10.2026): die Namen fuer die Warnung beim Sichern
- * (X-3, vw_sicherung_maengel()) - nur Namen, nie Werte.
+ * Die Regeln des Moduls (Entscheidungen des Hausherrn 12.11.2026):
+ *   - Kennzeichen _plugin = 'LoxBerry-Plugin-VolkswagenID' (Name des
+ *     Repositorys; bis 0.9.44 schrieb diese Linie keines). Eine Sicherung von
+ *     0.9.10 bis 0.9.44 erkennt vw_sicherung_alt_erkennen() an ihrem Kopf
+ *     _hinweis.
+ *   - Unbekannte Schluessel oben, in tts, ansage_regeln und im Teil zugang
+ *     werden verworfen und mit Namen gemeldet; die Datei wird zurueckgespielt.
+ *   - Ein leerer Wert ueberschreibt keinen bestehenden (bis 0.9.44 nur beim
+ *     Aktionstoken und bei den Zugangsdaten).
+ * Wie bisher: jeder Wert durch vw_wert_pruefen() (dieselbe Positivliste
+ * vw_regeln() wie Formular und Endpunkt; das Tokenmuster bleibt weit
+ * {0,64}, leer heisst "kein Token gesichert"), tts durch ansage_wert_pruefen()
+ * (eine Datei mit Sprechtoken wird abgewiesen), ansage_regeln durch
+ * ansage_regeln_wert(), temp_min <= temp_max; die Schluessel seit 0.9.29 und
+ * 0.9.33/0.9.35/0.9.44 duerfen fehlen und behalten den Wert dieser Anlage,
+ * alle uebrigen muessen da sein; eine halb gueltige Datei aendert nichts. Der
+ * Vermerk ansage_token_herkunft kommt nie aus einer Datei.
  */
-function vw_sicherung_lesen($roh)
+function vw_sicherung_beschreibung()
 {
+    $p = vw_paths();
+    $tts_s = array_merge(array_keys(ansage_vorgaben()), ansage_geheim());
+    if (vw_mit_zielen()) { $tts_s[] = 'ziele'; }
+    $tts_knoten = vw_mit_zielen() ? array('ziele' => sicherung_liste(array('art', 'wo', 'laut', 'sprache', 'ein'))) : array();
+    $schluessel = array(
+        'tts' => sicherung_block($tts_s, $tts_knoten) + array(
+            'sichern' => 'ansage_sicherung_bereinigen',
+            'pruefen' => function ($w, $k = '', $neu = null, $roh = null) {
+                /* Nr. 36 b (seit 0.9.29): eine Sicherung dieses Plugins traegt nie ein Sprechtoken - traegt die
+                 * Datei eines (auch als Liste, Zahl oder null), stammt sie nicht aus "Einstellungen sichern" und
+                 * wird abgewiesen; die geltenden Sprechtoken bleiben. Gemessen am Block der DATEI, denn Regel 3
+                 * setzt ein leeres Feld vorher auf den geltenden Wert. */
+                $tm = ansage_sicherung_mangel($roh);
+                if ($tm) {
+                    return sprintf(vw_t('EINST.SICH_TTS_TOKEN'), htmlspecialchars(implode(', ', $tm), ENT_QUOTES, 'UTF-8'));
+                }
+                $g = '';
+                if (ansage_wert_pruefen(ansage_sicherung_bereinigen($w), $g, vw_ansage_modi()) === null) {
+                    return sprintf(vw_t('EINST.SICH_TTS'),
+                        htmlspecialchars(ansage_kennung_text($g, vw_ansage_k()), ENT_QUOTES, 'UTF-8'));
+                }
+                return '';
+            },
+            'wandeln' => function ($w) {
+                $g = '';
+                return ansage_wert_pruefen(ansage_sicherung_bereinigen($w), $g, vw_ansage_modi());
+            }),
+        /* S2: ungueltig = abgewiesen, gueltig = in der Form von ansage_regeln_wert() uebernommen. */
+        'ansage_regeln' => sicherung_block(array_keys(ansage_regeln_vorgaben())) + array(
+            'pruefen' => function ($w) { $g = ''; return ansage_regeln_wert($w, $g) === null ? vw_t('EINST.SICH_REGELN') : ''; },
+            'wandeln' => function ($w) { $g = ''; return ansage_regeln_wert($w, $g); }),
+        /* O6 (Durchgang 02.10.2026) und 0.9.44: die Zugangsdaten samt Anmeldung am Portal. */
+        'zugang' => sicherung_block(array('email', 'passwort', 'spin', 'portal_email', 'portal_passwort')),
+    );
+    /* Nr. 36 b und Gruppe 41: eine Sicherung von 0.9.28 bzw. 0.9.32 (0.9.34, 0.9.43) oder frueher kennt diese
+     * Schluessel nicht; sie behalten den Wert dieser Anlage, und die Meldung nennt sie. */
+    foreach (array_merge(vw_ansage_neue_schluessel(), vw_neue_schluessel_0933()) as $s) {
+        if (!isset($schluessel[$s])) { $schluessel[$s] = array(); }
+        $schluessel[$s]['fehlt'] = 'behalten';
+    }
+    /* Gespeichert wird der Wert, den vw_wert_pruefen() bereinigt (Zahl statt Zeichenkette, Leerraum am Rand
+     * weg) - derselbe wie bis 0.9.44. */
+    foreach (array_keys(vw_regeln()) as $s) {
+        if (!isset($schluessel[$s])) { $schluessel[$s] = array(); }
+        $schluessel[$s]['wandeln'] = function ($w) use ($s) {
+            $e = vw_wert_pruefen($s, $w);
+            return $e[0] ? $e[1] : $w;
+        };
+    }
+    return array(
+        'kennzeichen' => 'LoxBerry-Plugin-VolkswagenID',
+        /* Der Kopftext wie bis 0.9.44 (vw_sicherung_alt_erkennen() erkennt aeltere Sicherungen an seinem Anfang). */
+        'hinweis' => 'Einstellungen des LoxBerry-Plugins Volkswagen ID. '
+                   . 'Enthaelt das Aktionstoken und die Zugangsdaten des Volkswagen-Kontos '
+                   . 'dieser Anlage - wie ein Passwort behandeln. Die Sprechtoken der '
+                   . 'Sprachausgabe sind nie enthalten.',
+        'fassung' => 'vw_fassung',
+        'home' => (string) $p['home'], 'ordner' => (string) $p['plugin'],
+        'plugin_cfg' => dirname(dirname(__DIR__)) . '/plugin.cfg',
+        'vorgaben' => vw_vorgaben(),
+        'schluessel' => $schluessel,
+        'nie_aus_datei' => array('ansage_token_herkunft'),
+        'teile' => array('zugang' => 'vw_sicherung_zugang_lesen'),
+        'teile_jetzt' => array('zugang' => 'vw_sicherung_zugang_jetzt'),
+        'pruefen' => function ($k, $w) {
+            $e = vw_wert_pruefen($k, $w);
+            /* Nur der Name, nie der Wert (bis 0.9.44 stand der Wert in der Meldung, beim Aktionstoken also das
+             * Token selbst). */
+            return $e[0] ? '' : sprintf(vw_t('SICHERUNG.K_WERT'), htmlspecialchars((string) $k, ENT_QUOTES, 'UTF-8'));
+        },
+        'quer' => function ($neu) {
+            if (isset($neu['temp_min'], $neu['temp_max']) && (int) $neu['temp_min'] > (int) $neu['temp_max']) {
+                return array(array('temp_min', vw_t('EINST.FEHLER_TEMP_TAUSCH')));
+            }
+            return array();
+        },
+        'uebersetzer' => 'vw_sicherung_alt_erkennen',
+        'jetzt' => function () { return vw_config(); },
+        't' => 'vw_t',
+        'e' => 'vw_e',
+    );
+}
+
+/**
+ * 0.9.45: Eine Sicherung dieser Linie aus der Zeit vor dem Kennzeichen _plugin
+ * (0.9.10 bis 0.9.44) traegt den lesbaren Kopf _hinweis, den nur der
+ * Sichern-Knopf dieser Linie schreibt, fest im Code und in jeder Sprache
+ * gleich. Gemessen 12.11.2026 an allen 35 Fassungen 0.9.10 bis 0.9.44 (Ordner
+ * und Archive): drei Fassungen des Textes, alle mit demselben Anfang
+ * "Einstellungen des LoxBerry-Plugins Volkswagen ID. Enthaelt das
+ * Aktionstoken" (0.9.10-0.9.25, 0.9.26-0.9.28, 0.9.29-0.9.44). Daran wird sie
+ * erkannt; _stand allein ist kein Merkmal. Rueckgabe: die Daten oder null.
+ */
+function vw_sicherung_alt_erkennen($d)
+{
+    return (is_array($d) && isset($d['_hinweis']) && is_string($d['_hinweis'])
+            && strpos($d['_hinweis'], 'Einstellungen des LoxBerry-Plugins Volkswagen ID. Enthaelt das Aktionstoken') === 0)
+        ? $d : null;
+}
+
+/** 0.9.45: Die Zugangsdaten, ungekuerzt aus zugang.json (vw_zugang() gibt nur Laengen) - fuer Sicherung und Regel 3. */
+function vw_sicherung_zugang_jetzt()
+{
+    $zg = vw_json_lesen(vw_paths()['zugang']);
+    $aus = array();
+    foreach (array('email', 'passwort', 'spin', 'portal_email', 'portal_passwort') as $s) {
+        $aus[$s] = isset($zg[$s]) && is_string($zg[$s]) ? $zg[$s] : '';
+    }
+    return $aus;
+}
+
+/**
+ * Der Teil "zugang" einer Sicherung (O6, Durchgang 02.10.2026; seit 0.9.44 mit
+ * der Anmeldung am Portal). Er gehoert NICHT in die Konfiguration, sondern in
+ * zugang.json (0600). Rueckgabe fuer das Sicherungsmodul: array(Zugangsdaten|null,
+ * Beanstandungen[]). Unbekannte Felder hat das Modul schon verworfen und genannt
+ * (bis 0.9.44 wiesen sie die ganze Datei ab); ein leeres Feld traegt den
+ * geltenden Wert (Regel 3). Geprueft wie im Formular (vw_zugang_pruefen(),
+ * vw_portal_zugang_pruefen()). Fehlen portal_email/portal_passwort (Sicherung
+ * bis 0.9.43), bleibt die Anmeldung am Portal unveraendert (null).
+ */
+function vw_sicherung_zugang_lesen($w)
+{
+    if (!is_array($w)) {
+        return array(null, array(vw_t('EINST.SICH_ZUGANG_FORM')));
+    }
     $mangel = array();
-    $hinweise = array();
-    $namen = array();
-    $zugang = null;
-    $daten = json_decode((string) $roh, true);
-    if (!is_array($daten)) {
-        return array(null, array(vw_t('EINST.SICH_KEIN_JSON')), 0, null, array(), array('json'));
+    $zf = vw_zugang_pruefen(isset($w['email']) ? $w['email'] : '',
+                            isset($w['passwort']) ? $w['passwort'] : '',
+                            isset($w['spin']) ? $w['spin'] : '');
+    foreach ($zf['fehler'] as $feld => $text) {
+        $mangel[] = vw_t('EINST.SICH_ZUGANG') . ' ' . $text;
     }
-    $neu = vw_vorgaben();
-    $bekannt = array_keys($neu);
-    $anzahl = 0;
-    foreach ($daten as $k => $w) {
-        /* Der lesbare Kopf wird UEBERGANGEN, nicht beanstandet. Er stammt aus
-         * derselben Bibliothek, die diese Funktion enthaelt - eine Sicherung
-         * abzulehnen, die man selbst zwei Zeilen vorher erzeugt hat, ist der
-         * Fehler, den WiFi-Scanner NG am 26.08.2026 gemacht hat. */
-        if ($k !== '' && $k[0] === '_') {
-            continue;
+    $zp = vw_portal_zugang_pruefen(isset($w['portal_email']) ? $w['portal_email'] : '',
+                                   isset($w['portal_passwort']) ? $w['portal_passwort'] : '');
+    foreach ($zp['fehler'] as $feld => $text) {
+        $mangel[] = vw_t('EINST.SICH_ZUGANG') . ' ' . $text;
+    }
+    if ($mangel) {
+        return array(null, $mangel);
+    }
+    return array(array('email' => $zf['email'], 'passwort' => $zf['passwort'], 'spin' => $zf['spin'],
+                       'portal_email' => array_key_exists('portal_email', $w) ? $zp['email'] : null,
+                       'portal_passwort' => array_key_exists('portal_passwort', $w) ? $zp['passwort'] : null),
+                 array());
+}
+
+/**
+ * 0.9.45: Vor dem Speichern (Rueckruf 'vorbereiten' des Moduls). Das Modul
+ * beginnt bei den Vorgaben; der Vermerk ansage_token_herkunft nimmt hier den
+ * Wert dieser Anlage an. Der Block tts wird wie bis 0.9.44 vervollstaendigt:
+ * fehlt die Liste der weiteren Ziele (Datei einer aelteren Fassung), gelten
+ * die jetzigen (Spaetliste, genannt); fehlende Felder nehmen den geltenden
+ * Wert; die geltenden Sprechtoken bleiben. Rueckgabe: array(Konfiguration,
+ * Spaetliste).
+ */
+function vw_sicherung_vorbereiten(array $neu, array $jetzt, array $r)
+{
+    if (array_key_exists('ansage_token_herkunft', $jetzt)) {
+        $neu['ansage_token_herkunft'] = $jetzt['ansage_token_herkunft'];
+    }
+    $spaet = array();
+    $tj = vw_tts();
+    if (!in_array('tts', $r['fehlt_behalten'], true) && is_array($neu['tts'])) {
+        $t = $neu['tts'];
+        if (function_exists('ansage_sicherung_spaet')) {
+            list($t, $spaet) = ansage_sicherung_spaet($t, is_array($tj) ? $tj : null);
         }
-        /* DIE ZUGANGSDATEN (O6, Durchgang 02.10.2026; CLAUDE.md Abschnitt 9).
-         * Bis 0.9.26 trug die Sicherung sie nicht, obwohl der Hinweis am Knopf
-         * es zusagte; nach einem Umzug fehlten Konto und S-PIN, und eine
-         * Sicherung mit "email" wurde als fremd abgewiesen (gemessen F8a-F8c,
-         * F9f). Sie werden geprueft wie im Formular (vw_zugang_pruefen()). Fehlt
-         * der Eintrag (aeltere Sicherung), bleibt der Zugang unveraendert. */
-        if ($k === 'zugang') {
-            if (!is_array($w) || array_diff(array_keys($w), array('email', 'passwort', 'spin',
-                                                                  'portal_email', 'portal_passwort'))) {
-                $mangel[] = vw_t('EINST.SICH_ZUGANG_FORM');
-                $namen[] = 'zugang';
-                continue;
-            }
-            $zf = vw_zugang_pruefen(isset($w['email']) ? $w['email'] : '',
-                                    isset($w['passwort']) ? $w['passwort'] : '',
-                                    isset($w['spin']) ? $w['spin'] : '');
-            if ($zf['fehler']) {
-                foreach ($zf['fehler'] as $feld => $text) {
-                    $mangel[] = vw_t('EINST.SICH_ZUGANG') . ' ' . $text;
-                    $namen[] = 'zugang.' . $feld;
-                }
-                continue;
-            }
-            /* 0.9.44: die Anmeldung am Portal, geprueft wie im Formular. Fehlt sie
-             * (aeltere Sicherung), bleibt sie unveraendert (null). */
-            $zp = vw_portal_zugang_pruefen(isset($w['portal_email']) ? $w['portal_email'] : '',
-                                           isset($w['portal_passwort']) ? $w['portal_passwort'] : '');
-            if ($zp['fehler']) {
-                foreach ($zp['fehler'] as $feld => $text) {
-                    $mangel[] = vw_t('EINST.SICH_ZUGANG') . ' ' . $text;
-                    $namen[] = 'zugang.' . $feld;
-                }
-                continue;
-            }
-            $zugang = array('email' => $zf['email'], 'passwort' => $zf['passwort'],
-                            'spin' => $zf['spin'],
-                            'portal_email' => array_key_exists('portal_email', $w) ? $zp['email'] : null,
-                            'portal_passwort' => array_key_exists('portal_passwort', $w) ? $zp['passwort'] : null);
-            continue;
-        }
-        if ($k === 'tts') {
-            /* Nr. 36 b (seit 0.9.29): eine Sicherung dieses Plugins traegt nie ein Sprechtoken -
-             * traegt die Datei eines (auch als Liste, Zahl oder null), stammt sie nicht aus
-             * "Einstellungen sichern" und wird abgewiesen; die geltenden Sprechtoken bleiben.
-             * Ausgabeart, Adresse und Vorlage werden wie im Formular geprueft (Heimnetz). */
-            $vw_tm = ansage_sicherung_mangel($w);
-            if ($vw_tm) {
-                $mangel[] = sprintf(vw_t('EINST.SICH_TTS_TOKEN'),
-                                    htmlspecialchars(implode(', ', $vw_tm), ENT_QUOTES, 'UTF-8'));
-                $namen[] = 'tts';
-                continue;
-            }
-            $vw_tg = '';
-            $vw_tp = ansage_wert_pruefen($w, $vw_tg, vw_ansage_modi());
-            if ($vw_tp === null) {
-                $mangel[] = sprintf(vw_t('EINST.SICH_TTS'),
-                    htmlspecialchars(ansage_kennung_text($vw_tg, vw_ansage_k()), ENT_QUOTES, 'UTF-8'));
-                $namen[] = 'tts';
-                continue;
-            }
-            $vw_tj = vw_tts();
-            /* Welle Mehrfach-Ziele (0.9.33): "$vw_tp + $vw_tj" behielt die geltenden weiteren Ziele einer Sicherung ohne
-             * Liste schon bisher - still. Jetzt geht der Block vorher durch die Spaetliste, und der Hinweis nennt sie. */
-            $vw_tneu = array('tts' => $vw_tp);
-            $vw_tjetzt = array('tts' => $vw_tj);
-            $vw_spaet = array();
-            /* Welle Mehrfach-Ziele (Sprachmodul 1.2.1, Spaetliste): fehlt die Liste der weiteren Ziele in der Sicherung (Datei einer
-             * aelteren Fassung), gelten die jetzigen weiteren Ziele weiter - genannt im Hinweis. Eine Sicherung MIT leerer Liste
-             * heisst "keine weiteren Ziele" und wird so uebernommen. */
-            $vw_spaete = array();
-            if (is_array($vw_tneu['tts']) && function_exists('ansage_sicherung_spaet')) {
-                list($vw_tneu['tts'], $vw_spaete) = ansage_sicherung_spaet($vw_tneu['tts'],
-                    (isset($vw_tjetzt['tts']) && is_array($vw_tjetzt['tts'])) ? $vw_tjetzt['tts'] : null);
-            }
-            foreach ($vw_spaete as $vw_sn) { $vw_spaet[] = $vw_sn; }     // Welle Mehrfach-Ziele: tts.ziele (Spaetliste)
-            if ($vw_spaet) {
-                $hinweise[] = sprintf(vw_t('EINST.SICH_SPAET'), htmlspecialchars(implode(', ', $vw_spaet), ENT_QUOTES, 'UTF-8'));
-            }
-            list($vw_tv) = ansage_vervollstaendigen($vw_tneu['tts'] + $vw_tj, 'aus');
-            $neu['tts'] = ansage_sicherung_tokens_behalten($vw_tv, $vw_tj);
-            $anzahl++;
-            continue;
-        }
-        if ($k === 'ansage_token_herkunft') { continue; }     // S2: nie aus einer Datei
-        if ($k === 'ansage_regeln') {     // S2: ungueltig = abgewiesen, gueltig = uebernommen
-            $s2_g = '';
-            $s2_r = ansage_regeln_wert($w, $s2_g);
-            if ($s2_r === null) { $mangel[] = vw_t('EINST.SICH_REGELN'); $namen[] = 'ansage_regeln'; continue; }
-            $neu['ansage_regeln'] = $s2_r;
-            $anzahl++;
-            continue;
-        }
-        if (!in_array($k, $bekannt, true)) {
-            $mangel[] = sprintf(vw_t('EINST.SICH_FREMD'),
-                                 htmlspecialchars((string) $k, ENT_QUOTES, 'UTF-8'));
-            $namen[] = (string) $k;
-            continue;
-        }
-        /* Jeder WERT wird geprueft, nicht nur der Schluessel.
-         *
-         * Gemessen am 27.08.2026 mit einer Datei, in der alle elf Schluessel
-         * bekannt und alle elf Werte Unsinn waren (intervall -5, temp_min 99,
-         * ein Objekt im Tokenfeld): sie wurde mit "11 Werte uebernommen"
-         * quittiert. Am Endpunkt gab (string) auf das Objekt eine PHP-Warnung
-         * und die Zeichenkette "Array" als Vergleichswert. Und ein "0" als
-         * Zeichenkette im Steuerungshaken oeffnete das Schreibtor, waehrend
-         * die Oberflaeche "gesperrt" anzeigte - bool("0") ist in Python wahr,
-         * empty("0") in PHP ebenfalls. */
-        list($ok, $rein) = vw_wert_pruefen($k, $w);
-        if (!$ok) {
-            $mangel[] = sprintf(vw_t('EINST.SICH_WERT'),
-                htmlspecialchars((string) $k, ENT_QUOTES, 'UTF-8'),
-                htmlspecialchars(is_scalar($w) ? substr((string) $w, 0, 40) : gettype($w),
-                                 ENT_QUOTES, 'UTF-8'));
-            $namen[] = (string) $k;
-            continue;
-        }
-        /* EIN LEERES TOKEN BEHAELT DAS GELTENDE (O7, Durchgang 02.10.2026;
-         * Klasse 10/12). Bis 0.9.26 wurde es angenommen, und beim naechsten
-         * Seitenaufbau entstand still ein neues - jede im Miniserver
-         * eingetragene Adresse bekam danach 403, und oben stand nur
-         * "zurueckgespielt" (gemessen F9c). Gesagt wird es oben auf der Seite. */
-        if ($k === 'aktionstoken' && $rein === '') {
-            $geltend = vw_config();
-            $neu[$k] = (string) $geltend['aktionstoken'];
-            $hinweise[] = vw_t('EINST.SICH_TOKEN_LEER');
-            continue;
-        }
-        $neu[$k] = $rein;
-        $anzahl++;
+        list($t) = ansage_vervollstaendigen($t + (is_array($tj) ? $tj : array()), 'aus');
+        $neu['tts'] = ansage_sicherung_tokens_behalten($t, $tj);
     }
-    if ($anzahl === 0) {
-        $mangel[] = vw_t('EINST.SICH_LEER');
-    }
-    /* FEHLENDE Schluessel sind eine Beanstandung, kein stiller Rueckfall.
-     *
-     * Bis 0.9.11 war 'vw_vorgaben()' der Ausgangspunkt und nur was in der
-     * Datei stand wurde ueberschrieben. Gemessen am 03.09.2026 unter PHP 7.4
-     * und 8.4: eine Datei mit dem einen Schluessel {"intervall":300} lief
-     * ohne Beanstandung durch, wurde geschrieben, und 26 Einstellungen
-     * fielen auf Werk zurueck - darunter das Aktionstoken auf ''. Quittiert
-     * wurde das mit "1 Wert uebernommen". Beim naechsten Oeffnen der
-     * Oberflaeche entstand ein neues Token, und JEDE im Miniserver
-     * eingetragene Adresse war stumm ungueltig.
-     *
-     * Der Hausstandard sagt: eine halb gueltige Datei aendert gar nichts.
-     * Eine Datei, der die Haelfte fehlt, ist halb gueltig. */
-    $fehlend = array();
-    $vw_ohne_ansage = false;
-    $vw_ohne_g41 = false;
-    foreach ($bekannt as $k) {
-        if (!array_key_exists($k, $daten)) {
-            /* Nr. 36 b: eine Sicherung von 0.9.28 oder frueher kennt die Sprachausgabe noch
-             * nicht. Sie bleibt zurueckspielbar; die Sprachausgabe behaelt ihren jetzigen Stand,
-             * und die Seite sagt es. */
-            /* Gruppe 41: eine Sicherung von 0.9.32 oder frueher kennt die Schluessel der Hausform nicht -
-             * die Anlage behaelt ihren jetzigen Wert (auch endpunkt_ein). */
-            if (in_array($k, vw_neue_schluessel_0933(), true)) {
-                $vw_jetzt = vw_config();
-                $neu[$k] = $vw_jetzt[$k];
-                $vw_ohne_g41 = true;
-                continue;
-            }
-            if (in_array($k, vw_ansage_neue_schluessel(), true)) {
-                $vw_jetzt = vw_config();
-                $neu[$k] = $vw_jetzt[$k];
-                $vw_ohne_ansage = true;
-                continue;
-            }
-            $fehlend[] = $k;
-        }
-    }
-    if ($vw_ohne_g41) {
-        $hinweise[] = vw_t('EINST.SICH_OHNE_G41');
-    }
-    if ($vw_ohne_ansage) {
-        $hinweise[] = vw_t('EINST.SICH_OHNE_ANSAGE');
-    }
-    if ($fehlend) {
-        $mangel[] = sprintf(vw_t('EINST.SICH_FEHLEND'), count($fehlend),
-            htmlspecialchars(implode(', ', $fehlend), ENT_QUOTES, 'UTF-8'));
-        $namen = array_merge($namen, $fehlend);
-    }
-    if (!$mangel && $neu['temp_min'] > $neu['temp_max']) {
-        $mangel[] = vw_t('EINST.FEHLER_TEMP_TAUSCH');
-        $namen[] = 'temp_min';
-        $namen[] = 'temp_max';
-    }
-    if ($mangel && !$namen) {
-        // SICH_LEER: kein einzelner Wert, die Datei als Ganzes.
-        $namen[] = 'json';
-    }
-    return array($mangel ? null : $neu, $mangel, $anzahl, $mangel ? null : $zugang, $hinweise,
-                 array_values(array_unique($namen)));
+    return array($neu, $spaet);
 }
 
 /**
@@ -3352,98 +3325,53 @@ function vw_takt_wirksam($cfg)
  * Anwender ihn bewusst auf den Vorgabewert gesetzt hatte und die Vorgabe sich
  * spaeter aendert.
  *
- * Mit lesbarem Kopf und Datum: wer die Datei in einem Jahr findet, muss
- * erkennen koennen, was sie ist. Die beiden Kopfzeilen beginnen mit einem
- * Unterstrich und werden von vw_sicherung_lesen() uebergangen.
+ * DAS AKTIONSTOKEN IST DABEI, und die Zugangsdaten (O6, Durchgang 02.10.2026)
+ * samt der Anmeldung am Portal (0.9.44). Ohne sie stuenden nach dem
+ * Zurueckspielen alle Felder richtig, und das Plugin kaeme trotzdem nicht an
+ * die Anlage. Das Formularmerkmal gehoert NICHT hinein (es wird aus dem
+ * Aktionstoken abgeleitet), ebenso wenig die Sprechtoken und der Vermerk
+ * ansage_token_herkunft.
  *
- * DAS AKTIONSTOKEN IST DABEI. Ohne es stuenden nach dem Zurueckspielen alle
- * Felder richtig, und das Plugin kaeme trotzdem nicht an die Anlage - die
- * Datei waere wertlos. Damit traegt sie ein Geheimnis, und der Hinweis am
- * Knopf sagt das. Das Formularmerkmal gehoert NICHT hinein: es wird aus dem
- * Aktionstoken abgeleitet und lebt eine Sitzung lang.
+ * 0.9.45: Kopf und Inhalt baut das gemeinsame Sicherungsmodul (sicherung_bauen()
+ * nach vw_sicherung_beschreibung()): _hinweis wie bisher, neu _plugin =
+ * 'LoxBerry-Plugin-VolkswagenID', _fassung, _stand. X-3 wie bisher: wuerde das
+ * eigene Zurueckspielen die Datei abweisen, sagt es der Kopf (_warnung, nur
+ * Namen). K1 (02.10.2026, Nr. 19) wie bisher: ein unzulaessiger GESPEICHERTER
+ * Wert steht in der Sicherung als Vorgabe (vw_config() ersetzt ihn); das sagt
+ * seit Modul 1.2.0 der Kopf _warnung, angehaengt ueber 'warnung' (Feld, Grund
+ * und Vorgabe, nie der gespeicherte Wert; bis dahin der eigene Kopfschluessel
+ * _vorgabe). Rueckgabe: der JSON-Text, false wenn er sich nicht
+ * bilden laesst.
  */
 function vw_sicherung_schreiben($pruefen = true)
 {
-    $cfg = vw_config();
-    $aus = array(
-        '_hinweis' => 'Einstellungen des LoxBerry-Plugins Volkswagen ID. '
-                    . 'Enthaelt das Aktionstoken und die Zugangsdaten des Volkswagen-Kontos '
-                    . 'dieser Anlage - wie ein Passwort behandeln. Die Sprechtoken der '
-                    . 'Sprachausgabe sind nie enthalten.',
-        '_stand'   => date('Y-m-d H:i:s'),
-        '_fassung' => vw_fassung(),
-    );
-    foreach (array_keys(vw_vorgaben()) as $k) {
-        $aus[$k] = isset($cfg[$k]) ? $cfg[$k] : '';
+    $b = vw_sicherung_beschreibung();
+    $saetze = $pruefen ? vw_abgewiesen_saetze(vw_config_lesen(true)) : array();
+    if ($saetze) {
+        $b['warnung'] = function () use ($saetze) { return array(vw_t('EINST.SICH_VORGABE') . ' ' . implode(' ', $saetze)); };
     }
-    /* Nr. 36 b: die Sprechtoken der Sprachausgabe gehen nie in eine Sicherung (Entwurf 5). */
-    if (isset($aus['tts']) && is_array($aus['tts'])) {
-        $aus['tts'] = ansage_sicherung_bereinigen($aus['tts']);
-    }
-    unset($aus['ansage_token_herkunft']);     // Stamm 1.3.2: der Vermerk geht nie in eine Sicherung
-    /* DIE ZUGANGSDATEN GEHOEREN HINEIN (O6, Durchgang 02.10.2026; CLAUDE.md
-     * Abschnitt 9, Regeln/05). Bis 0.9.26 fehlten sie, obwohl der Hinweis am
-     * Knopf "Die Datei enthaelt Ihre Zugangsdaten" sagte (gemessen F8a). */
-    $zg = vw_json_lesen(vw_paths()['zugang']);
-    $aus['zugang'] = array(
-        'email'    => isset($zg['email']) && is_string($zg['email']) ? $zg['email'] : '',
-        'passwort' => isset($zg['passwort']) && is_string($zg['passwort']) ? $zg['passwort'] : '',
-        'spin'     => isset($zg['spin']) && is_string($zg['spin']) ? $zg['spin'] : '',
-        /* 0.9.44: Anmeldung am EU-Data-Act-Portal */
-        'portal_email'    => isset($zg['portal_email']) && is_string($zg['portal_email']) ? $zg['portal_email'] : '',
-        'portal_passwort' => isset($zg['portal_passwort']) && is_string($zg['portal_passwort']) ? $zg['portal_passwort'] : '',
-    );
-    /* X-3 (Nachzug G1, 02.10.2026; Bauform Skoda-Connect-NG 0.9.29, APC-UPS
-     * 1.2.17): die Sicherung geht durch DIESELBE Pruefung wie das
-     * Zurueckspielen (vw_sicherung_maengel -> vw_sicherung_lesen). Wuerde sie
-     * dort abgewiesen, traegt sie eine Warnung im Kopf - nur die Namen, nie
-     * die Werte - und die Seite warnt gelb am Knopf. Geliefert wird sie
-     * trotzdem. Bis 0.9.27 wurde eine Sicherung mit einer von Hand
-     * eingetragenen S-PIN "12" in zugang.json kommentarlos geliefert und
-     * erst beim Zurueckspielen abgewiesen (gemessen, vb_g1_bau_skripte/vw/proben). */
-    $namen = $pruefen ? vw_sicherung_maengel() : array();
-    /* K1 (02.10.2026, Nr. 19): ein unzulaessiger GESPEICHERTER Wert steht in
-     * der Sicherung als Vorgabe (vw_config() ersetzt ihn). Bis 0.9.27 geschah
-     * das still; jetzt sagt es der Kopf - Feld, Grund und Vorgabe, nie den
-     * gespeicherten Wert. Die Sicherung selbst ginge beim Zurueckspielen durch. */
-    $vorgabe_saetze = $pruefen ? vw_abgewiesen_saetze(vw_config_lesen(true)) : array();
-    if ($namen || $vorgabe_saetze) {
-        $warn = array();
-        if ($namen) {
-            $warn[] = 'Diese Sicherung wuerde beim Zurueckspielen abgewiesen. '
-                    . 'Beanstandet: ' . implode(', ', $namen) . '.';
-        }
-        if ($vorgabe_saetze) {
-            $warn[] = vw_t('EINST.SICH_VORGABE') . ' ' . implode(' ', $vorgabe_saetze);
-        }
-        $kopf = array();
-        foreach ($aus as $k => $v) {
-            $kopf[$k] = $v;
-            if ($k === '_hinweis') {
-                $kopf['_warnung'] = implode(' ', $warn);
-            }
-        }
-        $aus = $kopf;
-    }
-    return json_encode($aus, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    $js = sicherung_json(sicherung_bauen($b, vw_config(), array('zugang' => vw_sicherung_zugang_jetzt())));
+    return $js === '' ? false : $js;
 }
 
 /**
  * Welche Werte der Sicherung wuerde das Zurueckspielen beanstanden? (X-3)
- * Leer heisst: keiner. Gerechnet mit vw_sicherung_lesen() an der Sicherung
- * selbst (ohne Warnung gebaut), nicht nachgebaut.
+ * Leer heisst: keiner. Seit 0.9.45 mit der Pruefung des Sicherungsmoduls
+ * (sicherung_selbstpruefung()) an genau der Datei, die "Einstellungen sichern"
+ * liefert - nicht nachgebaut. Rueckgabe: Namen, nie Werte; 'json', wenn die
+ * Datei als Ganzes abgewiesen wuerde.
  */
 function vw_sicherung_maengel()
 {
-    $js = vw_sicherung_schreiben(false);
-    if (!is_string($js) || $js === '') {
-        return array('json');
+    $b = vw_sicherung_beschreibung();
+    $cfg = vw_config();
+    $daten = sicherung_bauen($b, $cfg, array('zugang' => vw_sicherung_zugang_jetzt()));
+    unset($daten['_warnung']);
+    $namen = array();
+    foreach (sicherung_selbstpruefung($b, $daten, $cfg) as $n) {
+        $namen[] = ($n === '-') ? 'json' : $n;
     }
-    $r = vw_sicherung_lesen($js);
-    if ($r[0] !== null) {
-        return array();
-    }
-    return (isset($r[5]) && $r[5]) ? $r[5] : array('json');
+    return array_values(array_unique($namen));
 }
 
 /** Die Fassung aus der plugin.cfg, oder ''. */
