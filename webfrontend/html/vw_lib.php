@@ -583,28 +583,57 @@ function vw_config($erzeugen = true)
     return $lage['cfg'];
 }
 
-/**
- * Frage 46 (Entscheidung des Hausherrn 18.11.2026). Diese Funktion steht wortgleich in sieben Linien:
- * Abfahrtsassistent, Alexa-NG, AudiConnect, BYD-Autos, Beschattungswaechter, Skoda-Connect-NG und VolkswagenID.
- * Ein unbekannter Unterschluessel im Block tts wird verworfen und mit Namen genannt, nie mit Wert; die uebrigen
- * Eintraege bleiben samt Sprechtoken. Unbekannt heisst: die Pruefung der Linie ($pruefen, ein Eintrag allein,
- * Rueckgabe der Grund oder '') nennt ihn mit TTS_EINTRAG. Ein bekannter Eintrag mit ungueltigem Wert bleibt stehen;
- * ihn weist die Pruefung des ganzen Blocks ab, wie bisher. Bliebe nichts Bekanntes uebrig, bleibt der Block, wie er
- * ist. Rueckgabe: array(Block, Liste der Namen 'tts.<eintrag>').
- */
-function tts_unbekannte_verwerfen($tts, $pruefen)
+/* Fragen 55-59 (Entscheidung des Hausherrn 18.11.2026): unbekannte Eintraege im Block tts verwerfen, den Block pruefen
+ * und melden - mit dem Sprachmodul ab 1.4.4 (ansage_block_pruefen(), ansage_block_meldungen()). Bis dahin stand das
+ * Verwerfen wortgleich in sieben Linien. Frage 81: nach der Modulregel nur mit function_exists(); ist in diesem Prozess
+ * zuerst eine aeltere Abschrift geladen, wird nur der ganze Block geprueft (ohne Verwerfen, ohne die Saetze des Moduls). */
+
+/** Den Block tts pruefen; Rueckgabe in der Form von ansage_block_pruefen(). $pruefen: Pruefung der Linie fuer einen Teilblock. */
+function vw_tts_block_pruefen($tts, $pruefen = null)
 {
-    if (!is_array($tts)) { return array($tts, array()); }
-    $rest = $tts;
-    $namen = array();
-    foreach ($tts as $s => $w) {
-        $g = (string) call_user_func($pruefen, array($s => $w));
-        if (strpos($g, 'TTS_EINTRAG|') === 0) {
-            unset($rest[$s]);
-            $namen[] = 'tts.' . substr($g, strlen('TTS_EINTRAG|'));
+    if (function_exists('ansage_block_pruefen')) {
+        return ansage_block_pruefen($tts, vw_ansage_modi(), $pruefen);
+    }
+    $g = is_array($tts) ? '' : 'KEIN_FELD';
+    $p = null;
+    if (is_array($tts)) {
+        if ($pruefen !== null) {
+            $g = (string) call_user_func($pruefen, $tts);
+            $p = $g === '' ? $tts : null;
+        } else {
+            $p = ansage_wert_pruefen($tts, $g, vw_ansage_modi());
         }
     }
-    return ($namen && $rest) ? array($rest, $namen) : array($tts, array());
+    $b = null;
+    if ($p !== null) { list($b) = ansage_vervollstaendigen($p, 'aus'); }
+    return array('block' => $b, 'roh' => $p !== null ? $tts : null, 'verworfen' => array(),
+                 'ungueltig' => $p !== null ? array() : array('tts' => $g), 'grund' => $p !== null ? '' : $g);
+}
+
+/** Die Saetze zur Lage (Frage 59), unmaskiert: aus dem Sprachmodul; mit einer aelteren Abschrift nur die Namen. */
+function vw_tts_saetze(array $e, array $opt = array())
+{
+    if (function_exists('ansage_block_meldungen')) {
+        return ansage_block_meldungen($e, array('t' => function ($s) { return vw_t($s); }), $opt);
+    }
+    $n = array_merge(isset($e['verworfen']) && is_array($e['verworfen']) ? $e['verworfen'] : array(),
+                     isset($e['ungueltig']) && is_array($e['ungueltig']) ? array_keys($e['ungueltig']) : array());
+    return $n ? array('tts: ' . implode(', ', $n)) : array();
+}
+
+/** Fragen 58, 59, 77: die Lage einmal je Aenderung ins Protokoll. Der Merker ansage_block_lage.txt im Datenordner traegt
+ *  nur das Kennzeichen (keine Namen, keine Werte) und entsteht nur in einem schon vorhandenen Ordner. */
+function vw_tts_melden(array $e)
+{
+    if (!function_exists('ansage_block_kennzeichen')) { return; }
+    $d = vw_paths()['datadir'];
+    if (!@is_dir($d)) { return; }
+    $merk = $d . '/ansage_block_lage.txt';
+    $kz = ansage_block_kennzeichen($e);
+    $alt = is_file($merk) ? trim((string) @file_get_contents($merk)) : '';
+    if ($alt === $kz) { return; }
+    if ($kz !== '') { vw_log('Ansage: ' . implode(' ', vw_tts_saetze($e))); }
+    @file_put_contents($merk, $kz);
 }
 
 /**
@@ -612,7 +641,7 @@ function tts_unbekannte_verwerfen($tts, $pruefen)
  *
  * array('cfg' => ..., 'lage' => 'ok|leer|kaputt|aus_zweitschrift',
  *       'abgewiesen' => array(schluessel => rohwert), 'fremd' => array(schluessel))
- *       ('fremd' seit dem 18.11.2026, Frage 46, auch ein unbekannter Eintrag im Block tts als 'tts.<eintrag>')
+ *       'tts_lage' (Frage 59, Sprachmodul 1.4.4): die Lage des Blocks tts in der Form von ansage_block_pruefen()
  *
  * 'abgewiesen' nennt die Werte, die gegen vw_regeln() durchgefallen sind und
  * durch die Vorgabe ersetzt wurden. Sie stehen dort, weil eine Datei von Hand
@@ -676,6 +705,7 @@ function vw_config_lesen($erzeugen = true)
     $abgewiesen = array();
     $gruende = array();     // K1: je Schluessel der Grund, nie der Wert
     $fremd = array();
+    $vw_tts_lage = array();     // Frage 59
     foreach ($cfg as $k => $v) {
         if (!array_key_exists($k, $vorgaben)) {
             $fremd[] = $k;
@@ -698,21 +728,16 @@ function vw_config_lesen($erzeugen = true)
              * ihre Vorgabe. Ein unzulaessiger Block wird gemeldet wie jeder andere Wert - nie
              * mit seinem Inhalt (er kann Sprechtoken tragen). */
             /* Frage 46 (Entscheidung des Hausherrn 18.11.2026): ein unbekannter Unterschluessel wird vorher verworfen
-             * und unter 'fremd' genannt (nur der Name, er bleibt unbeachtet); der Block bleibt samt Sprechtoken. Bis
-             * 0.9.47 wies er den ganzen Block ab, es galt die Vorgabe, und beim Zurueckspielen waren die Sprechtoken
-             * leer. tts_unbekannte_verwerfen() steht wortgleich in sieben Linien. */
-            list($v, $vw_tu) = tts_unbekannte_verwerfen($v, function ($t) {
-                $g = '';
-                return ansage_wert_pruefen($t, $g, vw_ansage_modi()) === null ? $g : '';
-            });
-            $vw_tg = '';
-            $vw_tp = ansage_wert_pruefen($v, $vw_tg, vw_ansage_modi());
-            if ($vw_tp !== null) {
-                list($fertig['tts']) = ansage_vervollstaendigen($vw_tp, 'aus');
-                foreach ($vw_tu as $vw_n) { $fremd[] = $vw_n; }
+             * und genannt (nur der Name, er bleibt unbeachtet); der Block bleibt samt Sprechtoken. Fragen 55/59: seit
+             * Sprachmodul 1.4.4 in einem Aufruf (vw_tts_block_pruefen()); die Lage steht unter 'tts_lage'. Frage 76: ein
+             * ungueltiger Block gilt als aus - bis 0.9.47 galt die Vorgabe, also ab Werk an. */
+            $vw_tts_lage = vw_tts_block_pruefen($v);
+            if ($vw_tts_lage['block'] !== null) {
+                $fertig['tts'] = $vw_tts_lage['block'];
             } else {
                 $abgewiesen['tts'] = gettype($v);
-                $gruende['tts'] = array('TTS', $vw_tg);
+                $gruende['tts'] = array('TTS', $vw_tts_lage['grund']);
+                $fertig['tts'] = ansage_block_oder_aus(null);
             }
             continue;
         }
@@ -778,9 +803,10 @@ function vw_config_lesen($erzeugen = true)
         }
     }
 
+    vw_tts_melden($vw_tts_lage);     // Frage 77: einmal je Aenderung ins Protokoll
     $GLOBALS['vw_cfg_speicher'][$schluessel] =
         array('cfg' => $fertig, 'lage' => $lage,
-              'abgewiesen' => $abgewiesen, 'gruende' => $gruende, 'fremd' => $fremd,
+              'abgewiesen' => $abgewiesen, 'gruende' => $gruende, 'fremd' => $fremd, 'tts_lage' => $vw_tts_lage,
               'fehlend' => $fehlend, 'anzahl' => count($vorgaben));
     /* Die ERSTE Lage dieses Seitenaufbaus bleibt erhalten (O8, Durchgang
      * 02.10.2026). Bis 0.9.26 ging sie verloren: vw_token() schrieb nach dem

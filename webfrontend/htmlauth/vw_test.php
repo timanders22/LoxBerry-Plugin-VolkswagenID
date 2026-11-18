@@ -297,13 +297,19 @@ function vw_pruefungen($netz = true)
     $lage = vw_config_lage_erst();
     $jetzt = vw_config_lesen(true);
     $mangel = array();
-    if ($jetzt['abgewiesen']) {
+    /* Frage 59 (18.11.2026): verworfene und ungueltige Eintraege im Block tts mit den Saetzen des Sprachmoduls; Frage 76:
+     * dann faellt 'tts' aus der Liste "es gilt die Voreinstellung" (er gilt als aus). */
+    $vw_tm = vw_tts_saetze(isset($jetzt['tts_lage']) && is_array($jetzt['tts_lage']) ? $jetzt['tts_lage'] : array());
+    $vw_ab = array_keys($jetzt['abgewiesen']);
+    if ($vw_tm) { $vw_ab = array_values(array_diff($vw_ab, array('tts'))); }
+    if ($vw_ab) {
         $mangel[] = sprintf(vw_t('TEST.A_KONFIG_ABGEWIESEN'),
-            vw_e(implode(', ', array_keys($jetzt['abgewiesen']))));
+            vw_e(implode(', ', $vw_ab)));
     }
     if ($jetzt['fremd']) {
         $mangel[] = sprintf(vw_t('TEST.A_KONFIG_FREMD'), vw_e(implode(', ', $jetzt['fremd'])));
     }
+    foreach ($vw_tm as $vw_x) { $mangel[] = vw_e($vw_x); }
     $anzahl = isset($lage['anzahl']) ? (int) $lage['anzahl'] : count(vw_vorgaben());
     $fehlend = isset($lage['fehlend']) && is_array($lage['fehlend']) ? $lage['fehlend'] : array();
     $kaputt_datei = $p['config'] . '.kaputt';

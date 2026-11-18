@@ -1221,6 +1221,11 @@ if ($vw_lage['abgewiesen']) { ?>
 if ($vw_lage['fremd']) { ?>
 <div class="sm-warnung"><b><?= vw_e(vw_t('ALLG.KONFIG_FREMD')) ?></b>
 <span class="sm-mono"><?= vw_e(implode(', ', $vw_lage['fremd'])) ?></span></div>
+<?php }
+/* Frage 59 (18.11.2026): verworfene Eintraege im Block tts mit dem Satz des Sprachmoduls - nur Namen. */
+$vw_tvm = vw_tts_saetze(array('verworfen' => isset($vw_lage['tts_lage']['verworfen']) ? $vw_lage['tts_lage']['verworfen'] : array()));
+if ($vw_tvm) { ?>
+<div class="sm-warnung"><?= vw_e(implode(' ', $vw_tvm)) ?></div>
 <?php } ?>
 
 <?php foreach ($vw_fahrzeuge as $vw_nr => $vw_fz) { ?>
