@@ -20,6 +20,12 @@ Plug-in-Hybrid führt das Plugin beide.
 > gegen Attrappen, sondern gegen **echte Objekte der Bibliothek**. Deshalb
 > 0.9.x und nicht 1.0.0, und deshalb sind schreibende Befehle ab Werk gesperrt.
 
+## Neu in 0.9.47
+
+- **Verhalten geändert – unbekannter Eintrag im Block der Sprachausgabe:** Steht in den gespeicherten Einstellungen im Block `tts` ein Eintrag, den diese Fassung nicht kennt (etwa aus einer Bearbeitung von Hand), wird nur dieser Eintrag verworfen und mit seinem Namen gemeldet (oben auf der Seite und im Reiter „Test“ bei den unbekannten Schlüsseln), nie mit seinem Wert. Die übrigen Einstellungen der Sprachausgabe gelten weiter, und die hinterlegten Sprechtoken bleiben erhalten, auch beim Zurückspielen einer Sicherung. Bisher wurde in diesem Fall der ganze Block abgewiesen: Es galt die Vorgabe der Sprachausgabe, und nach dem Zurückspielen waren die Sprechtoken leer. Beim nächsten Speichern fällt der unbekannte Eintrag aus der Datei weg. Ein ungültiger Wert eines bekannten Eintrags weist den Block weiterhin als Ganzes ab. Steht ein solcher Wert in einer Sicherungsdatei, wird die ganze Datei abgewiesen, die Einstellungen bleiben unverändert, und die Meldung nennt den Eintrag und den Grund – wie bisher. Gemessen auf dem Arbeitsrechner unter PHP 7.4 und 8.4 an einer nachgestellten Konfiguration und Sicherung; am Gerät nicht gemessen.
+- **Einstellungen sichern und zurückspielen mit dem gemeinsamen Sicherungsmodul 1.2.11 statt 1.2.9:** Neu in 1.2.10 ist, dass ein leerer Wert auch in einem Teil der Sicherung, der nur aus einem einzelnen Wert besteht (etwa einem Zugangsschlüssel in einer eigenen Datei), einen gesetzten Wert nicht mehr überschreibt; er bleibt stehen und wird in der Meldung genannt. Dieses Plugin führt keinen solchen Teil; an seinem Verhalten ändert sich dadurch nichts. Gemessen mit dem Prüfstand auf dem Arbeitsrechner unter PHP 7.4 und 8.4 (3 Vorfassungen zurückgespielt). Am Gerät nicht gemessen.
+- **Sicherungsmodul 1.2.11:** Wandelt ein Plugin beim Zurückspielen eine Sicherung aus einer Textdatei um, sagt die Meldung das jetzt mit einem gemeinsamen Satz, und Mängel darin werden in allen Plugins mit denselben Bezeichnungen genannt. Dieses Plugin wandelt keine Textdateien um; an seinem Verhalten ändert sich dadurch nichts. Gemessen mit dem Prüfstand auf dem Arbeitsrechner unter PHP 7.4 und 8.4. Am Gerät nicht gemessen.
+
 ## Neu in 0.9.46
 
 - **Verhalten geändert – Einstellungen sichern und zurückspielen mit dem gemeinsamen Sicherungsmodul 1.2.9 statt 1.2.2:**
