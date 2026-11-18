@@ -131,7 +131,15 @@ CONNECTOR="0.10.6"
 # requests~=2.32; beides erfuellt der Stand oben, pip laesst ihn also stehen
 # (gemessen 12.11.2026 mit "pip install --dry-run" der drei festen Fassungen:
 # carconnectivity 0.11.10, requests 2.34.2 - auf dem Arbeitsrechner, nicht am Geraet).
-PORTAL="0.3.4"
+# 0.9.49: 0.3.5 statt 0.3.4. Volkswagen hat das Portal am 16.11.2026 nach
+# eu-data-act.vwgroup-datahub.com verlegt; 0.3.4 kennt nur die alte Adresse und
+# bricht die Anmeldung mit "Login redirected to an unexpected location" ab
+# (Bibliothek Issue #67, behoben in 0.3.5). Dieselben Abhaengigkeiten wie 0.3.4
+# (PyPI: carconnectivity>=0.11.10, requests~=2.32); "pip install --dry-run" der
+# vier Fassungen laesst carconnectivity bei 0.11.10 (gemessen 18.11.2026 in WSL,
+# nicht am Geraet). Beim Update von 0.3.4 zieht der Vergleich mit PORTAL_IST
+# unten nach, weil die Fassungen nicht gleich sind.
+PORTAL="0.3.5"
 
 mkdir -p "$PDATA" "$PLOG" "$PCONFIG" "$PDATA/befehle" "$PDATA/antworten" || {
     echo "<FAIL> Ordner konnten nicht angelegt werden."
@@ -342,6 +350,13 @@ else
         echo "<INFO> Die Bibliothek fuer die Datenquelle Portal liess sich nicht installieren. Das ist"
         echo "<INFO> KEIN Fehler fuer die Volkswagen-App (WeConnect); nur die Quelle Portal geht so nicht."
         printf '%s\n' "$PORTAL_AUS" | tail -n 3 | sed 's/^/<INFO>     /'
+        # 0.9.49: blieb dabei eine aeltere Fassung stehen (Update von 0.3.4),
+        # wird das gesagt - mit ihr scheitert die Anmeldung am Portal seit 16.11.2026.
+        if [ -n "$PORTAL_IST" ]; then
+            echo "<WARNING> Es bleibt die bisherige Fassung $PORTAL_IST der Bibliothek fuer die Datenquelle Portal."
+            echo "<WARNING> Fassungen vor 0.3.5 kennen die Adresse des Portals seit dem 16.11.2026 nicht; die"
+            echo "<WARNING> Anmeldung am Portal scheitert damit. Bitte das Plugin erneut installieren."
+        fi
     fi
 fi
 # carconnectivity laedt beim Import JEDEN installierten Connector

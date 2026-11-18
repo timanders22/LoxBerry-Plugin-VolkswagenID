@@ -1062,6 +1062,52 @@ def grund_von(err: Exception) -> str:
     return "UNBEKANNT"
 
 
+def ohne_adresse(text: str) -> str:
+    """Eine E-Mail-Adresse im Text einer Ausnahme unkenntlich machen.
+
+    Die App-Bibliothek nennt bei einem unbekannten Konto den Benutzernamen
+    ("account ... does not exist"); der Satz geht ins Protokoll, und
+    Protokollzeilen landen in oeffentlichen Meldungen.
+    """
+    return re.sub(r"[^\s@()<>\"',;]+@[^\s@()<>\"',;]+", "x@x", text)
+
+
+def portal_anmeldefehler(inhalt: str) -> str:
+    """Klartext fuer einen AuthError der Portal-Bibliothek (0.9.49).
+
+    Die Saetze der Bibliothek (client.py 0.3.5) unterscheiden drei Lagen, die
+    hier getrennt benannt werden: eine Umleitung an eine Adresse, die die
+    Fassung nicht kennt (so erschien der Umzug des Portals am 16.11.2026 mit
+    0.3.4), eine Stoerung des Anmeldedienstes ("not a credentials problem")
+    und alles uebrige (Zugangsdaten, Nutzungsbedingungen, Zustimmungsfrage).
+    Der Satz der Bibliothek wird immer mitgegeben.
+    """
+    klein = inhalt.lower()
+    meldung = " Meldung der Bibliothek: " + ohne_adresse(inhalt)
+    if "unexpected location" in klein:
+        try:
+            import importlib.metadata as md
+            fassung = md.version(PORTAL_BIBLIOTHEK)
+        except Exception:  # noqa: BLE001
+            fassung = "unbekannt"
+        return ("Anmeldung am EU-Data-Act-Portal abgebrochen: die Anmeldung wurde an eine "
+                "Adresse weitergeleitet, die die Bibliothek %s (Fassung %s) nicht kennt. So "
+                "zeigt sich ein Umzug des Portals; am 16.11.2026 hat Volkswagen es nach "
+                "eu-data-act.vwgroup-datahub.com verlegt, das kennt die Bibliothek erst ab "
+                "Fassung 0.3.5. Abhilfe ist eine neuere Fassung der Bibliothek (Plugin "
+                "aktualisieren oder erneut installieren), nicht andere Zugangsdaten."
+                % (PORTAL_BIBLIOTHEK, fassung) + meldung)
+    if "unavailable" in klein or "not a credentials problem" in klein:
+        return ("Der Anmeldedienst von Volkswagen war fuer das EU-Data-Act-Portal "
+                "voruebergehend nicht erreichbar; laut Bibliothek liegt es nicht an den "
+                "Zugangsdaten. Der naechste Takt versucht es erneut." + meldung)
+    return ("Anmeldung am EU-Data-Act-Portal abgewiesen. Bitte im Reiter Einstellungen "
+            "Benutzername und Passwort der Volkswagen ID fuer das Portal pruefen und sich "
+            "einmal im Browser unter https://eu-data-act.vwgroup-datahub.com anmelden: "
+            "verlangt das Portal dort neue Nutzungsbedingungen oder eine Zustimmung, nimmt "
+            "das Plugin sie nicht in Ihrem Namen an." + meldung)
+
+
 def fehlertext(err: Exception) -> str:
     name = type(err).__name__
     inhalt = str(err) or name
@@ -1077,11 +1123,30 @@ def fehlertext(err: Exception) -> str:
         if "netrc" in klein:
             return ("Die Zugangsdatei konnte nicht gelesen werden. Zugangsdaten in der "
                     "Oberflaeche neu eintragen und speichern.")
-        return ("Anmeldung abgewiesen: Benutzername oder Passwort stimmen nicht. Es sind die "
-                "Zugangsdaten des Volkswagen-Kontos aus der App 'Volkswagen' beziehungsweise "
-                "'We Connect ID', nicht die eines Haendlerportals. Wenn beides stimmt: Volkswagen "
-                "verlangt bei manchen Konten eine Zwei-Faktor-Bestaetigung, die sich hier nicht "
-                "automatisieren laesst - dann einmal im Browser auf diesem Geraet anmelden.")
+        # 0.9.49 (Issue #2): bis 0.9.48 stand hier "Benutzername oder Passwort
+        # stimmen nicht". Volkswagen weist aber die Anmeldung der Bibliothek
+        # carconnectivity-connector-volkswagen bis 0.10.6 seit Ende Mai 2026
+        # grundsaetzlich ab (tillsteinbach/CarConnectivity-connector-volkswagen#107,
+        # am 18.11.2026 offen); die Ausnahme sagt nicht, ob daneben die Zugangsdaten
+        # stimmen. Die Portal-Bibliothek wirft AuthenticationError nur, wenn
+        # Zugangsdaten fehlen oder die netrc-Datei nicht passt (connector.py 0.3.5,
+        # Z. 646-657); ihre Anmeldefehler heissen AuthError (Zweig darunter).
+        if "not provided" in klein:
+            return ("Benutzername oder Passwort fehlen. Reiter Einstellungen der "
+                    "Plugin-Oberflaeche oeffnen, eintragen und speichern.")
+        return ("Anmeldung bei Volkswagen abgewiesen. Volkswagen weist die Anmeldung der "
+                "Bibliothek carconnectivity-connector-volkswagen (bis Fassung 0.10.6) seit Ende "
+                "Mai 2026 grundsaetzlich ab, unabhaengig von den Zugangsdaten "
+                "(tillsteinbach/CarConnectivity-connector-volkswagen#107). Ob daneben "
+                "Benutzername oder Passwort nicht stimmen, laesst sich daraus nicht erkennen. "
+                "Lesend lassen sich die Werte ueber das EU-Data-Act-Portal holen: Reiter "
+                "Einstellungen, Datenquelle 'EU-Data-Act-Portal'. Meldung der Bibliothek: "
+                + ohne_adresse(inhalt))
+    if name in ("AuthError",):
+        # 0.9.49 (Issue #1): Anmeldefehler der Portal-Bibliothek
+        # carconnectivity-connector-vw-eu-data-act (client.py: class AuthError).
+        # Bis 0.9.48 fiel er nach unten durch und erschien als "AuthError: ...".
+        return portal_anmeldefehler(inhalt)
     if name in ("APICompatibilityError",):
         return ("Die Antwort von Volkswagen sah anders aus als erwartet. Das passiert, wenn "
                 "Volkswagen die Schnittstelle umbaut - dann hilft nur eine neuere Fassung von "
@@ -4267,6 +4332,11 @@ def bibliothek_config(z: dict, cfg: dict) -> dict:
     hide_vins, accept_terms_on_login). Nicht gesetzt wird
     accept_terms_on_login - neue Nutzungsbedingungen nimmt der Anwender selbst
     im Browser an, nicht das Plugin in seinem Namen.
+
+    0.9.49: Bibliothek 0.3.5. connector.py, vehicle.py und brands.py sind
+    byte-gleich mit 0.3.4; geaendert sind nur client.py (neue Portaladresse,
+    Folgen eines weiteren Umzugs) und dataset.py (Platzhalterwerte wie
+    4294967294 gelten nicht als Messwert) - verglichen an den PyPI-Archiven.
     """
     if cfg.get("quelle") == "portal":
         return {
