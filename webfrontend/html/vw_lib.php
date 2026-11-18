@@ -3147,7 +3147,18 @@ function vw_sicherung_beschreibung()
             return array();
         },
         'uebersetzer' => 'vw_sicherung_alt_erkennen',
-        'jetzt' => function () { return vw_config(); },
+        /* Modul 1.2.9 (Bauform des Hausherrn 15.11.2026): die geltende Konfiguration samt der Schluessel aus der Datei,
+         * die diese Fassung nicht kennt - oben und im Block tts. vw_config() sortiert sie aus; das Modul sah sie nie, und
+         * sie fielen beim Zurueckspielen still weg. Jetzt fallen sie weiter weg und werden mit Namen genannt. */
+        'jetzt' => function () use ($p, $tts_s) {
+            $c = vw_config();
+            $d = is_file($p['config']) ? json_decode((string) @file_get_contents($p['config']), true) : null;
+            if (!is_array($d)) { return $c; }
+            if (isset($c['tts'], $d['tts']) && is_array($c['tts']) && is_array($d['tts'])) {
+                $c['tts'] += array_diff_key($d['tts'], array_flip($tts_s));
+            }
+            return $c + $d;
+        },
         't' => 'vw_t',
         'e' => 'vw_e',
     );
