@@ -93,10 +93,45 @@ function vw_pruefungen($netz = true)
     $portal_an = isset($cfg['quelle']) && $cfg['quelle'] === 'portal';
     $zeilen[] = vw_pruefzeile($portal_an ? 1 : -1, vw_t('TEST.F_QUELLE'),
         $portal_an ? vw_t('TEST.A_QUELLE_PORTAL') : vw_t('TEST.A_QUELLE_WECONNECT'));
-    $zeilen[] = vw_pruefzeile($f['portal'] !== '' ? ($portal_an ? 1 : -1) : ($portal_an ? 0 : -1),
-        vw_t('TEST.F_PORTAL_LIB'),
-        $f['portal'] !== '' ? 'carconnectivity-connector-vw-eu-data-act ' . vw_e($f['portal'])
-                            : vw_t('TEST.A_PORTAL_LIB_FEHLT'));
+    /* 0.9.50 (Entscheidung 18.11.2026, Nr. 91): verglichen mit der Fassung, die
+     * postinstall.sh festnagelt - sie steht nach der Installation in
+     * bibliothek_soll.json (die Zahl steht hier nicht). Aelter: rot mit der Quelle
+     * Portal, grau mit WeConnect (dort nicht gebraucht). Ohne die Datei wird
+     * nicht verglichen, und die Zeile sagt es. */
+    $vw_soll = vw_json_lesen($p['datadir'] . '/bibliothek_soll.json');
+    $vw_soll_portal = (isset($vw_soll['portal']) && is_string($vw_soll['portal'])
+                       && preg_match('/^\d+(\.\d+)*$/', $vw_soll['portal'])) ? $vw_soll['portal'] : '';
+    $vw_lib_alt = $f['portal'] !== '' && $vw_soll_portal !== ''
+                  && version_compare($f['portal'], $vw_soll_portal, '<');
+    if ($vw_lib_alt) {
+        $zeilen[] = vw_pruefzeile($portal_an ? 0 : -1, vw_t('TEST.F_PORTAL_LIB'),
+            sprintf(vw_t('TEST.A_PORTAL_LIB_ALT'), vw_e($f['portal']), vw_e($vw_soll_portal)));
+    } else {
+        $zeilen[] = vw_pruefzeile($f['portal'] !== '' ? ($portal_an ? 1 : -1) : ($portal_an ? 0 : -1),
+            vw_t('TEST.F_PORTAL_LIB'),
+            $f['portal'] !== '' ? 'carconnectivity-connector-vw-eu-data-act ' . vw_e($f['portal'])
+                                  . ($vw_soll_portal === '' ? ' ' . vw_t('TEST.A_PORTAL_SOLL_FEHLT') : '')
+                                : vw_t('TEST.A_PORTAL_LIB_FEHLT'));
+    }
+
+    /* 0.9.50 (Nr. 90): die Anmeldebremse des Dienstes (bin/vw.py, bremse_*). Nur
+     * Anzeige; ob angemeldet wird, entscheidet der Dienst. Ruht die Anmeldung: rot. */
+    $vw_br = vw_anmeldebremse();
+    $vw_quelle_jetzt = $portal_an ? 'portal' : 'weconnect';
+    if ($vw_br === null || ($vw_br['lesbar'] && $vw_br['quelle'] !== $vw_quelle_jetzt)) {
+        $zeilen[] = vw_pruefzeile(1, vw_t('TEST.F_BREMSE'), vw_t('TEST.A_BREMSE_AUS'));
+    } elseif (!$vw_br['lesbar']) {
+        $zeilen[] = vw_pruefzeile(0, vw_t('TEST.F_BREMSE'), vw_t('TEST.A_BREMSE_UNLESBAR'));
+    } elseif ($vw_br['stufe'] > 0 && $vw_br['bis'] > time()) {
+        $zeilen[] = vw_pruefzeile(0, vw_t('TEST.F_BREMSE'), sprintf(vw_t('TEST.A_BREMSE_PAUSE'),
+            $vw_br['folge'], date('d.m.Y H:i', $vw_br['bis']), $vw_br['stufe'], $vw_br['stufen']));
+    } elseif ($vw_br['stufe'] > 0) {
+        $zeilen[] = vw_pruefzeile(0, vw_t('TEST.F_BREMSE'), sprintf(vw_t('TEST.A_BREMSE_ABGELAUFEN'),
+            $vw_br['folge'], $vw_br['stufe'], $vw_br['stufen']));
+    } else {
+        $zeilen[] = vw_pruefzeile($vw_br['folge'] > 0 ? 0 : 1, vw_t('TEST.F_BREMSE'),
+            sprintf(vw_t('TEST.A_BREMSE_FOLGE'), $vw_br['folge']));
+    }
 
     $pid = vw_dienst_pid();
     /* Ein BEWUSST angehaltener Dienst ist eine gewollte Lage: grauer Punkt, kein
@@ -410,6 +445,13 @@ function vw_pruefungen($netz = true)
     // Zum Schluss: wie viele Striche stehen in dieser Liste? Ein Strich ist
     // ausdruecklich kein Haken - wer ihn beim Ueberfliegen wie einen
     // einsammelt, hat eine Pruefung weniger, als er glaubt.
+    /* Gemeinsames Uhrmodul (Frage 95): Systemuhr gegen die Kopfzeile Date der Cloud - nur melden. */
+    list($uhr_s, $uhr_t) = uhr_pruefzeile(array('ordner' => $p['datadir'], 'dienst' => 'Volkswagen', 't' => 'vw_t'));
+    $uhr_z = vw_pruefzeile($uhr_s === 1 ? 1 : -1, htmlspecialchars(uhr_frage(array('t' => 'vw_t')), ENT_QUOTES, 'UTF-8'),
+        htmlspecialchars($uhr_t, ENT_QUOTES, 'UTF-8'));
+    $uhr_z['uhr'] = $uhr_s;
+    $zeilen[] = $uhr_z;
+
     $striche = 0;
     foreach ($zeilen as $z2) {
         if ($z2['stand'] === -1) {

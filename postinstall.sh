@@ -147,6 +147,20 @@ mkdir -p "$PDATA" "$PLOG" "$PCONFIG" "$PDATA/befehle" "$PDATA/antworten" || {
 }
 chmod 755 "$PDATA" "$PLOG" "$PCONFIG" 2>/dev/null
 
+# 0.9.50: die festgenagelten Fassungen fuer den Reiter Test hinterlegen. Er
+# vergleicht die installierte Portal-Bibliothek mit PORTAL, ohne die Zahl selbst
+# zu kennen - eine Quelle, diese Datei. postinstall.sh liegt nach der
+# Installation nicht mehr auf dem Geraet, deshalb eine Datei im Datenordner.
+# Ein Fehlschlag bricht nichts ab; der Reiter Test sagt dann "nicht hinterlegt".
+if printf '{"kern":"%s","connector":"%s","portal":"%s"}\n' "$KERN" "$CONNECTOR" "$PORTAL" \
+        > "$PDATA/bibliothek_soll.json.tmp" 2>/dev/null \
+   && mv -f "$PDATA/bibliothek_soll.json.tmp" "$PDATA/bibliothek_soll.json" 2>/dev/null; then
+    chmod 644 "$PDATA/bibliothek_soll.json" 2>/dev/null
+else
+    rm -f "$PDATA/bibliothek_soll.json.tmp" 2>/dev/null
+    echo "<INFO> Die Sollfassungen der Bibliotheken liessen sich nicht hinterlegen; der Reiter Test vergleicht dann nicht."
+fi
+
 # ---------- Konfiguration ----------
 [ -f "$PCONFIG/vw.json" ] || echo '{}' > "$PCONFIG/vw.json"
 if [ ! -f "$PCONFIG/zugang.json" ]; then

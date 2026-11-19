@@ -26,6 +26,7 @@ Aufrufe:
 from __future__ import annotations
 
 import json
+import uhrabgleich  # gemeinsames Uhrmodul (Frage 95), Abschrift bin/uhrabgleich.py
 import logging
 import math
 import os
@@ -1043,6 +1044,13 @@ def grund_von(err: Exception) -> str:
         return "KONTINGENT"
     if name in ("AuthenticationError", "TemporaryAuthenticationError"):
         return "ANMELDUNG"
+    # 0.9.50 (Entscheidung 18.11.2026, Nr. 89): auch der Anmeldefehler der
+    # Portal-Bibliothek (AuthError) und die Anmeldepause der eigenen Bremse
+    # heissen ANMELDUNG - dieselbe Bedeutung wie bisher fuer die App-Anmeldung.
+    # Bis 0.9.49 fiel AuthError unten auf UNBEKANNT; UNBEKANNT bleibt
+    # fuer alles, was keiner Art zugeordnet ist.
+    if name in ("AuthError", "AnmeldePause"):
+        return "ANMELDUNG"
     if name == "APICompatibilityError":
         return "SCHNITTSTELLE"
     if name == "ConfigurationError":
@@ -1108,11 +1116,170 @@ def portal_anmeldefehler(inhalt: str) -> str:
             "das Plugin sie nicht in Ihrem Namen an." + meldung)
 
 
+# ---------------------------------------------------------------------------
+# Bremse fuer Anmeldeversuche (0.9.50, Entscheidung 18.11.2026, Nr. 90)
+#
+# Weist Volkswagen die Anmeldung ab, versuchte es der Dienst bis 0.9.49 ohne
+# Pause wieder: mit der App-Anmeldung scheitert schon das Einrichten der
+# Bibliothek, der Dienst endet, und der Waechter (cron.01min) startet ihn jede
+# Minute neu - jeder Start eine Anmeldung, rund 1440 am Tag. Mit dem Portal
+# rief vw.py cc.fetch_all() je Takt (900 s) selbst auf; die gestufte Wartezeit
+# der Portal-Bibliothek (connector.py: AUTH_BACKOFF, Bibliothek Issue #49)
+# gilt nur in deren eigenem Abrufkreislauf, den das Plugin nicht benutzt.
+# Viele abgewiesene Anmeldungen koennen ein Konto sperren lassen; deshalb ist
+# die Bremse ab Werk an und hat keinen Schalter.
+#
+# Gezaehlt werden nur ABWEISUNGEN (anmeldung_abgewiesen()), nicht Netz- oder
+# voruebergehende Stoerungen. Nach BREMSE_SCHWELLE Abweisungen in Folge ruht
+# die Anmeldung BREMSE_PAUSEN[0] Sekunden, jede weitere Abweisung danach eine
+# Stufe laenger, hoechstens die letzte. Zurueck auf null: nach einem
+# gelungenen Abruf (bremse_erfolg()) und wenn die Oberflaeche Zugangsdaten neu
+# speichert (vw_zugang_speichern() loescht die Datei). Der Zustand steht in
+# einer Datei (0600) und gilt nur fuer die Quelle, unter der er entstand.
+# ---------------------------------------------------------------------------
+DATEI_ANMELDEBREMSE = PDATA / "anmeldebremse.json"
+BREMSE_SCHWELLE = 3
+BREMSE_PAUSEN = (900, 3600, 21600)
+
+
+class AnmeldePause(Exception):
+    """Der Abruf unterbleibt, weil die Bremse ruht (keine Anmeldung, kein Netz)."""
+
+
+def anmeldung_abgewiesen(err: Exception) -> bool:
+    """True, wenn Volkswagen die Anmeldung abgewiesen hat (zaehlt fuer die Bremse).
+
+    App-Weg: AuthenticationError des Kerns, ausser fehlenden Zugangsdaten und
+    der netrc-Datei (beides keine Anmeldung). Portal: AuthError der Bibliothek,
+    ausser der Stoerung des Anmeldedienstes ("not a credentials problem").
+    TemporaryAuthenticationError und Netzfehler zaehlen nicht.
+    """
+    name = type(err).__name__
+    klein = (str(err) or name).lower()
+    if name == "AuthenticationError":
+        return "netrc" not in klein and "not provided" not in klein
+    if name == "AuthError":
+        return "unavailable" not in klein and "not a credentials problem" not in klein
+    return False
+
+
+def bremse_schreiben(b: dict) -> None:
+    dauer = BREMSE_PAUSEN[b["stufe"] - 1] if b["stufe"] > 0 else 0
+    json_schreiben(DATEI_ANMELDEBREMSE, {
+        "quelle": b["quelle"], "folge": b["folge"], "stufe": b["stufe"],
+        "stufen": len(BREMSE_PAUSEN), "seit": b["seit"], "dauer": dauer,
+        "bis": b["seit"] + dauer if dauer else 0}, 0o600)
+
+
+def bremse_lesen(quelle: str, jetzt: float | None = None) -> dict:
+    """Der Stand der Bremse fuer diese Quelle: folge, stufe, seit.
+
+    Eine Datei, die da ist, sich aber nicht deuten laesst, gilt als erste
+    Stufe ab jetzt - ein Schutz faellt geschlossen aus. Liegt der Beginn in
+    der Zukunft (Uhr zurueckgestellt), beginnt die Pause jetzt; sonst waere sie
+    um die Verstellung laenger und im Grenzfall endlos.
+    """
+    jetzt = int(time.time() if jetzt is None else jetzt)
+    leer = {"quelle": quelle, "folge": 0, "stufe": 0, "seit": 0}
+    if not DATEI_ANMELDEBREMSE.exists():
+        return leer
+    d = json_lesen(DATEI_ANMELDEBREMSE)
+    q = d.get("quelle")
+    if q in ("weconnect", "portal") and q != quelle:
+        return leer   # entstanden unter der anderen Quelle, mit anderen Zugangsdaten
+    folge, stufe, seit = ganz(d.get("folge"), -1), ganz(d.get("stufe"), -1), ganz(d.get("seit"), -1)
+    if q != quelle or folge < 0 or not 0 <= stufe <= len(BREMSE_PAUSEN) or seit < 0:
+        b = {"quelle": quelle, "folge": max(folge, BREMSE_SCHWELLE), "stufe": 1, "seit": jetzt}
+        bremse_schreiben(b)
+        _LOG.warning("Die Datei der Anmeldebremse liess sich nicht deuten; zum Schutz des Kontos "
+                     "ruht die Anmeldung jetzt %d Minuten.", BREMSE_PAUSEN[0] // 60)
+        return b
+    if seit > jetzt:
+        seit = jetzt
+        bremse_schreiben({"quelle": quelle, "folge": folge, "stufe": stufe, "seit": seit})
+    return {"quelle": quelle, "folge": folge, "stufe": stufe, "seit": seit}
+
+
+def bremse_rest(b: dict, jetzt: float | None = None) -> int:
+    """Sekunden, die die Anmeldung noch ruht; 0 = es darf angemeldet werden."""
+    if b.get("stufe", 0) <= 0:
+        return 0
+    jetzt = time.time() if jetzt is None else jetzt
+    return max(0, int(b["seit"] + BREMSE_PAUSEN[b["stufe"] - 1] - jetzt))
+
+
+def bremse_text(b: dict, jetzt: float | None = None) -> str:
+    jetzt = time.time() if jetzt is None else jetzt
+    bis = datetime.fromtimestamp(jetzt + bremse_rest(b, jetzt)).strftime("%d.%m.%Y %H:%M")
+    return ("Anmeldepause: %d Abweisungen in Folge; naechster Anmeldeversuch nicht vor %s "
+            "(Stufe %d von %d). Zurueckgesetzt wird sie, wenn im Reiter Einstellungen die "
+            "Zugangsdaten neu eingetragen und gespeichert werden, und nach dem naechsten "
+            "gelungenen Abruf." % (b["folge"], bis, b["stufe"], len(BREMSE_PAUSEN)))
+
+
+def bremse_fehlschlag(quelle: str, jetzt: float | None = None) -> dict:
+    """Eine Abweisung zaehlen; eine Protokollzeile nur, wenn die Stufe wechselt."""
+    jetzt = int(time.time() if jetzt is None else jetzt)
+    b = bremse_lesen(quelle, jetzt)
+    alt = b["stufe"]
+    b["folge"] += 1
+    if alt > 0:
+        b["stufe"] = min(alt + 1, len(BREMSE_PAUSEN))
+        b["seit"] = jetzt
+    elif b["folge"] >= BREMSE_SCHWELLE:
+        b["stufe"] = 1
+        b["seit"] = jetzt
+    bremse_schreiben(b)
+    if b["stufe"] != alt:
+        _LOG.warning("Anmeldung %d-mal in Folge abgewiesen. Zum Schutz des Kontos vor einer Sperre "
+                     "ruht die Anmeldung %d Minuten (Stufe %d von %d). %s",
+                     b["folge"], BREMSE_PAUSEN[b["stufe"] - 1] // 60, b["stufe"],
+                     len(BREMSE_PAUSEN), bremse_text(b, jetzt))
+    return b
+
+
+def bremse_erfolg(quelle: str) -> None:
+    """Nach einem gelungenen Abruf: die Bremse zurueck auf null (Datei weg)."""
+    if not DATEI_ANMELDEBREMSE.exists():
+        return
+    b = bremse_lesen(quelle)
+    try:
+        DATEI_ANMELDEBREMSE.unlink()
+    except OSError as err:
+        _LOG.warning("Die Datei der Anmeldebremse liess sich nicht entfernen: %s", err)
+        return
+    if b["stufe"] > 0:
+        _LOG.info("Anmeldung wieder gelungen; die Anmeldebremse ist zurueckgesetzt.")
+
+
+def anmeldepause_abwarten(cfg: dict, quelle: str) -> bool:
+    """Vor dem Einrichten der Bibliothek: warten, bis die Pause vorbei ist.
+
+    Je Takt geht ein Lebenszeichen mit ok=0 und dem Grund ANMELDUNG hinaus
+    (frueh_abbrechen() schreibt Abbild und Zustand, ohne zu protokollieren).
+    True = jetzt anmelden; False = der Dienst soll enden (Signal).
+    """
+    naechst = 0.0
+    while _LAUF:
+        b = bremse_lesen(quelle)
+        rest = bremse_rest(b)
+        if rest <= 0:
+            return True
+        jetzt = time.time()
+        if jetzt >= naechst:
+            frueh_abbrechen(cfg, "ANMELDUNG", bremse_text(b, jetzt))
+            naechst = jetzt + takt_wirksam(cfg)
+        time.sleep(min(5, rest))
+    return False
+
+
 def fehlertext(err: Exception) -> str:
     name = type(err).__name__
     inhalt = str(err) or name
     klein = inhalt.lower()
 
+    if name in ("AnmeldePause",):
+        return inhalt
     if name in ("TooManyRequestsError",):
         return ("Volkswagen hat wegen zu vieler Anfragen abgewiesen. Den Takt in den "
                 "Einstellungen vergroessern; unter 300 Sekunden ist erfahrungsgemaess zu dicht.")
@@ -4739,18 +4906,44 @@ def dienst(einmal: bool = False) -> int:
               takt_wirksam(cfg),
               "ein" if cfg.get("steuerung_ein") else "aus")
 
-    try:
-        # tokenstore_file: die Bibliothek legt hier ihre Anmeldemarken ab und
-        # spart sich damit bei jedem Start eine neue Anmeldung. Die Datei
-        # bekommt deshalb die Rechte 0600.
-        cc = CarConnectivity(config=bibliothek_config(z, cfg),
-                             tokenstore_file=str(DATEI_TOKEN),
-                             cache_file=str(DATEI_ZWISCHEN))
-    except Exception as err:  # noqa: BLE001
-        meldung = fehlertext(err)
-        _LOG.error("Die Bibliothek liess sich nicht einrichten: %s", meldung)
-        frueh_abbrechen(cfg, grund_von(err), meldung)
-        return 1
+    while True:
+        # 0.9.50: ruht die Anmeldebremse, wartet der Dienst hier, statt sich
+        # anzumelden - lebend, damit der Waechter ihn nicht jede Minute neu
+        # startet, und mit Lebenszeichen je Takt (anmeldepause_abwarten()).
+        b = bremse_lesen(quelle_start)
+        if bremse_rest(b) > 0:
+            if einmal:
+                # Ein Einzellauf (--einmal) wartet nicht: er nennt die Pause und endet.
+                frueh_abbrechen(cfg, "ANMELDUNG", bremse_text(b))
+                return 1
+            if not anmeldepause_abwarten(cfg, quelle_start):
+                return 0
+            z = zugang()   # waehrend der Pause koennen neue Zugangsdaten gekommen sein
+            continue
+        try:
+            # tokenstore_file: die Bibliothek legt hier ihre Anmeldemarken ab und
+            # spart sich damit bei jedem Start eine neue Anmeldung. Die Datei
+            # bekommt deshalb die Rechte 0600.
+            # Uhrmodul (Frage 95, Entscheidung 104): requests.Session.send nur lesend umhuellen; Hosts gemessen
+            # 19.11.2026 in carconnectivity-connector-volkswagen 0.10.6 / vw-eu-data-act 0.3.5.
+            uhrabgleich.uhr_requests_ueberall(str(PDATA), ("vwgroup.io", "cariad.digital", "vwgroup-datahub.com"))
+            cc = CarConnectivity(config=bibliothek_config(z, cfg),
+                                 tokenstore_file=str(DATEI_TOKEN),
+                                 cache_file=str(DATEI_ZWISCHEN))
+        except Exception as err:  # noqa: BLE001
+            meldung = fehlertext(err)
+            pause = False
+            if anmeldung_abgewiesen(err):
+                b = bremse_fehlschlag(quelle_start)
+                pause = bremse_rest(b) > 0
+                if pause:
+                    meldung = meldung + " " + bremse_text(b)
+            _LOG.error("Die Bibliothek liess sich nicht einrichten: %s", meldung)
+            frueh_abbrechen(cfg, grund_von(err), meldung)
+            if pause and not einmal:
+                continue
+            return 1
+        break
     rechte_sichern()
 
     stand: dict = stand_vorbelegen()
@@ -4786,14 +4979,23 @@ def dienst(einmal: bool = False) -> int:
             ok = 0
             fehler = ""
             grund = "OK"
+            # 0.9.50 (Nr. 100): war dieser Durchgang ein Fall der Anmeldebremse
+            # (Abweisung oder Pause)? Dann gilt unten nicht die Verlaengerung des Takts.
+            anmeldefall = False
             fahrzeuge: dict[str, dict] = {}
             entfernt: list = []
             try:
                 # Mit Wecker: ohne ihn haelt ein Server, der die Verbindung
                 # annimmt und dann schweigt, den ganzen Dienst an - samt
                 # Befehlswarteschlange, die im selben Ablauf abgearbeitet wird.
+                # 0.9.50: ruht die Anmeldebremse, unterbleibt der Abruf (keine
+                # Anmeldung); Befehle, MQTT und Lebenszeichen laufen weiter.
+                bremse = bremse_lesen(quelle_start)
+                if bremse_rest(bremse) > 0:
+                    raise AnmeldePause(bremse_text(bremse))
                 with Zeitgrenze(GRENZE_ABRUF, "Der Abruf bei Volkswagen"):
                     cc.fetch_all()
+                bremse_erfolg(quelle_start)
                 garage = cc.get_garage()
                 neu = list(garage.list_vehicles()) if garage is not None else []
                 neu.sort(key=lambda f: str(wert(getattr(f, "vin", None)) or ""))
@@ -4852,7 +5054,15 @@ def dienst(einmal: bool = False) -> int:
                 fehler = fehlertext(err)
                 grund = grund_von(err)
                 fehler_folge += 1
-                melde_gebremst("abruf", f"Abruf fehlgeschlagen: {fehler}", 900)
+                anmeldefall = isinstance(err, AnmeldePause) or anmeldung_abgewiesen(err)
+                if anmeldung_abgewiesen(err):
+                    b = bremse_fehlschlag(quelle_start)
+                    if bremse_rest(b) > 0:
+                        fehler = fehler + " " + bremse_text(b)
+                # Waehrend der Pause keine Zeile je Takt: die Stufe hat ihre
+                # Zeile schon beim Wechsel bekommen (bremse_fehlschlag()).
+                if not isinstance(err, AnmeldePause):
+                    melde_gebremst("abruf", f"Abruf fehlgeschlagen: {fehler}", 900)
 
             if ok and fahrzeuge:
                 # Nummern, die der letzte Stand kannte und die ein GELUNGENER
@@ -4888,7 +5098,12 @@ def dienst(einmal: bool = False) -> int:
                 return 0 if ok else 1
 
             rest = takt_wirksam(cfg)
-            if fehler_folge >= 3:
+            # 0.9.50 (Nr. 100): fuer Anmeldefehler ersetzt die Anmeldebremse diese
+            # Verlaengerung; bis 0.9.49 (und mit der Bremse bis zur Entscheidung vom
+            # 19.11.2026) stieg der Takt nach drei Fehlversuchen auch dort, mit dem
+            # Portal wurde aus der ersten Pause von 900 s so 2700 s. Fuer alle anderen
+            # Fehler bleibt sie.
+            if fehler_folge >= 3 and not anmeldefall:
                 rest = min(3600, takt_wirksam(cfg) * min(8, fehler_folge))
                 melde_gebremst("bremse",
                                f"{fehler_folge} Fehlversuche - naechster Abruf erst in {rest} s.",

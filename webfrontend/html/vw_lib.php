@@ -32,6 +32,7 @@ require_once __DIR__ . '/sprachausgabe.php';
  * Hausherrn 12.11.2026): Einstellungen sichern und zurueckspielen nach denselben Regeln wie in den
  * anderen Linien. Die Beschreibung dieser Linie steht in vw_sicherung_beschreibung(). */
 require_once __DIR__ . '/sicherung.php';
+require_once __DIR__ . '/uhrabgleich.php';   // gemeinsames Uhrmodul (Frage 95), Abschrift von Werkzeuge/gemeinsam/uhrabgleich.php
 
 
 /* Den LoxBerry-Wurzelordner ohne festen Systempfad bestimmen.
@@ -983,7 +984,56 @@ function vw_zugang_speichern($email, $passwort, $spin, $portal_email = null, $po
         @unlink($tmp);
         return false;
     }
+    /* 0.9.50: neue Zugangsdaten setzen die Anmeldebremse des Dienstes zurueck
+     * (bin/vw.py, bremse_*). Neu heisst: ein Passwort ist eingetragen - auch
+     * dasselbe wie vorher, etwa nachdem im Browser Bedingungen angenommen
+     * wurden - oder ein Benutzername hat sich geaendert. Ein Speichern der
+     * Einstellungen mit leerem Passwortfeld setzt nichts zurueck. */
+    $alt_email = isset($alt['email']) ? (string) $alt['email'] : '';
+    $alt_pe = isset($alt['portal_email']) ? (string) $alt['portal_email'] : '';
+    if (($passwort !== null && $passwort !== '') || ($portal_passwort !== null && $portal_passwort !== '')
+        || (string) $neu['email'] !== $alt_email || (string) $pe !== $alt_pe) {
+        vw_anmeldebremse_loeschen();
+    }
     return true;
+}
+
+/** 0.9.50: Pfad der Datei, in der der Dienst seine Anmeldebremse fuehrt (0600). */
+function vw_anmeldebremse_datei()
+{
+    return vw_paths()['datadir'] . '/anmeldebremse.json';
+}
+
+/**
+ * 0.9.50: Stand der Anmeldebremse fuer den Reiter Test, oder null ohne Datei.
+ * Rueckgabe array('lesbar' => bool, 'quelle', 'folge', 'stufe', 'stufen', 'bis').
+ * Gedeutet wird nur zur Anzeige; ob angemeldet wird, entscheidet der Dienst.
+ */
+function vw_anmeldebremse()
+{
+    $f = vw_anmeldebremse_datei();
+    if (!is_file($f)) {
+        return null;
+    }
+    $d = vw_json_lesen($f);
+    $zahl = function ($k) use ($d) {
+        return (isset($d[$k]) && is_int($d[$k]) && $d[$k] >= 0) ? $d[$k] : -1;
+    };
+    $erg = array('lesbar' => true, 'quelle' => isset($d['quelle']) ? (string) $d['quelle'] : '',
+                 'folge' => $zahl('folge'), 'stufe' => $zahl('stufe'), 'stufen' => $zahl('stufen'),
+                 'bis' => $zahl('bis'));
+    if (!in_array($erg['quelle'], array('weconnect', 'portal'), true) || $erg['folge'] < 0
+        || $erg['stufe'] < 0 || $erg['stufen'] < 1 || $erg['bis'] < 0) {
+        $erg['lesbar'] = false;
+    }
+    return $erg;
+}
+
+/** 0.9.50: die Anmeldebremse zuruecksetzen (Datei weg). */
+function vw_anmeldebremse_loeschen()
+{
+    $f = vw_anmeldebremse_datei();
+    return !is_file($f) || @unlink($f);
 }
 
 /**
@@ -1011,6 +1061,7 @@ function vw_zugang_loeschen()
     $ok = true;
     $dateien = array($p['zugang'], $p['zugang_sicherung'],
                      $p['datadir'] . '/token.json');
+    vw_anmeldebremse_loeschen();   // 0.9.50: ohne Zugangsdaten keine Bremse
     foreach ($dateien as $f) {
         if (!is_file($f)) {
             continue;

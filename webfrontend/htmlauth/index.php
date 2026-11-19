@@ -910,6 +910,29 @@ if ($vw_post && isset($_POST['test'])) {
     }
     $vw_tab = 'tab-test';
 }
+/* ---------------- Anmeldebremse von Hand aufheben (0.9.50, Nr. 99) ----------------
+ * Nur mit gesetztem Haken (Rueckfrage ohne Skript); Formulartoken wie alle Knoepfe
+ * (Wachposten oben). Wirkung: anmeldebremse.json ist weg - danach nachgesehen, nicht
+ * nur der Rueckgabewert. Der Dienst liest die Datei vor jeder Anmeldung neu. */
+if ($vw_post && isset($_POST['bremse_aufheben'])) {
+    $vw_br_vor = vw_anmeldebremse();
+    if (empty($_POST['bremse_bestaetigt'])) {
+        $vw_stoerungen[] = vw_e(vw_t('TEST.M_BREMSE_BESTAETIGEN'));
+    } elseif ($vw_br_vor === null) {
+        $vw_meldungen[] = vw_e(vw_t('TEST.M_BREMSE_KEINE'));
+    } else {
+        vw_anmeldebremse_loeschen();
+        clearstatcache(true, vw_anmeldebremse_datei());
+        if (is_file(vw_anmeldebremse_datei())) {
+            $vw_stoerungen[] = vw_e(vw_t('TEST.M_BREMSE_FEHLER'));
+        } else {
+            vw_log_zeile(sprintf('Anmeldebremse: Pause von Hand aufgehoben (Reiter Test; vorher Stufe %d, %d Abweisungen in Folge).',
+                max(0, (int) $vw_br_vor['stufe']), max(0, (int) $vw_br_vor['folge'])));
+            $vw_meldungen[] = vw_e(vw_t('TEST.M_BREMSE_AUFGEHOBEN'));
+        }
+    }
+    $vw_tab = 'tab-test';
+}
 /* ---------------- Testansage (Nr. 36 b, seit 0.9.29) ----------------
  * Spricht den Pruefsatz des Moduls ueber die eingestellte Ausgabeart - unabhaengig
  * von den Anlaessen. Ins Protokoll nur die Kurzform ohne Text und Token. F5 nach dem
@@ -2548,7 +2571,8 @@ function vw_bausteinseiten()
 <tr><th style="width:36px;">&nbsp;</th><th><?= vw_e(vw_t('TEST.T_FRAGE')) ?></th><th><?= vw_e(vw_t('TEST.T_BEFUND')) ?></th></tr>
 <?php foreach (vw_pruefungen($vw_tab === 'tab-test') as $vw_z) { ?>
 <tr><td style="text-align:center;"><?php
-    if ($vw_z['stand'] === 1) { echo '<span class="sm-an">&#10004;</span>'; }
+    if (isset($vw_z['uhr'])) { echo uhr_zeichen($vw_z['uhr']); }
+    elseif ($vw_z['stand'] === 1) { echo '<span class="sm-an">&#10004;</span>'; }
     elseif ($vw_z['stand'] === 0) { echo '<span class="sm-aus">&#10008;</span>'; }
     else { echo '<span style="color:#888;">&#9679;</span>'; }
 ?></td><td><?= $vw_z['frage'] ?></td><td><?= $vw_z['antwort'] ?></td></tr>
@@ -2580,6 +2604,22 @@ function vw_bausteinseiten()
 </div>
 <?php if ($vw_testausgabe !== '') { ?>
 <div class="sm-pre"><?= vw_e($vw_testausgabe) ?></div>
+<?php } ?>
+
+<?php if (vw_anmeldebremse() !== null) { /* 0.9.50 (Nr. 99): nur, wenn eine Bremse liegt */ ?>
+<h3><?= vw_e(vw_t('TEST.H_BREMSE')) ?></h3>
+<p class="sm-hilfe"><?= vw_e(vw_t('TEST.BREMSE_TEXT')) ?></p>
+<div class="sm-knopfreihe">
+  <form action="index.php" method="post">
+    <input data-role="none" type="hidden" name="activetab" value="tab-test">
+    <?= vw_formfeld($vw_cfg) ?>
+    <label style="display:inline-flex;align-items:center;gap:8px;">
+      <input data-role="none" type="checkbox" name="bremse_bestaetigt" value="1">
+      <?= vw_e(vw_t('TEST.L_BREMSE_BESTAETIGT')) ?>
+    </label>
+    <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="bremse_aufheben" value="1"><?= vw_e(vw_t('TEST.K_BREMSE_AUFHEBEN')) ?></button>
+  </form>
+</div>
 <?php } ?>
 
 <h3><?= vw_e(vw_t('TEST.H_ANSAGE')) ?></h3>
