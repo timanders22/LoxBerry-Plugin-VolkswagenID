@@ -20,6 +20,10 @@ Plug-in-Hybrid führt das Plugin beide.
 > gegen Attrappen, sondern gegen **echte Objekte der Bibliothek**. Deshalb
 > 0.9.x und nicht 1.0.0, und deshalb sind schreibende Befehle ab Werk gesperrt.
 
+## Neu in 0.9.51
+
+- Die Kopfzeile zeigt jetzt die installierte Fassung, einheitlich in allen Plugins.
+
 ## Neu in 0.9.50
 
 - **Neu – Anmeldebremse, ab Werk an:** Weist Volkswagen die Anmeldung dreimal in Folge ab, ruht die Anmeldung 15 Minuten; jede weitere Abweisung danach verlängert die Pause auf eine Stunde und dann auf höchstens sechs Stunden. Gilt für die App-Schnittstelle und für das EU-Data-Act-Portal. Gezählt werden nur Abweisungen der Anmeldung, nicht Netzstörungen, vorübergehende Störungen des Anmeldedienstes oder fehlende Zugangsdaten. Zurückgesetzt wird die Bremse nach dem nächsten gelungenen Abruf und wenn im Reiter *Einstellungen* ein Passwort eingetragen und gespeichert wird (auch dasselbe, etwa nachdem im Browser Nutzungsbedingungen angenommen wurden) oder sich ein Benutzername ändert; *Zugangsdaten löschen* entfernt sie ebenfalls. Liegt eine Bremse vor, zeigt der Reiter *Test* den Knopf *Pause aufheben*; er wirkt nur mit dem Haken *Ja, die Pause aufheben*, entfernt `anmeldebremse.json` und schreibt die Protokollzeile „Anmeldebremse: Pause von Hand aufgehoben“. Weist Volkswagen danach erneut dreimal ab, beginnt die Bremse von vorn. Der Zustand steht in `anmeldebremse.json` im Datenordner (Rechte 0600) und gilt nur für die Datenquelle, unter der er entstand. Während der Pause läuft der Dienst weiter (Lebenszeichen, Befehlswarteschlange, MQTT) und meldet `ok=0` mit dem Grund `ANMELDUNG` und dem Ende der Pause; ins Protokoll kommt eine Zeile je Stufenwechsel und eine, wenn die Anmeldung wieder gelingt, keine je Takt. Der Reiter *Test* zeigt die Lage in der neuen Zeile *Darf sich der Dienst anmelden (Anmeldebremse)?*.

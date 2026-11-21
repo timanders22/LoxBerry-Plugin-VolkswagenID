@@ -67,7 +67,8 @@ if ($vw_p['home'] !== '' && is_file($vw_p['home'] . '/libs/phplib/loxberry_syste
  * weil beide schreiben koennen. */
 if (vw_upgrade_laeuft()) {
     if (class_exists('LBWeb', false)) {
-        LBWeb::lbheader('Volkswagen ID', 'https://wiki.loxberry.de/', 'help.html');
+        require_once __DIR__ . '/fassung.php';   // Fassung im Titel: gemeinsames Stueck fassung.php (21.11.2026)
+        LBWeb::lbheader(plugin_kopftitel('Volkswagen ID', __DIR__), 'https://wiki.loxberry.de/', 'help.html');
     }
     echo '<div class="sm-wrap" style="max-width:980px;margin:0 auto;'
        . 'font-family:-apple-system,\'Segoe UI\',Roboto,sans-serif;color:#333;">' . "\n"
@@ -1045,7 +1046,8 @@ $vw_logzeilen = is_file($vw_p['log']) ? vw_log_ende($vw_p['log'], 400) : array()
 $vw_rahmen = class_exists('LBWeb', false);
 
 if ($vw_rahmen) {
-    LBWeb::lbheader('Volkswagen ID', 'https://wiki.loxberry.de/', 'help.html');
+    require_once __DIR__ . '/fassung.php';   // Fassung im Titel: gemeinsames Stueck fassung.php (21.11.2026)
+    LBWeb::lbheader(plugin_kopftitel('Volkswagen ID', __DIR__), 'https://wiki.loxberry.de/', 'help.html');
 }
 
 ?>
