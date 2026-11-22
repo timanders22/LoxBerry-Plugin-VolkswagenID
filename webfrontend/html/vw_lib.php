@@ -246,7 +246,8 @@ function vw_vorgaben()
         'ansage_kabel_vergessen' => 1,
         /* 0.9.44: Datenquelle. 'weconnect' (Volkswagen-App, bisheriger Weg) bleibt die Vorgabe;
          * 'portal' liest das EU-Data-Act-Portal von Volkswagen (nur lesend). Dieselben Werte wie
-         * VORGABEN in bin/vw.py. portal_marke: 'pkw' oder 'nutzfahrzeuge' (Anmeldung am Portal). */
+         * VORGABEN in bin/vw.py. portal_marke: 'pkw' oder 'nutzfahrzeuge' (Anmeldung am Portal), seit 0.9.53
+         * auch 'audi', 'cupra', 'seat', 'skoda' (PORTAL_MARKEN in bin/vw.py). */
         'quelle'                 => 'weconnect',
         'portal_marke'           => 'pkw',
         'tts'               => ansage_werk_block(),     // Stamm 1.3.2: ab Werk an, nur fuer einen nie gespeicherten Block
@@ -370,7 +371,7 @@ function vw_regeln()
         'ansage_kabel_vergessen' => array('schalt'),
         /* 0.9.44 */
         'quelle'                 => array('text', '#^(weconnect|portal)$#', 9),
-        'portal_marke'           => array('text', '#^(pkw|nutzfahrzeuge)$#', 13),
+        'portal_marke'           => array('text', '#^(pkw|nutzfahrzeuge|audi|cupra|seat|skoda)$#', 13),
         'aktionstoken'       => array('text', '#^[A-Za-z0-9_.\-]{0,64}$#', 64),
         'wartezeit'          => array('ganz', 0, 30),
         'wartezeit_endpunkt' => array('ganz', 0, 15),
@@ -408,7 +409,10 @@ function vw_wert_taugt($v)
  * Bereinigt heisst hier ausschliesslich: die Zahl als int oder float statt als
  * Zeichenkette. Es wird nichts gekappt und nichts zurechtgebogen - ein still
  * veraenderter Sollwert fuehrt zu einem Fahrzeug, das etwas anderes tut als
- * angezeigt.
+ * angezeigt. Das gilt seit 0.9.53 auch fuer Leerraum am Rand (Leerzeichen,
+ * Tabulator): ein solcher Text wird abgewiesen (Grund RAND). Bis 0.9.52 schnitt
+ * trim() ihn still ab und der beschnittene Wert galt ("pkw " -> "pkw"), entgegen
+ * dem Satz davor (gemessen 22.11.2026). Gegenstueck im Dienst: _als_text().
  */
 function vw_wert_pruefen($schluessel, $wert)
 {
@@ -420,7 +424,10 @@ function vw_wert_pruefen($schluessel, $wert)
         return array(false, null);
     }
     $r = $regeln[$schluessel];
-    $s = trim((string) $wert);
+    $s = (string) $wert;
+    if ($s !== trim($s)) {
+        return array(false, null);   // 0.9.53: Leerraum am Rand abweisen, nicht abschneiden
+    }
     switch ($r[0]) {
         case 'ganz':
             if (!preg_match('/^-?[0-9]+$/', $s)) {
@@ -478,6 +485,9 @@ function vw_wert_grund($schluessel, $wert)
     if (!isset($regeln[$schluessel]) || !vw_wert_taugt($wert)) {
         return array('FORM');
     }
+    if ((string) $wert !== trim((string) $wert)) {
+        return array('RAND');   // 0.9.53
+    }
     $r = $regeln[$schluessel];
     switch ($r[0]) {
         case 'ganz':
@@ -524,6 +534,9 @@ function vw_abgewiesen_saetze($lage)
                 break;
             case 'MUSTER':
                 $grund = vw_t('EINST.GRUND_MUSTER');
+                break;
+            case 'RAND':
+                $grund = vw_t('EINST.GRUND_RAND');   // 0.9.53
                 break;
             case 'TEMP':
                 $grund = vw_t('EINST.GRUND_TEMP');
@@ -3221,8 +3234,8 @@ function vw_sicherung_beschreibung()
         if (!isset($schluessel[$s])) { $schluessel[$s] = array(); }
         $schluessel[$s]['fehlt'] = 'behalten';
     }
-    /* Gespeichert wird der Wert, den vw_wert_pruefen() bereinigt (Zahl statt Zeichenkette, Leerraum am Rand
-     * weg) - derselbe wie bis 0.9.44. */
+    /* Gespeichert wird der Wert, den vw_wert_pruefen() bereinigt (Zahl statt Zeichenkette). Leerraum am Rand
+     * wird seit 0.9.53 abgewiesen, nicht mehr weggenommen (bis 0.9.52 still abgeschnitten). */
     foreach (array_keys(vw_regeln()) as $s) {
         if (!isset($schluessel[$s])) { $schluessel[$s] = array(); }
         $schluessel[$s]['wandeln'] = function ($w) use ($s) {

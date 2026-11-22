@@ -313,7 +313,8 @@ VORGABEN = {
     # 15 Minuten). Dieselben Schluessel und Werte wie in vw_vorgaben().
     "quelle": "weconnect",
     # Marke der Anmeldung am Portal: "pkw" = VOLKSWAGEN_PASSENGER_CARS,
-    # "nutzfahrzeuge" = VOLKSWAGEN_COMMERCIAL_VEHICLES (z. B. ID. Buzz).
+    # "nutzfahrzeuge" = VOLKSWAGEN_COMMERCIAL_VEHICLES (z. B. ID. Buzz); seit
+    # 0.9.53 (Issue #3) auch "audi", "cupra", "seat", "skoda" (PORTAL_MARKEN).
     "portal_marke": "pkw",
 }
 
@@ -370,7 +371,7 @@ MUSTER_TEXT = {
     "kabel_uhr": (r"([01][0-9]|2[0-3]):[0-5][0-9]", 5),
     # 0.9.44: Datenquelle und Marke am Portal - dieselben Muster wie vw_regeln()
     "quelle": (r"weconnect|portal", 9),
-    "portal_marke": (r"pkw|nutzfahrzeuge", 13),
+    "portal_marke": (r"pkw|nutzfahrzeuge|audi|cupra|seat|skoda", 13),
 }
 
 TAKT_MIN = 180
@@ -392,8 +393,18 @@ PORTAL_BIBLIOTHEK = "carconnectivity-connector-vw-eu-data-act"
 # (keine Anmeldung am Portal in dieser Fassung) - siehe README.
 PORTAL_LAND = "de"
 PORTAL_SPRACHE = "de"
+# 0.9.53 (Issue #3, Entscheidung des Hausherrn 22.11.2026): dazu Audi, Cupra, SEAT
+# und Skoda - die Schluessel, die die Bibliothek 0.3.5 in brands.py fuehrt (BRANDS;
+# Bentley bewusst nicht). Fuer SEAT und CUPRA steht dort dieselbe OIDC-Kennung mit
+# dem Vermerk des Autors, eine eigene SEAT-Kennung sei moeglich, aber nicht
+# geprueft. An einem Fahrzeug dieser vier Marken ist nichts gemessen; die
+# Abbildung der Felder ist auf die Datei eines Volkswagen gebaut.
 PORTAL_MARKEN = {"pkw": "VOLKSWAGEN_PASSENGER_CARS",
-                 "nutzfahrzeuge": "VOLKSWAGEN_COMMERCIAL_VEHICLES"}
+                 "nutzfahrzeuge": "VOLKSWAGEN_COMMERCIAL_VEHICLES",
+                 "audi": "AUDI",
+                 "cupra": "CUPRA",
+                 "seat": "SEAT",
+                 "skoda": "SKODA"}
 
 # Zustaende, die Loxone als Zahl braucht. Ein unbekannter Zustand wird zu None
 # (am Endpunkt ein Strich), NICHT zu 0 - eine 0 waere eine stille
@@ -656,7 +667,11 @@ def _als_text(wert):
         s = str(wert)
     if len(s) > 4096 or re.search(r"[\x00-\x08\x0A-\x1F\x7F]", s):
         return None
-    return s.strip()
+    # 0.9.53: Leerraum am Rand ist kein Wert - abgewiesen wie in vw_wert_pruefen() (PHP trim(): Leerzeichen,
+    # Tabulator, Zeilenenden, NUL, \x0B). Bis 0.9.52 stand hier s.strip(): der Wert wurde still beschnitten.
+    if s != s.strip(" \t\n\r\x00\x0b"):
+        return None
+    return s
 
 
 def _wert_pruefen(name: str, wert) -> tuple:
@@ -4173,7 +4188,26 @@ def kabel_nacht(cfg: dict, hm: str) -> bool:
     return (v <= hm < b) if v < b else (hm >= v or hm < b)
 
 
-def kabel_entscheiden(f: dict, m: dict, cfg: dict, abfahrt_in, jetzt: float, alter) -> tuple:
+def kabel_regeln_heute():
+    """0.9.53 (Entscheidung des Hausherrn 22.11.2026, Sprachmodul 1.5.0): die Nachtruhe fuer heute aus der Bruecke vw_ansage.php
+    (Frage regeln_heute; an Nicht-Schultagen mit dem spaeteren Ende) - der gemeinsame Weg ueber das Sprachmodul, kein
+    Nachbau hier. Rueckgabe (an, von, bis, nacht) oder None (dann gelten die Regeln, wie sie sind)."""
+    try:
+        e = subprocess.run(["php", str(SKRIPT_ANSAGE), PNAME], input=b'{"frage": "regeln_heute"}',
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=ANSAGE_FRIST_S, check=False)
+    except (OSError, subprocess.SubprocessError) as err:
+        melde_gebremst("kabel_regeln", "Kabel vergessen: die Bruecke vw_ansage.php war nicht aufrufbar (%s)." % type(err).__name__, 3600)
+        return None
+    for z in e.stdout.decode("ascii", "replace").splitlines():
+        if z.startswith("REGELN;"):
+            f = dict(t.split("=", 1) for t in z.strip().split(";")[1:] if "=" in t)
+            v, b = f.get("VON", ""), f.get("BIS", "")
+            if f.get("AN") in ("0", "1") and f.get("NACHT") in ("0", "1") and len(v) == 5 and v[2] == ":" and len(b) == 5 and b[2] == ":":
+                return (f["AN"] == "1", v, b, f["NACHT"] == "1")
+    return None
+
+
+def kabel_entscheiden(f: dict, m: dict, cfg: dict, abfahrt_in, jetzt: float, alter, heute=None) -> tuple:
     """Die Warnung "Kabel vergessen" (Form mg_kabel_entscheiden()): zu Hause, Kabel nicht gesteckt, Akku unter der
     Schwelle, Stand bis 12 h; abends (ab kabel_uhr), am Morgen nach der Nachtruhe oder wenn die Abfahrt naht.
     Unbekannt heisst nie warnen. Hoechstens einmal je Standzeit und Tag. In der Nachtruhe wird nichts verbraucht.
@@ -4194,11 +4228,18 @@ def kabel_entscheiden(f: dict, m: dict, cfg: dict, abfahrt_in, jetzt: float, alt
     hm, tag = time.strftime("%H:%M", z), time.strftime("%Y%m%d", z)
     if m.get("gesagt") or kabel_nacht(cfg, hm) or str(m.get("tag")) == tag:
         return (False, m)
+    an, _v, bis = kabel_regeln(cfg)
+    # 0.9.53: an Nicht-Schultagen endet die Nachtruhe spaeter. Am Vormittag fragt der Takt die Bruecke nach den Regeln
+    # fuer heute (heute(), hoechstens einmal je Takt); ohne Antwort gelten die Regeln, wie sie sind.
+    r = heute() if (heute is not None and an and hm < "12:00") else None
+    if r is not None:
+        if r[3]:
+            return (False, m)        # Nachtruhe nach den Regeln fuer heute: nichts verbraucht
+        bis = r[2]
     uhr = str(cfg.get("kabel_uhr") or "")
     if len(uhr) != 5 or uhr[2] != ":":
         uhr = "20:00"
     abends = hm >= uhr
-    an, _v, bis = kabel_regeln(cfg)
     morgen = an and hm < "12:00" and int(m["seit"]) < time.mktime(time.strptime(tag + " " + bis, "%Y%m%d %H:%M"))
     grenze = ganz(cfg.get("kabel_abfahrt_min"), 0)
     abfahrt = grenze > 0 and abfahrt_in is not None and 1 <= int(abfahrt_in) <= grenze
@@ -4219,11 +4260,18 @@ def kabel_takt(horcher, cfg: dict, stand: dict, jetzt: float) -> list:
     if ganz(cfg.get("kabel_abfahrt_min"), 0) > 0 and cfg.get("abfahrt_ein") and horcher is not None:
         in_min, _h = vorklima_minuten(horcher, cfg, jetzt)
     gewarnt = []
+    merk: dict = {}
+
+    def heute():
+        # 0.9.53: die Regeln fuer heute hoechstens einmal je Takt, erst wenn ein Fahrzeug sie braucht
+        if "r" not in merk:
+            merk["r"] = kabel_regeln_heute()
+        return merk["r"]
     for nr in sorted(fahrzeuge, key=lambda n: ganz(n, 0)):
         f = fahrzeuge[nr]
         if not isinstance(f, dict):
             continue
-        faellig, m = kabel_entscheiden(f, alt.get(str(nr)) or {}, cfg, in_min, jetzt, haus_fz_alter(f, stand, jetzt))
+        faellig, m = kabel_entscheiden(f, alt.get(str(nr)) or {}, cfg, in_min, jetzt, haus_fz_alter(f, stand, jetzt), heute)
         neu[str(nr)] = m
         if faellig:
             gewarnt.append(str(nr))

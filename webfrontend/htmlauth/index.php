@@ -1409,6 +1409,11 @@ if ($vw_k1_saetze) { ?>
   <select data-role="none" id="portal_marke" name="portal_marke"<?= vw_fm('portal_marke') ?>>
     <option value="pkw"<?= vw_fw('einst', 'portal_marke', (string) $vw_cfg['portal_marke']) === 'pkw' ? ' selected' : '' ?>><?= vw_e(vw_t('EINST.O_MARKE_PKW')) ?></option>
     <option value="nutzfahrzeuge"<?= vw_fw('einst', 'portal_marke', (string) $vw_cfg['portal_marke']) === 'nutzfahrzeuge' ? ' selected' : '' ?>><?= vw_e(vw_t('EINST.O_MARKE_NUTZ')) ?></option>
+<?php /* 0.9.53 (Issue #3): weitere Marken des Portals - dieselben Werte wie PORTAL_MARKEN in bin/vw.py. */ ?>
+    <option value="audi"<?= vw_fw('einst', 'portal_marke', (string) $vw_cfg['portal_marke']) === 'audi' ? ' selected' : '' ?>><?= vw_e(vw_t('EINST.O_MARKE_AUDI')) ?></option>
+    <option value="cupra"<?= vw_fw('einst', 'portal_marke', (string) $vw_cfg['portal_marke']) === 'cupra' ? ' selected' : '' ?>><?= vw_e(vw_t('EINST.O_MARKE_CUPRA')) ?></option>
+    <option value="seat"<?= vw_fw('einst', 'portal_marke', (string) $vw_cfg['portal_marke']) === 'seat' ? ' selected' : '' ?>><?= vw_e(vw_t('EINST.O_MARKE_SEAT')) ?></option>
+    <option value="skoda"<?= vw_fw('einst', 'portal_marke', (string) $vw_cfg['portal_marke']) === 'skoda' ? ' selected' : '' ?>><?= vw_e(vw_t('EINST.O_MARKE_SKODA')) ?></option>
   </select>
   <div class="sm-hilfe"><?= vw_t('EINST.H_PORTAL_MARKE') ?></div>
 </div>
