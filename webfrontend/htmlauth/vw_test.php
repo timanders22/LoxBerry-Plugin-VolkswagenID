@@ -188,6 +188,32 @@ function vw_pruefungen($netz = true)
                               : vw_t('TEST.A_KEINE_FAHRZEUGE')
                                 . ($beurteilen ? '' : ' &mdash; ' . vw_t('TEST.A_DIENST_AUS_GRAU')));
 
+    /* 0.9.55 (Issue #1): Liefert das Portal mehr als die Fahrgestellnummer?
+     * Die Bibliothek legt das Fahrzeug schon aus der Fahrzeugliste an; einen
+     * Datensatz gibt es erst, wenn im Portal ein fortlaufender Datenabruf
+     * eingerichtet ist. Der Dienst vermerkt das je Fahrzeug
+     * (portal_ohne_datensatz, abbild_portal() in vw.py). Fehlt der Vermerk,
+     * hat der Dienst seit der Aktualisierung noch nicht abgerufen: grau. */
+    if ($portal_an && $fahrzeuge) {
+        $vw_ohne = array();
+        $vw_offen = 0;
+        foreach ($fahrzeuge as $nr => $f) {
+            if (!is_array($f) || !array_key_exists('portal_ohne_datensatz', $f)) {
+                $vw_offen++;
+            } elseif (!empty($f['portal_ohne_datensatz'])) {
+                $vw_ohne[] = (string) $nr;
+            }
+        }
+        if ($vw_ohne) {
+            $zeilen[] = vw_pruefzeile($beurteilen ? 0 : -1, vw_t('TEST.F_PORTAL_DATEN'),
+                sprintf(vw_t('TEST.A_PORTAL_DATEN_NEIN'), vw_e(implode(', ', $vw_ohne))));
+        } elseif ($vw_offen > 0) {
+            $zeilen[] = vw_pruefzeile(-1, vw_t('TEST.F_PORTAL_DATEN'), vw_t('TEST.A_PORTAL_DATEN_OFFEN'));
+        } else {
+            $zeilen[] = vw_pruefzeile(1, vw_t('TEST.F_PORTAL_DATEN'), vw_t('TEST.A_PORTAL_DATEN_JA'));
+        }
+    }
+
     // Ausgefallene Einzelabrufe benennen, statt sie zu verschweigen. Ein
     // Fahrzeug, das die Klimasteuerung nicht kennt, ist kein Fehler - ein
     // stillschweigend leeres Feld dagegen schon.

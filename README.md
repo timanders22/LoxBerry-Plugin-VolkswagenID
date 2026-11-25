@@ -20,6 +20,11 @@ Plug-in-Hybrid führt das Plugin beide.
 > gegen Attrappen, sondern gegen **echte Objekte der Bibliothek**. Deshalb
 > 0.9.x und nicht 1.0.0, und deshalb sind schreibende Befehle ab Werk gesperrt.
 
+## Neu in 0.9.55
+
+- **Reiter Test: Liefert das Portal Fahrzeugdaten? (zugesagt in Issue #1):** Mit der Datenquelle Portal steht eine neue Zeile unter *Sind Fahrzeuge erkannt?*. Das Portal nennt ein Fahrzeug schon, wenn nur die Anmeldung steht; Werte liefert es erst, wenn dort für das Fahrzeug ein fortlaufender Datenabruf (Datenpaket) eingerichtet ist. Bis dahin kam nur die Fahrgestellnummer an, und die übrigen Werte blieben ohne Erklärung leer. Jetzt zeigt die Zeile in diesem Fall ein rotes Kreuz und den Hinweis auf die Einrichtung im Portal; der erste Datensatz kommt etwa 15 Minuten danach. Erkannt wird der Fall daran, dass die Bibliothek für das Fahrzeug noch keine Messzeit eines Datensatzes führt (`captured_at`, Bibliothek 0.3.5). Der Vermerk steht nur im Abbild für die Oberfläche; MQTT-Themen und Endpunktfelder bleiben unverändert. Bis der Dienst nach der Aktualisierung einmal abgerufen hat, ist die Zeile grau.
+- Gemessen mit einem Prüfstand auf dem Arbeitsrechner; an einem echten Portal-Konto ohne Datenabruf nicht gemessen.
+
 ## Neu in 0.9.54
 
 - **Themen-Präfix auf einem gemeinsamen Bereich (Entscheidung des Hausherrn 23.11.2026 „Nur gemeinsame Bereiche“):** Ein MQTT-Präfix, das einer der gemeinsamen Bereiche unter `haus/` ist oder darin beginnt (`haus/<bereich>` bzw. `haus/<bereich>/…` für abfahrt, abfuhr, alarm, ansage, anwesenheit, energie, fahrzeug, kalender, klima, pv, raumklima, sonne, speicher, strompreis, szene, tag, tuer, usv, wetter), weisen Speichern im Reiter *MQTT* und das Zurückspielen einer Sicherung jetzt mit Namen ab: Dort liefern die Plugins einander Zustände ohne eigenes Präfix. `haus` allein und andere Präfixe unter `haus/` (etwa `haus/fenster`) bleiben erlaubt; Groß und Klein zählen wie bei MQTT. Ist ein solches Präfix schon gespeichert, ändert sich am Betrieb nichts – das Plugin sendet weiter darunter, nennt es einmal im Protokoll, und der Reiter *Test* zeigt die Zeile „Liegt das Themen-Präfix außerhalb der gemeinsamen Bereiche unter haus/?“ rot. Liste und Texte kommen aus dem gemeinsamen Modul `haus_bereiche.php` bzw. `haus_bereiche.py` im Dienst.

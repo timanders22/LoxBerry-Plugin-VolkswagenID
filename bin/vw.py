@@ -1611,18 +1611,27 @@ def abbild_portal(fahrzeug, cfg: dict, jetzt=None) -> dict:
     Quelle: das Attribut captured_at, das die Bibliothek je Fahrzeug anlegt
     (connector.py: neueste timestampUtc des Datensatzes, sonst createdOn der
     Lieferung). Fehlt es, bleiben beide Werte leer - keine 0.
+
+    0.9.55 (Issue #1): portal_ohne_datensatz = 1, wenn das Attribut ganz fehlt.
+    Die Bibliothek 0.3.5 legt das Fahrzeug schon aus der Fahrzeugliste an
+    (fetch_all), captured_at aber erst in _map_dataset() mit dem ersten
+    Datensatz. Ohne eingerichteten fortlaufenden Datenabruf im Portal kommt
+    keiner - dann steht nur die Fahrgestellnummer da. Der Vermerk geht nur ins
+    Abbild (Reiter Test), nicht an MQTT.
     """
     d = getattr(fahrzeug, "captured_at", None)
+    ohne = 1 if d is None else 0
     v = getattr(d, "value", None) if d is not None else None
     if not isinstance(v, datetime):
-        return {"portal_messzeit": None, "portal_alter_min": None}
+        return {"portal_messzeit": None, "portal_alter_min": None, "portal_ohne_datensatz": ohne}
     try:
         messzeit = int(v.timestamp())
     except (OSError, OverflowError, ValueError):
-        return {"portal_messzeit": None, "portal_alter_min": None}
+        return {"portal_messzeit": None, "portal_alter_min": None, "portal_ohne_datensatz": ohne}
     jetzt = time.time() if jetzt is None else jetzt
     alter = int((jetzt - messzeit) // 60)
-    return {"portal_messzeit": messzeit, "portal_alter_min": alter if alter >= 0 else 0}
+    return {"portal_messzeit": messzeit, "portal_alter_min": alter if alter >= 0 else 0,
+            "portal_ohne_datensatz": ohne}
 
 
 def fahrzeug_abbilden(fahrzeug, cfg: dict, zyklus: int, stamm: dict) -> dict:
