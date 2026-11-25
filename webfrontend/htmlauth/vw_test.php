@@ -239,6 +239,9 @@ function vw_pruefungen($netz = true)
     $zeilen[] = vw_pruefzeile($mqttEin ? 1 : -1, vw_t('TEST.F_MQTT_EIN'),
         vw_t($mqttEin ? 'TEST.A_MQTT_EIN_JA' : 'TEST.A_MQTT_EIN_NEIN'));
 
+    // 0.9.54: faellt das Themen-Praefix auf einen gemeinsamen Bereich unter haus/ (Regeln/07)?
+    $vw_hb = vw_pruef_praefix_haus($cfg);
+    $zeilen[] = vw_pruefzeile($vw_hb[0], vw_e(vw_t('HAUSBEREICH.F_TEST')), $vw_hb[1]);
     $m = vw_mqtt_zustand();
     if (!$m['gefunden']) {
         $zeilen[] = vw_pruefzeile(0, vw_t('TEST.F_MQTT'), vw_t('TEST.A_MQTT_NICHT_GEFUNDEN'));

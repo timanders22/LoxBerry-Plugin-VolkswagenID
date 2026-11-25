@@ -28,10 +28,12 @@ if (!function_exists('vw_e')) {
  * 0.9.29; seit 0.9.33 Stamm 1.2.1 mit weiteren Ausgabezielen, vw_mit_zielen(), Welle Mehrfach-Ziele).
  * Liegt neben dieser Datei; sie schuetzt sich selbst gegen doppeltes Laden. */
 require_once __DIR__ . '/sprachausgabe.php';
+require_once __DIR__ . '/meldung.php';     // Statusmeldungen an SignalBot (seit 0.9.54)
 /* 0.9.45: Das gemeinsame Sicherungsmodul (Abschrift von Werkzeuge/gemeinsam/sicherung.php, Auftrag des
  * Hausherrn 12.11.2026): Einstellungen sichern und zurueckspielen nach denselben Regeln wie in den
  * anderen Linien. Die Beschreibung dieser Linie steht in vw_sicherung_beschreibung(). */
 require_once __DIR__ . '/sicherung.php';
+require_once __DIR__ . '/haus_bereiche.php';     // gemeinsame Bereiche unter haus/ (seit 0.9.54, Regeln/07)
 require_once __DIR__ . '/uhrabgleich.php';   // gemeinsames Uhrmodul (Frage 95), Abschrift von Werkzeuge/gemeinsam/uhrabgleich.php
 
 
@@ -3260,6 +3262,11 @@ function vw_sicherung_beschreibung()
         'teile_jetzt' => array('zugang' => 'vw_sicherung_zugang_jetzt'),
         'pruefen' => function ($k, $w) {
             $e = vw_wert_pruefen($k, $w);
+            /* 0.9.54: kein Praefix auf einem gemeinsamen Bereich unter haus/ (Regeln/07) - wie im Formular. */
+            if ($e[0] && $k === 'mqtt_topic' && is_string($w) && hb_bereich(trim($w)) !== '') {
+                return sprintf(vw_t('SICHERUNG.K_WERT'), htmlspecialchars((string) $k, ENT_QUOTES, 'UTF-8')) . ' '
+                    . htmlspecialchars(sprintf(vw_t('HAUSBEREICH.SICH_W'), hb_bereich(trim($w))), ENT_QUOTES, 'UTF-8');
+            }
             /* Nur der Name, nie der Wert (bis 0.9.44 stand der Wert in der Meldung, beim Aktionstoken also das
              * Token selbst). */
             return $e[0] ? '' : sprintf(vw_t('SICHERUNG.K_WERT'), htmlspecialchars((string) $k, ENT_QUOTES, 'UTF-8'));
@@ -4269,6 +4276,19 @@ function vw_signal_test_lesen(array $zeilen)
  * Ab Werk wirkungslos: ist "Meldungen an SignalBot" aus, wird nichts gesendet.
  * Rueckgabe array(Ergebnis, Satz fuer die Oberflaeche).
  */
+/** 0.9.54: der Block 'meldung' des gemeinsamen Moduls aus den gespeicherten Schluesseln signal_ein und signal_<anlass>
+ *  (Entscheidung des Hausherrn 24.11.2026, F1: Einstellungen uebernehmen) - Sperre wie ab Werk. */
+function vw_meld_aus_cfg($cfg)
+{
+    if (!is_array($cfg)) { return null; }
+    $h = array();
+    foreach (array('laden_fertig', 'laden_abbruch', 'offen', 'ausfall', 'vorklima', 'kabel') as $a) {
+        $h[$a] = (isset($cfg['signal_' . $a]) && (string) $cfg['signal_' . $a] === '1') ? 1 : 0;
+    }
+    return array('ein' => !empty($cfg['signal_ein']) ? 1 : 0, 'haken' => $h,
+                 'sperre_min' => defined('MELD_SPERRE_VORGABE') ? MELD_SPERRE_VORGABE : 60);
+}
+
 function vw_signal_test($cfg = null)
 {
     if ($cfg === null) {
@@ -4277,20 +4297,9 @@ function vw_signal_test($cfg = null)
     if (empty($cfg['signal_ein'])) {
         return array('aus', vw_t('SIGNAL.T_AUS'));
     }
-    $p = vw_paths();
-    $py = $p['bindir'] . '/venv/bin/python3';
-    $skript = $p['bindir'] . '/vw.py';
-    if (!is_file($py) || !is_file($skript)) {
-        return array('nicht_moeglich', vw_t('SIGNAL.T_NICHT_MOEGLICH'));
-    }
-    $aus = array();
-    @exec(escapeshellcmd($py) . ' ' . escapeshellarg($skript) . ' --signal-test 2>/dev/null', $aus);
-    list($e, $text) = vw_signal_test_lesen($aus);
-    $schl = array('angenommen' => 'SIGNAL.T_ANGENOMMEN', 'abgelehnt' => 'SIGNAL.T_ABGELEHNT',
-                  'keine_antwort' => 'SIGNAL.T_KEINE_ANTWORT', 'aus' => 'SIGNAL.T_AUS',
-                  'nicht_moeglich' => 'SIGNAL.T_NICHT_MOEGLICH');
-    $satz = vw_t($schl[$e]);
-    return array($e, $e === 'abgelehnt' ? sprintf($satz, $text) : $satz);
+    /* 0.9.54 (Entscheidung des Hausherrn 24.11.2026, F1): ueber das gemeinsame Modul (haus/meldung/<ordner>, Quittung). */
+    list($ok, $satz) = vw_meld_test();
+    return array($ok ? 'angenommen' : 'keine_antwort', $satz);
 }
 
 
@@ -4434,4 +4443,147 @@ function vw_gesund_fakten(array $cfg)
         $f['bruecke_laeuft'] = $l[0] === true;
     }
     return $f;
+}
+
+/**
+ * 0.9.54 (Entscheidung des Hausherrn 23.11.2026 "Nur gemeinsame Bereiche", Regeln/07): Zeile im Reiter Test -
+ * faellt das gespeicherte Themen-Praefix auf einen gemeinsamen Bereich unter haus/? Speichern und Zurueckspielen
+ * weisen ein solches Praefix ab; ein schon gespeichertes bleibt in Betrieb und ist hier rot, grau bei ausgeschaltetem MQTT.
+ * Dazu der Vergleich der Liste mit der, die der Dienst in seinen Zustand schreibt (haus_bereiche).
+ * Liste und Pruefung aus dem gemeinsamen Modul haus_bereiche.php. Rueckgabe array(stand, html).
+ */
+function vw_pruef_praefix_haus($cfg)
+{
+    $p = (trim((string) $cfg['mqtt_topic'], '/') !== '' ? trim((string) $cfg['mqtt_topic'], '/') : 'volkswagen');
+    $b = hb_bereich($p);
+    if ($b !== '') {
+        if (!(!empty($cfg['mqtt_ein']))) {
+            return array(-1, sprintf(vw_t('HAUSBEREICH.A_AUS'), vw_e($p), vw_e($b)));
+        }
+        return array(0, sprintf(vw_t('HAUSBEREICH.A_NEIN'), vw_e($p), vw_e($b)));
+    }
+    $z = (is_array(vw_zustand()) && isset(vw_zustand()['haus_bereiche'])) ? vw_zustand()['haus_bereiche'] : null;
+    if (!is_array($z)) {
+        return array(-1, sprintf(vw_t('HAUSBEREICH.A_UNBEKANNT'), vw_e($p)));
+    }
+    if ($z !== hb_bereiche()) {
+        return array(0, sprintf(vw_t('HAUSBEREICH.A_LISTE'), vw_e(implode(', ', hb_bereiche())),
+            vw_e(implode(', ', array_map('strval', $z)))));
+    }
+    return array(1, sprintf(vw_t('HAUSBEREICH.A_JA'), vw_e($p)));
+}
+
+if (!function_exists('vw_meld_block')) {
+
+/* ---------------- Statusmeldungen an SignalBot (0.9.54, gemeinsames Modul meldung.php) ----------------
+ *
+ * Auftrag des Hausherrn 23.11.2026, Entscheidungen 23./24.11.2026: dieselben Anlaesse wie die Ansage, eigener Haken je
+ * Anlass, ab Werk aus; Sperre, Bremse und Versand im Modul. Die Erkennung laeuft auch ohne Ausgabeart, wenn eine Meldung
+ * eingeschaltet ist (vw_meld_aktiv()), und legt einen Anlass hin, wenn Ansage ODER Meldung ihn will
+ * (vw_meld_will()); der Sender trennt die Wege wieder (vw_meld_nur_ansage()).
+ */
+
+/** Die meldbaren Anlaesse: Name => Beschriftung (dieselben wie die Ansage). */
+function vw_meld_anlaesse()
+{
+    return array('laden_fertig' => vw_t('EINST.L_SIGNAL_LADEN_FERTIG'), 'laden_abbruch' => vw_t('EINST.L_SIGNAL_LADEN_ABBRUCH'), 'offen' => vw_t('EINST.L_SIGNAL_OFFEN'), 'ausfall' => vw_t('EINST.L_SIGNAL_AUSFALL'), 'vorklima' => vw_t('EINST.L_SIGNAL_VORKLIMA'), 'kabel' => vw_t('EINST.L_SIGNAL_KABEL'));
+}
+
+/** Die ab-Werk-Haken der Ansage dieser Linie: so stehen auch die Haken der Meldung, solange der Block nie gespeichert ist. */
+function vw_meld_haken_vorgabe()
+{
+    return array('laden_fertig' => 1, 'laden_abbruch' => 1, 'offen' => 1, 'ausfall' => 1, 'vorklima' => 1, 'kabel' => 1);
+}
+
+/** Ist der Haken dieses Anlasses fuer die ANSAGE gesetzt? */
+function vw_ansage_anlass_sprache($a, $cfg = null)
+{
+    if ($cfg === null) { $cfg = vw_config(false); }
+    return false;     // die Ansage hat eigene Anlaesse; dieser Block meldet nur
+}
+
+/** Der wirksame Block 'meldung' fuer den Betrieb (ungueltig gespeichert gilt als aus und wird im Formular genannt). */
+function vw_meld_block($cfg = null)
+{
+    if ($cfg === null) { $cfg = vw_config(false); }
+    list($b) = meld_block(vw_meld_aus_cfg($cfg), vw_meld_anlaesse(), vw_meld_haken_vorgabe());
+    return $b;
+}
+
+/** Die Beanstandungen eines gespeicherten Blocks (leer = gueltig). */
+function vw_meld_bean($cfg = null)
+{
+    if ($cfg === null) { $cfg = vw_config(false); }
+    list(, $f) = meld_block(vw_meld_aus_cfg($cfg), vw_meld_anlaesse(), vw_meld_haken_vorgabe());
+    return $f;
+}
+
+/** Ist irgendein Anlass zur Meldung eingeschaltet? Dann laeuft die Erkennung auch ohne Ausgabeart. */
+function vw_meld_aktiv($cfg = null)
+{
+    return meld_irgendein_an(vw_meld_block($cfg));
+}
+
+/** Will die Ansage ODER die Meldung diesen Anlass? */
+function vw_meld_will($a, $cfg = null)
+{
+    if ($cfg === null) { $cfg = vw_config(false); }
+    return vw_ansage_anlass_sprache($a, $cfg) || meld_anlass_an(vw_meld_block($cfg), (string) $a);
+}
+
+/** Der Kontext des Moduls: Datenordner (data/plugins/<ordner>, daraus der Absender) und Texte - wie bei der Ansage. */
+function vw_meld_k()
+{
+    return vw_ansage_k();
+}
+
+/** Fuer die Ansage nur Eintraege, deren Ansage-Haken gesetzt ist; ein Eintrag ohne bekannten Anlass bleibt wie bisher. */
+function vw_meld_nur_ansage(array $l, $cfg = null)
+{
+    if ($cfg === null) { $cfg = vw_config(false); }
+    $anl = vw_meld_anlaesse();
+    $aus = array();
+    foreach ($l as $e) {
+        if (is_array($e) && array_key_exists(meld_anlass_von($e), $anl) && !vw_ansage_anlass_sprache(meld_anlass_von($e), $cfg)) { continue; }
+        $aus[] = $e;
+    }
+    return $aus;
+}
+
+/** Die Eintraege an SignalBot melden. Protokoll: eine Zeile, wenn gesendet oder gescheitert (nie der Text). */
+function vw_meld_senden(array $l, $cfg = null)
+{
+    if ($cfg === null) { $cfg = vw_config(false); }
+    $b = vw_meld_block($cfg);
+    if (empty($b['ein']) || !$l) { return null; }
+    $a = meld_regel_senden($l, $b, vw_meld_k());
+    if ($a['regel'] === '' || in_array($a['regel'], array('BREMSE', 'STAND', 'ORDNER'), true)) {
+        vw_ansage_protokoll(meld_regel_kurz($a));
+    }
+    return $a;
+}
+
+/** Der Knopf "Testmeldung senden": array(angenommen, Satz). Geht an Haken, Sperre und Bremse vorbei. */
+function vw_meld_test()
+{
+    $r = meld_testmeldung(vw_meld_k());
+    vw_ansage_protokoll('Testmeldung an SignalBot: ' . ($r[0] ? 'angenommen' : 'nicht angenommen'));
+    return $r;
+}
+
+/** Der Block im Einstellungsformular (unter den Ansage-Regeln, im selben Formular), mit Lage und Knopf. */
+function vw_meld_form_html($cfg = null)
+{
+    if ($cfg === null) { $cfg = vw_config(false); }
+    $e = function ($s) { return htmlspecialchars((string) $s, ENT_QUOTES, 'UTF-8'); };
+    $k = vw_meld_k();
+    $o = array();
+    $o[] = '<h3>' . $e(meld_t('TITEL', $k)) . '</h3>';
+    $o[] = meld_formular_html(vw_meld_block($cfg), vw_meld_anlaesse(), array(), $k);
+    list(, $lage) = meld_pruefzeile(vw_meld_block($cfg), vw_meld_bean($cfg), $k);
+    $o[] = '<div class="sm-hilfe">' . $e(meld_t('F_TEST', $k) . ' ' . $lage) . '</div>';
+    $o[] = '<div class="sm-knopfreihe"><button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="meld_test" value="1">'
+         . $e(meld_t('K_TEST', $k)) . '</button></div>';
+    return implode("\n", $o) . "\n";
+}
 }

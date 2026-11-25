@@ -4354,18 +4354,25 @@ SIGNAL_TEXTE = {
 
 
 def signal_senden(cfg: dict, anlass: str, nr, text: str) -> bool:
-    """Ein Ereignis an SignalBot (ab Werk aus, je Ereignis abwaehlbar, je Ereignis und Fahrzeug 1x je Stunde)."""
+    """Ein Ereignis an SignalBot (ab Werk aus, je Ereignis abwaehlbar). Seit 0.9.54 (Entscheidung des Hausherrn 24.11.2026,
+    F1 "Abloesen") ueber das gemeinsame Modul meldung.php in der Bruecke vw_ansage.php: Thema haus/meldung/<ordner>,
+    Sperre 60 min je Anlass und Fahrzeug, Bremse 10 je Stunde, Quittung - alles im Modul."""
     if not cfg.get("signal_ein") or str(cfg.get("signal_" + anlass)).strip() != "1":
         return False
-    if _ansage_sperre("signal:%s:%s" % (anlass, nr), int(time.time())):
+    auftrag = {"meldung": str(text or ""), "anlass": anlass, "nr": ganz(nr, 0)}
+    try:
+        e = subprocess.run(["php", str(SKRIPT_ANSAGE), PNAME],
+                           input=json.dumps(auftrag, ensure_ascii=False).encode("utf-8"),
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=ANSAGE_FRIST_S, check=False)
+    except (OSError, subprocess.SubprocessError) as err:
+        melde_gebremst("signal_ruf", "SignalBot-Meldung %s (Fahrzeug %s): die Bruecke vw_ansage.php war nicht aufrufbar (%s)."
+                       % (anlass, nr, type(err).__name__), 3600)
         return False
-    thema = signal_thema(cfg.get("signal_praefix"), PNAME)
-    if not thema:
-        melde_gebremst("signal_thema", "SignalBot-Meldung nicht gesendet: Praefix oder Ordnername ungueltig.", 86400)
-        return False
-    ok = broker_senden(thema, signal_nutzlast(text, 0))
-    _LOG.info("SignalBot-Meldung %s (Fahrzeug %s): %s.", anlass, nr, "gesendet" if ok else "NICHT gesendet")
-    return ok
+    zeilen = e.stdout.decode("ascii", "replace").strip().splitlines()
+    roh = zeilen[-1] if zeilen else ""
+    _LOG.info("SignalBot-Meldung %s (Fahrzeug %s): rc=%d %s", anlass, nr, e.returncode,
+              "".join(c if (c.isascii() and c.isalnum()) or c in "_.:,|/-=; " else " " for c in roh)[:120])
+    return e.returncode == 0 and "LAGE=angenommen" in roh
 
 
 # ---- G8-Zusatz: Testmeldung an SignalBot (Reiter Einstellungen, vw.py --signal-test) ----
@@ -4523,6 +4530,26 @@ def ladeempfehlung(cfg: dict) -> int | None:
 # Merker stand VOR dem Ergebnis (ein Fehlschlag sendete nie wieder); B2 - er lag nur im Speicher (nach
 # einem Neustart dieselbe Abfahrt noch einmal); B4 - das Thema hatte keine Altersgrenze. Ersetzt durch
 # vorklima_takt() im Wartetakt (g41_takt()), Merker in vorklima.json, Fahrzeug einstellbar (B5).
+
+
+def _haus_bereiche():
+    """0.9.54 (Entscheidung des Hausherrn 23.11.2026 "Nur gemeinsame Bereiche", Regeln/07): das gemeinsame
+    Modul haus_bereiche.py neben dem Dienst, beim ersten Aufruf geladen."""
+    hier = os.path.dirname(os.path.abspath(__file__))
+    if hier not in sys.path:
+        sys.path.insert(0, hier)
+    import haus_bereiche  # noqa: E402
+    return haus_bereiche
+
+
+def praefix_haus_melden(praefix):
+    """0.9.54: einmal je Aenderung eine Protokollzeile, solange das Praefix auf einen gemeinsamen Bereich unter
+    haus/ faellt; der Versand bleibt, wie er ist. Rueckgabe der gemeldete Bereich oder ""."""
+    hb = _haus_bereiche()
+    bereich = hb.hb_melden_faellig(praefix)
+    if bereich:
+        _LOG.warning("%s", hb.hb_logtext(praefix, bereich))
+    return bereich
 
 
 def zustand_schreiben(**felder) -> None:
@@ -5163,7 +5190,9 @@ def dienst(einmal: bool = False) -> int:
             zaehler = (zaehler + 1) % 1000
             abbild_schreiben(stand, cfg, ok, fehler, grund, zaehler, fehler_folge,
                              entfernt=entfernt)
-            zustand_schreiben(ok=ok, fehler=fehler, grund=grund, zyklus=zyklus,
+            praefix_haus_melden(str(cfg.get("mqtt_topic") or "volkswagen").strip("/") or "volkswagen")   # 0.9.54
+            zustand_schreiben(haus_bereiche=list(_haus_bereiche().HB_BEREICHE),   # 0.9.54
+                              ok=ok, fehler=fehler, grund=grund, zyklus=zyklus,
                               zaehler=zaehler, fehler_folge=fehler_folge,
                               pid=os.getpid(), intervall=takt_wirksam(cfg),
                               horcher=1 if _HORCHER.verbunden else 0,

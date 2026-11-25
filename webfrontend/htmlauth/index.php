@@ -740,6 +740,13 @@ if ($vw_post && isset($_POST['save_mqtt'])) {
         if (!$vw_mok) {
             $vw_fehler[] = vw_t('EINST.FEHLER_TOPIC');
             $vw_falsch[] = 'mqtt_topic';
+        } elseif (hb_bereich($vw_mrein) !== '' && $vw_mrein !== (string) $vw_mcfg['mqtt_topic']) {   // nur NEUE Eingaben: ein schon gespeichertes Praefix sperrt das Speichern
+            // des Reiters nicht (Regeln/07; Bauart Einspeisebremse 0.9.25)
+            /* 0.9.54 (Entscheidung des Hausherrn 23.11.2026 "Nur gemeinsame Bereiche", Regeln/07): kein Praefix auf einem
+             * gemeinsamen Bereich unter haus/ - nur hier und beim Zurueckspielen, nicht in der Pruefung beim Lesen der
+             * Konfiguration: ein schon gespeichertes bleibt in Betrieb, der Reiter Test meldet es. */
+            $vw_fehler[] = sprintf(vw_t('HAUSBEREICH.FEHLER'), vw_e($vw_mrein), vw_e(hb_bereich($vw_mrein)));
+            $vw_falsch[] = 'mqtt_topic';
         } else {
             $vw_mcfg['mqtt_topic'] = $vw_mrein;
         }
@@ -798,7 +805,7 @@ if ($vw_post && isset($_POST['save_g41'])) {
     foreach (array('haus_abfahrt_ein', 'vorklima_anwesend_ein', 'vorklima_wetter_ein', 'ankunft_ein', 'haus_strompreis_ein', 'signal_ein', 'signal_laden_fertig', 'signal_laden_abbruch', 'signal_offen', 'signal_ausfall', 'signal_vorklima', 'signal_kabel', 'vorklima_nur_kabel') as $vw_feld) {
         $vw_gcfg[$vw_feld] = isset($_POST[$vw_feld]) ? 1 : 0;
     }
-    foreach (array('abfahrt_fahrzeug', 'vorklima_kalt_unter', 'vorklima_heiss_ueber', 'ankunft_quelle', 'ladeempf_quelle', 'signal_praefix', 'kabel_soc', 'kabel_uhr', 'kabel_abfahrt_min', 'vorklima_min_soc') as $vw_feld) {
+    foreach (array('abfahrt_fahrzeug', 'vorklima_kalt_unter', 'vorklima_heiss_ueber', 'ankunft_quelle', 'ladeempf_quelle', 'kabel_soc', 'kabel_uhr', 'kabel_abfahrt_min', 'vorklima_min_soc') as $vw_feld) {     // 0.9.54: ohne signal_praefix
         $vw_name = vw_t('EINST.L_' . strtoupper($vw_feld));
         $vw_roh = isset($_POST[$vw_feld]) ? $_POST[$vw_feld] : '';
         if (!is_string($vw_roh)) {
@@ -829,7 +836,7 @@ if ($vw_post && isset($_POST['save_g41'])) {
         $vw_falsch[] = 'ankunft_quelle';
     }
     if ($vw_fehler) {
-        $vw_eingaben = vw_eingaben_sammeln('g41', array_merge(array('haus_abfahrt_ein', 'vorklima_anwesend_ein', 'vorklima_wetter_ein', 'ankunft_ein', 'haus_strompreis_ein', 'signal_ein', 'signal_laden_fertig', 'signal_laden_abbruch', 'signal_offen', 'signal_ausfall', 'signal_vorklima', 'signal_kabel', 'vorklima_nur_kabel'), array('abfahrt_fahrzeug', 'vorklima_kalt_unter', 'vorklima_heiss_ueber', 'ankunft_quelle', 'ladeempf_quelle', 'signal_praefix', 'kabel_soc', 'kabel_uhr', 'kabel_abfahrt_min', 'vorklima_min_soc')), $vw_falsch);
+        $vw_eingaben = vw_eingaben_sammeln('g41', array_merge(array('haus_abfahrt_ein', 'vorklima_anwesend_ein', 'vorklima_wetter_ein', 'ankunft_ein', 'haus_strompreis_ein', 'signal_ein', 'signal_laden_fertig', 'signal_laden_abbruch', 'signal_offen', 'signal_ausfall', 'signal_vorklima', 'signal_kabel', 'vorklima_nur_kabel'), array('abfahrt_fahrzeug', 'vorklima_kalt_unter', 'vorklima_heiss_ueber', 'ankunft_quelle', 'ladeempf_quelle', 'kabel_soc', 'kabel_uhr', 'kabel_abfahrt_min', 'vorklima_min_soc')), $vw_falsch);     // 0.9.54: ohne signal_praefix
     } elseif (vw_config_speichern($vw_gcfg)) {
         $vw_meldungen[] = vw_t('EINST.GESPEICHERT');
     } else {
@@ -1725,11 +1732,7 @@ if ($vw_k1_saetze) { ?>
   </label>
   <div class="sm-hilfe"><?= vw_t('EINST.H_SIGNAL_EIN') ?></div>
 </div>
-<div class="sm-feld">
-  <label for="signal_praefix"><?= vw_e(vw_t('EINST.L_SIGNAL_PRAEFIX')) ?></label>
-  <input data-role="none" type="text" id="signal_praefix" name="signal_praefix" value="<?= vw_e(vw_fw('g41', 'signal_praefix', (string) $vw_cfg['signal_praefix'])) ?>"<?= vw_fm('signal_praefix') ?> placeholder="signalbot">
-  <div class="sm-hilfe"><?= vw_t('EINST.H_SIGNAL_PRAEFIX') ?></div>
-</div>
+<?php /* 0.9.54: das Feld Praefix entfaellt - Meldungen gehen unter haus/meldung/<ordner> (gemeinsames Modul) */ ?>
 <div class="sm-feld">
   <label style="display:inline-flex;align-items:center;gap:8px;">
     <input data-role="none" type="checkbox" name="signal_laden_fertig" value="1" <?= vw_fh('g41', 'signal_laden_fertig', !empty($vw_cfg['signal_laden_fertig'])) ? 'checked' : '' ?><?= vw_fm('signal_laden_fertig') ?>>

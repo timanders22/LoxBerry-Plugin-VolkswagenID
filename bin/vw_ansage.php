@@ -104,6 +104,22 @@ if (is_array($vw_d) && isset($vw_d['frage']) && $vw_d['frage'] === 'regeln_heute
         . ';NACHT=' . (ansage_nachtruhe($vw_rg, time()) ? 1 : 0) . "\n";
     exit(0);
 }
+/* 0.9.54 (Entscheidung des Hausherrn 24.11.2026, F1 "Abloesen"): eine Meldung an SignalBot ueber das gemeinsame Modul -
+ * der Dienst gibt Anlass, Fahrzeugnummer und Text; Haken, Sperre (60 min je Anlass und Fahrzeug), Bremse und Versand
+ * stehen im Modul. Antwort EINE Zeile MELDUNG;REGEL=<r>;LAGE=<l>, Rueckgabe 0 (2 bei einem unbrauchbaren Auftrag). */
+if (is_array($vw_d) && isset($vw_d['meldung']) && is_string($vw_d['meldung'])) {
+    $vw_ma = (isset($vw_d['anlass']) && is_string($vw_d['anlass'])) ? $vw_d['anlass'] : '';
+    $vw_mn = (isset($vw_d['nr']) && is_int($vw_d['nr'])) ? $vw_d['nr'] : 0;
+    if (!array_key_exists($vw_ma, vw_meld_anlaesse()) || trim($vw_d['meldung']) === '' || strlen($vw_d['meldung']) > 2000) {
+        echo "MELDUNG;REGEL=AUFRUF;LAGE=-\n";
+        exit(2);
+    }
+    $vw_mr = vw_meld_senden(array(array('schluessel' => $vw_ma . '|' . $vw_mn, 'anlass' => $vw_ma, 'text' => $vw_d['meldung'])), vw_config(false));
+    $vw_ml = (is_array($vw_mr) && is_array($vw_mr['q']) && isset($vw_mr['q']['lage'])) ? (string) $vw_mr['q']['lage'] : '-';
+    echo 'MELDUNG;REGEL=' . (is_array($vw_mr) ? ($vw_mr['regel'] !== '' ? $vw_mr['regel'] : 'GESENDET') : 'AUS')
+        . ';LAGE=' . preg_replace('/[^a-z_-]/', '', $vw_ml) . "\n";
+    exit(0);
+}
 $vw_anlaesse = vw_ansage_anlaesse();
 $vw_zahl = function ($w) {
     if ($w === null) { return null; }
